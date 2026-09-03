@@ -91,6 +91,7 @@ Item {
     busy = true
     setStatus("Caricamento wallpaper di " + themeName + "…")
     wallpapersModel.clear()
+    catalogProc.command = scriptCmd(["catalog", themeName, themeCatalogUrl])
     catalogProc.running = true
   }
 
@@ -199,6 +200,14 @@ Item {
         }
         root.busy = false
         root.setStatus(wallpapersModel.count + " wallpaper in " + root.themeName)
+      }
+    }
+    onExited: {
+      if (root.busy) {
+        root.busy = false
+        root.setStatus(wallpapersModel.count > 0
+          ? wallpapersModel.count + " wallpaper in " + root.themeName
+          : "Errore nel caricamento del catalogo")
       }
     }
   }
@@ -434,7 +443,10 @@ Item {
               anchors.right: parent.right
               height: Style.space(112)
               anchors.margins: Style.space(6)
-              source: tile.model.url
+              // Local file when already installed (instant), remote URL otherwise.
+              source: tile.model.installed === "1"
+                ? Util.fileUrl(root.backgroundsDir + "/" + root.themeName + "/" + tile.model.filename)
+                : tile.model.url
               fillMode: Image.PreserveAspectCrop
               asynchronous: true
               cache: true
