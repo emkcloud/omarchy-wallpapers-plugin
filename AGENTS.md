@@ -38,6 +38,10 @@ set-default), theme by theme.
 ## Operational rules
 
 - Themed colors come from `qs.Commons.Color` / `qs.Commons.Style` — never hardcode.
+  The overlay uses a solid `Color.popups.background` card + `cardBorder`, a
+  `scrim` on `Color.background`, and custom readable fills
+  (`barFill`, `tileFill`, `tileBorder`) derived from `Color.foreground`. High
+  contrast was explicitly requested by the user.
 - Remote data flows through `manager.sh` (curl + jq); QML parses TSV output.
 - Actions delegate to `wallpapers.py` (sha256 checks, parallel download, bg cache
   refresh) and `omarchy-theme-bg-set` for the default background.
@@ -48,6 +52,42 @@ set-default), theme by theme.
 - Preview thumbnails load directly from the remote `url` in the catalog (the
   `GridView` only instantiates visible delegates, so loading is lazy). No local
   preview cache.
+
+## Current state (history)
+
+Built and tested on this machine (branch `main`). What works today:
+
+- **Flow**: summon → `manager.sh themes` fetches `datasets.json` (only
+  `kind=="theme"` collections) → pick a theme → `manager.sh catalog <theme>
+  <url>` fetches `catalog.json` and emits TSV
+  (`filename|name|code|url|sha256|installed|is_default`) → grid of tiles.
+- **Preview strategy (agreed with the user)**: no preview cache, no thumbnails.
+  Tiles load the **full-res remote `url`** directly; if the wallpaper is already
+  installed locally, the tile uses the local file (instant). The `GridView`
+  only instantiates visible delegates → lazy, page-by-page loading. This works
+  for thousands of images. A future `previews/` folder in the wallpapers repo
+  with reduced images was discussed but **explicitly deferred** — do not add.
+- **Grid layout**: `GridView` with dynamic columns
+  (`columnsHint` = `max(2, width / minTileWidth)`), `cellWidth = width/columns`,
+  `cellHeight = cellWidth*0.9`. `minTileWidth ~ Style.space(190)` keeps
+  previews readable. Do NOT put anchors on the delegate (broke grid → single
+  column).
+- **Keyboard**: themes view — arrows/j-k move, Enter selects, Esc closes.
+  Grid — arrows/j-k-h-l move, Enter=install, Del/Backspace=remove, D=set
+  default, Esc=back to themes (Esc again closes). Mouse: click selects,
+  double-click = set default, click outside card closes.
+
+### Bugs fixed along the way (do not reintroduce)
+
+1. `fetch()` in `manager.sh` must pass extra curl args (`curl ... "$@"`, not
+   only `"$1"`) — otherwise `-o` is dropped and downloads fail.
+2. `catalogProc` needs its `command` set **before** `running = true`
+   (in `loadWallpapers()`); starting it without a command hangs the UI on
+   "Caricamento…" forever.
+3. Inotify does NOT follow the symlink → QML edits are not hot-reloaded; a
+   shell restart is required (see below). This once made the user see a stale,
+   "transparent" version.
+4. Tiles must not anchor-horizontalCenter themselves (single-column bug).
 
 ## Local development
 
