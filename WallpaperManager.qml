@@ -188,7 +188,7 @@ Item {
           var line = lines[i].trim()
           if (!line) continue
           var parts = line.split("\t")
-          if (parts.length >= 7)
+          if (parts.length >= 8)
             wallpapersModel.append({
               filename: parts[0],
               name: parts[1],
@@ -196,7 +196,8 @@ Item {
               url: parts[3],
               sha256: parts[4],
               installed: parts[5],
-              isDefault: parts[6]
+              isDefault: parts[6],
+              preview: parts[7]
             })
         }
         root.busy = false
@@ -465,10 +466,12 @@ Item {
               anchors.leftMargin: Style.space(5)
               anchors.rightMargin: Style.space(5)
               height: parent.height - Style.space(66)
-              // Local file when already installed (instant), remote URL otherwise.
+              // Local file when already installed (instant), reduced remote
+              // preview otherwise; fall back to the full-res URL if a preview
+              // is missing.
               source: tile.model.installed === "1"
                 ? Util.fileUrl(root.backgroundsDir + "/" + root.themeName + "/" + tile.model.filename)
-                : tile.model.url
+                : (tile.model.preview !== "" ? tile.model.preview : tile.model.url)
               fillMode: Image.PreserveAspectCrop
               asynchronous: true
               cache: true
@@ -543,8 +546,8 @@ Item {
               }
             }
 
-            // Lazy preview via direct remote URL: GridView only creates
-            // visible delegates, so nearby tiles load as you scroll.
+            // Lazy preview via the reduced remote preview URL: GridView only
+            // creates visible delegates, so nearby tiles load as you scroll.
             MouseArea {
               id: tileMouse
               anchors.fill: parent

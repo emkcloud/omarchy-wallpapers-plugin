@@ -61,12 +61,12 @@ Built and tested on this machine (branch `main`). What works today:
   `kind=="theme"` collections) → pick a theme → `manager.sh catalog <theme>
   <url>` fetches `catalog.json` and emits TSV
   (`filename|name|code|url|sha256|installed|is_default`) → grid of tiles.
-- **Preview strategy (agreed with the user)**: no preview cache, no thumbnails.
-  Tiles load the **full-res remote `url`** directly; if the wallpaper is already
-  installed locally, the tile uses the local file (instant). The `GridView`
-  only instantiates visible delegates → lazy, page-by-page loading. This works
-  for thousands of images. A future `previews/` folder in the wallpapers repo
-  with reduced images was discussed but **explicitly deferred** — do not add.
+- **Preview strategy**: tiles load the **reduced `preview` URL** from the
+  catalog (`previews/<theme>/<section>/…-preview.webp`), not the full-res
+  image. If the wallpaper is already installed locally, the tile uses the local
+  file (instant); if a wallpaper lacks a `preview`, it falls back to its full
+  `url`. The `GridView` only instantiates visible delegates → lazy, page-by-page
+  loading. This works for thousands of images.
 - **Grid layout**: `GridView` with dynamic columns
   (`columnsHint` = `max(2, width / minTileWidth)`), `cellWidth = width/columns`,
   `cellHeight = cellWidth*0.9`. `minTileWidth ~ Style.space(190)` keeps

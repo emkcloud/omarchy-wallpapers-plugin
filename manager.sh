@@ -53,7 +53,7 @@ cmd_catalog() {
   local theme="$1"
   local catalog_url="$2"
   local path current
-  fetch "$catalog_url" | jq -r '.wallpapers[] | [.filename, .name, .code, .url, .sha256] | @tsv' | while IFS=$'\t' read -r filename name code url sha256; do
+  fetch "$catalog_url" | jq -r '.wallpapers[] | [.filename, .name, .code, .url, .sha256, (.preview // "")] | @tsv' | while IFS=$'\t' read -r filename name code url sha256 preview; do
     path="$DEST_BASE/$theme/$filename"
     if [[ -f $path ]]; then
       installed="1"
@@ -67,7 +67,7 @@ cmd_catalog() {
       installed="0"
       current="0"
     fi
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$filename" "$name" "$code" "$url" "$sha256" "$installed" "$current"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$filename" "$name" "$code" "$url" "$sha256" "$installed" "$current" "$preview"
   done
 }
 
