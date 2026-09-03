@@ -829,11 +829,14 @@ Item {
                 onHoveredChanged: if (hovered) root.takeCursor(tile.index)
               }
 
+              // A click opens the fullscreen preview, exactly like Enter: the
+              // tile is a doorway, not a toggle. "Set default" therefore lives
+              // in the preview (double click on the image), because a single
+              // click here already switches view and no second tap can land.
               TapHandler {
-                onTapped: root.takeCursor(tile.index)
-                onDoubleTapped: {
+                onTapped: {
                   root.takeCursor(tile.index)
-                  root.actionSetDefault()
+                  root.showPreview()
                 }
               }
             }
@@ -974,6 +977,13 @@ Item {
           readonly property bool failed: failedSource !== ""
             && String(failedSource) === String(nextSource)
 
+          // true when an event point falls inside the fitted wallpaper rect;
+          // used to route taps (image → set default, outside → back)
+          function onImage(point) {
+            var p = previewView.mapToItem(fitted, point.position.x, point.position.y)
+            return p.x >= 0 && p.y >= 0 && p.x <= fitted.width && p.y <= fitted.height
+          }
+
           Component {
             id: previewIcon
 
@@ -1058,7 +1068,7 @@ Item {
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.bottom: parent.bottom
             textFormat: Text.PlainText
-            text: "h/l or arrows to walk · Enter to install · Esc to go back"
+            text: "h/l or arrows to walk · Enter to install · d or double click to set default · Esc to go back"
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -1149,7 +1159,16 @@ Item {
           // (`LOADING <file>` / `FAILED TO LOAD <file>`), which is instant.
 
           TapHandler {
-            onTapped: root.closePreview()
+            // One handler, two gestures, split by region so they cannot fight:
+            // a tap outside the wallpaper goes back, while on the wallpaper the
+            // single tap is inert (it is the first half of the double tap) and
+            // the double tap sets the theme default.
+            onTapped: (point, button) => {
+              if (!previewView.onImage(point)) root.closePreview()
+            }
+            onDoubleTapped: (point, button) => {
+              if (previewView.onImage(point)) root.actionSetDefault()
+            }
           }
         }
       }

@@ -18,7 +18,12 @@ set-default), theme by theme.
 - `manager.sh` — bash helper: fetches JSON from the wallpapers repo, computes
   local install state, caches the `wallpapers.py` helper.
 - `logo.png` — emkcloud brand mark (the org GitHub avatar), used as the hero
-  icon. The only image in this repo.
+  icon. The only image in this repo. The original near-black backdrop
+  (`#010409`, rounded square) has been made **transparent** so the mark sits on
+  `Color.menu.background`: alpha is derived from the max RGB channel
+  (`-separate -evaluate-sequence Max -level 4%,85%`), which keeps the three
+  brand colors bit-exact (`#155DFC`, `#E12AFB`, `#05DF72`) and preserves the
+  anti-aliased edges. Do NOT re-flatten it on black.
 - `datasets/`, `images/`, `masters/` — never here. The wallpapers live in the
   separate repo `emkcloud/omarchy-wallpapers`.
 
@@ -152,8 +157,12 @@ Built and tested on this machine (branch `main`). What works today:
   a page of tiles, d=set default,
   r=refresh, Esc=back to themes (Esc again closes). Preview — h/l or j/k or
   arrows next/prev, Enter=install, Esc=back to grid. Mouse: hover moves the
-  shared cursor, click selects, double-click = set default, click outside card
-  closes.
+  shared cursor, **click on a tile opens the fullscreen preview** (same as
+  Enter), click outside the card closes. Since a single click on a tile already
+  switches view, "set default" by mouse lives **in the preview**: double click
+  on the wallpaper (`previewView.onImage(point)` routes the taps — a tap outside
+  the image goes back, on the image the single tap is inert because it is the
+  first half of the double tap). Do NOT put single-tap-selects back on the tile.
 - **Fullscreen preview** (Enter on a tile): full-res wallpaper at natural size
   under a `PanelHero` whose title is `<code> - <name> (<width>x<height>)` — the
   code inline in the title (no `detail` pill, decision 2026-09-03) and the real
