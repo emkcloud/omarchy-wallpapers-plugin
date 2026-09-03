@@ -22,7 +22,6 @@ usage() {
   echo "  install <theme> [name]            Install wallpapers (delegates to wallpapers.py)" >&2
   echo "  remove <theme> [name]             Remove wallpapers (delegates to wallpapers.py)" >&2
   echo "  set-default <theme> <filename> <url>  Download if needed + set as current background" >&2
-  echo "  preview <theme> <filename> <url>  Download into the local preview cache, print path" >&2
 }
 
 fetch() {
@@ -90,17 +89,6 @@ cmd_set_default() {
   omarchy-theme-bg-set "$path"
 }
 
-cmd_preview() {
-  local theme="$1" filename="$2" url="$3"
-  local dir="$CACHE_DIR/$theme"
-  mkdir -p "$dir"
-  local path="$dir/$filename"
-  if [[ ! -f $path ]]; then
-    fetch "$url" -o "$path.tmp" && mv "$path.tmp" "$path"
-  fi
-  printf '%s\n' "$path"
-}
-
 if [[ $# -eq 0 ]]; then
   usage
   exit 1
@@ -115,6 +103,5 @@ case "$command" in
   install) cmd_install "$@" ;;
   remove) cmd_remove "$@" ;;
   set-default) cmd_set_default "$@" ;;
-  preview) cmd_preview "$@" ;;
   *) usage; exit 1 ;;
 esac

@@ -50,7 +50,8 @@ omarchy-shell shell summon emkcloud.wallpaper-manager '{}'
 
 ## Note tecniche
 
-- Le anteprime sono scaricate in `~/.cache/omarchy/wallpaper-manager/<theme>/`.
+- Le anteprime vengono caricate direttamente dall'URL remoto del catalogo
+  (la griglia carica solo le immagini visibili, quindi è lazy allo scroll).
 - Le operazioni install/remove delegano a `scripts/wallpapers.py` del repo
   wallpapers (verifica sha256, skip se già aggiornato, refresh della cache sfondi).
 - I colori seguono il tema Omarchy attivo (`qs.Commons.Color` / `Style`).

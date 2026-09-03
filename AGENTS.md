@@ -16,7 +16,7 @@ set-default), theme by theme.
   `omarchy plugin validate`.
 - `WallpaperManager.qml` — the plugin UI (Quickshell/QML).
 - `manager.sh` — bash helper: fetches JSON from the wallpapers repo, computes
-  local install state, caches previews.
+  local install state, caches the `wallpapers.py` helper.
 - `datasets/`, `images/`, `masters/` — never here. The wallpapers live in the
   separate repo `emkcloud/omarchy-wallpapers`.
 
@@ -41,11 +41,13 @@ set-default), theme by theme.
 - Remote data flows through `manager.sh` (curl + jq); QML parses TSV output.
 - Actions delegate to `wallpapers.py` (sha256 checks, parallel download, bg cache
   refresh) and `omarchy-theme-bg-set` for the default background.
-- Local preview cache: `~/.cache/omarchy/wallpaper-manager/<theme>/`.
 - Install target (local Omarchy): `~/.config/omarchy/backgrounds/<theme>/`.
 - The UI is an overlay `PanelWindow` (pattern from `image-picker`); keyboard
   navigation uses `Keys` on the grid (arrows/j-k/h-l, Enter=install,
   Del=remove, D=default, Esc=back).
+- Preview thumbnails load directly from the remote `url` in the catalog (the
+  `GridView` only instantiates visible delegates, so loading is lazy). No local
+  preview cache.
 
 ## Local development
 

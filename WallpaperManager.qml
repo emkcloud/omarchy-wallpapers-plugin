@@ -36,8 +36,14 @@ Item {
   readonly property color foreground: Color.foreground
   readonly property color background: Color.background
   readonly property color accent: Color.accent
+  readonly property color urgent: Color.urgent
   readonly property color muted: Color.muted
-  readonly property color scrim: Util.alpha(Color.background, 0.72)
+  readonly property color cardBackground: Color.popups.background
+  readonly property color cardBorder: Color.popups.border
+  readonly property color scrim: Util.alpha(Color.background, 0.78)
+  readonly property color barFill: Util.alpha(Color.foreground, 0.12)
+  readonly property color tileFill: Util.alpha(Color.foreground, 0.10)
+  readonly property color tileBorder: Util.alpha(Color.foreground, 0.30)
   readonly property string fontFamily: Style.font.family
 
   ListModel { id: themesModel }
@@ -188,8 +194,7 @@ Item {
               url: parts[3],
               sha256: parts[4],
               installed: parts[5],
-              isDefault: parts[6],
-              previewPath: ""
+              isDefault: parts[6]
             })
         }
         root.busy = false
@@ -239,6 +244,14 @@ Item {
 
       MouseArea { anchors.fill: parent; onClicked: {} }
 
+      Rectangle {
+        anchors.fill: parent
+        radius: Style.cornerRadius + Style.space(2)
+        color: root.cardBackground
+        border.color: root.cardBorder
+        border.width: Math.max(1, Style.normalBorderWidth)
+      }
+
       // ---- header -----------------------------------------------------------
       Rectangle {
         id: header
@@ -246,7 +259,7 @@ Item {
         anchors.left: parent.left
         anchors.right: parent.right
         height: Style.space(64)
-        color: Util.alpha(root.foreground, 0.05)
+        color: root.barFill
         radius: Style.cornerRadius
 
         Text {
@@ -317,9 +330,11 @@ Item {
             radius: Style.cornerRadius
             color: themeRow.selected ? Style.selectedFillFor(root.foreground, root.accent)
                                      : (mouseArea.containsMouse ? Style.hoverFillFor(root.foreground, root.accent)
-                                                                : "transparent")
-            border.color: themeRow.selected ? Style.selectedBorderFor(root.foreground, root.accent) : "transparent"
-            border.width: themeRow.selected ? Math.max(1, Style.selectedBorderWidth) : 0
+                                                                : root.tileFill)
+            border.color: themeRow.selected ? Style.selectedBorderFor(root.foreground, root.accent)
+                                            : (mouseArea.containsMouse ? Style.hoverBorderFor(root.foreground, root.accent)
+                                                                       : root.tileBorder)
+            border.width: themeRow.selected ? Math.max(1, Style.selectedBorderWidth) : 1
           }
 
           Text {
@@ -406,9 +421,10 @@ Item {
             radius: Style.cornerRadius
             color: tile.selected ? Style.selectedFillFor(root.foreground, root.accent)
                                  : (tileMouse.containsMouse ? Style.hoverFillFor(root.foreground, root.accent)
-                                                            : Util.alpha(root.foreground, 0.04))
+                                                            : root.tileFill)
             border.color: tile.selected ? Style.selectedBorderFor(root.foreground, root.accent)
-                                        : Util.alpha(root.foreground, 0.12)
+                                        : (tileMouse.containsMouse ? Style.hoverBorderFor(root.foreground, root.accent)
+                                                                   : root.tileBorder)
             border.width: tile.selected ? Math.max(1, Style.selectedBorderWidth) : 1
 
             Image {
@@ -418,7 +434,7 @@ Item {
               anchors.right: parent.right
               height: Style.space(112)
               anchors.margins: Style.space(6)
-              source: tile.model.previewPath ? Util.fileUrl(tile.model.previewPath) : ""
+              source: tile.model.url
               fillMode: Image.PreserveAspectCrop
               asynchronous: true
               cache: true
@@ -463,7 +479,7 @@ Item {
                 width: Style.space(60)
                 height: Style.space(16)
                 radius: Style.space(3)
-                color: Util.alpha(root.accent, 0.18)
+                color: Util.alpha(root.accent, 0.30)
                 Text {
                   anchors.centerIn: parent
                   text: "installato"
@@ -478,7 +494,7 @@ Item {
                 width: Style.space(52)
                 height: Style.space(16)
                 radius: Style.space(3)
-                color: Util.alpha(root.urgent, 0.22)
+                color: Util.alpha(root.urgent, 0.32)
                 Text {
                   anchors.centerIn: parent
                   text: "default"
@@ -489,28 +505,8 @@ Item {
               }
             }
 
-            // Lazy preview download (only for items that become visible).
-            Process {
-              id: previewProc
-              property string targetIndex: ""
-              command: root.scriptCmd(["preview", root.themeName, tile.model.filename, tile.model.url])
-              stdout: StdioCollector {
-                waitForEnd: true
-                onStreamFinished: {
-                  var path = String(text || "").trim()
-                  if (path && tile.index >= 0 && tile.index < wallpapersModel.count)
-                    wallpapersModel.setProperty(tile.index, "previewPath", path)
-                }
-              }
-            }
-
-            Component.onCompleted: {
-              if (tile.model.previewPath === "" && !tile._loaded) {
-                tile._loaded = true
-                previewProc.running = true
-              }
-            }
-
+            // Lazy preview via direct remote URL: GridView only creates
+            // visible delegates, so nearby tiles load as you scroll.
             MouseArea {
               id: tileMouse
               anchors.fill: parent
@@ -531,7 +527,7 @@ Item {
         anchors.left: parent.left
         anchors.right: parent.right
         height: Style.space(52)
-        color: Util.alpha(root.foreground, 0.05)
+        color: root.barFill
         radius: Style.cornerRadius
 
         Row {
@@ -591,7 +587,7 @@ Item {
         anchors.left: parent.left
         anchors.right: parent.right
         height: Style.space(36)
-        color: Util.alpha(root.foreground, 0.04)
+        color: root.barFill
         radius: Style.cornerRadius
 
         Row {
@@ -609,7 +605,7 @@ Item {
 
           Text {
             text: root.statusText
-            color: root.muted
+            color: Util.alpha(root.foreground, 0.85)
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
           }
