@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "emkcloud.wallpaper-manager",
+  "name": "Wallpaper manager",
+  "version": "1.0.0",
+  "author": "emkcloud",
+  "description": "Sfoglia i wallpaper del repo emkcloud/omarchy-wallpapers: installa, rimuovi o imposta il default nel tema Omarchy locale",
+  "kinds": [
+    "overlay"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "overlay": "WallpaperManager.qml"
+  }
+}
