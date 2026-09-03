@@ -59,8 +59,11 @@ omarchy-shell shell enablePlugin emkcloud.wallpaper-manager '{}'
 omarchy-shell shell summon emkcloud.wallpaper-manager '{}'
 ```
 
-Changes under `~/.config/omarchy/plugins/` hot-reload on save; force reload with
-`omarchy-shell shell rescanPlugins`.
+> ⚠️ **Symlink vs hot-reload.** The shell watches `~/.config/omarchy/plugins/`
+> with inotify, which does **not** follow symlinks. If the plugin dir is a
+> symlink, edits are NOT hot-reloaded. After changing QML, restart the shell:
+> `omarchy restart shell`, then re-summon. (For true hot-reload, copy the files
+> into `~/.config/omarchy/plugins/<id>/` instead of symlinking.)
 
 ## Distribution
 
