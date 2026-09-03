@@ -74,7 +74,7 @@ Item {
 
   function loadThemes() {
     busy = true
-    setStatus("Caricamento temi…")
+    setStatus("Loading themes…")
     themesProc.running = true
   }
 
@@ -90,7 +90,7 @@ Item {
 
   function loadWallpapers() {
     busy = true
-    setStatus("Caricamento wallpaper di " + themeName + "…")
+    setStatus("Loading wallpapers of " + themeName + "…")
     wallpapersModel.clear()
     catalogProc.command = scriptCmd(["catalog", themeName, themeCatalogUrl])
     catalogProc.running = true
@@ -108,16 +108,32 @@ Item {
 
   // ---- actions --------------------------------------------------------------
   function currentItem() {
-    if (view !== "wallpapers" || selectedIndex < 0 || selectedIndex >= wallpapersModel.count)
+    if ((view !== "wallpapers" && view !== "preview")
+        || selectedIndex < 0 || selectedIndex >= wallpapersModel.count)
       return null
     return wallpapersModel.get(selectedIndex)
+  }
+
+  function showPreview() {
+    if (wallpapersModel.count === 0) return
+    view = "preview"
+  }
+
+  function closePreview() {
+    view = "wallpapers"
+    grid.positionViewAtIndex(selectedIndex, GridView.Contain)
+  }
+
+  function previewNext(delta) {
+    if (wallpapersModel.count === 0) return
+    selectedIndex = Math.max(0, Math.min(wallpapersModel.count - 1, selectedIndex + delta))
   }
 
   function actionInstall() {
     var item = currentItem()
     if (!item) return
     busy = true
-    setStatus("Installazione " + item.name + "…")
+    setStatus("Installing " + item.name + "…")
     runAction(["install", themeName, item.name])
   }
 
@@ -125,7 +141,7 @@ Item {
     var item = currentItem()
     if (!item) return
     busy = true
-    setStatus("Rimozione " + item.name + "…")
+    setStatus("Removing " + item.name + "…")
     runAction(["remove", themeName, item.name])
   }
 
@@ -133,19 +149,19 @@ Item {
     var item = currentItem()
     if (!item) return
     busy = true
-    setStatus("Imposto default: " + item.name + "…")
+    setStatus("Setting default: " + item.name + "…")
     runAction(["set-default", themeName, item.filename, item.url])
   }
 
   function actionInstallAll() {
     busy = true
-    setStatus("Installazione di tutto il tema " + themeName + "…")
+    setStatus("Installing all of theme " + themeName + "…")
     runAction(["install", themeName])
   }
 
   function actionRemoveAll() {
     busy = true
-    setStatus("Rimozione di tutto il tema " + themeName + "…")
+    setStatus("Removing all of theme " + themeName + "…")
     runAction(["remove", themeName])
   }
 
@@ -167,11 +183,19 @@ Item {
           var line = lines[i].trim()
           if (!line) continue
           var parts = line.split("\t")
-          if (parts.length >= 2)
-            themesModel.append({ name: parts[0], catalogUrl: parts[1] })
+          if (parts.length >= 5)
+            themesModel.append({
+              name: parts[0],
+              catalogUrl: parts[1],
+              sections: parseInt(parts[2], 10),
+              count: parseInt(parts[3], 10),
+              preview: parts[4]
+            })
         }
         root.busy = false
-        root.setStatus(themesModel.count + " tema/i disponibili")
+        root.setStatus(themesModel.count + (themesModel.count === 1 ? " theme available" : " themes available"))
+        if (themesModel.count > 0)
+          Qt.callLater(function() { themesGrid.positionViewAtIndex(root.selectedIndex, GridView.Contain) })
       }
     }
   }
@@ -201,15 +225,17 @@ Item {
             })
         }
         root.busy = false
-        root.setStatus(wallpapersModel.count + " wallpaper in " + root.themeName)
+        root.setStatus(wallpapersModel.count + (wallpapersModel.count === 1 ? " wallpaper in " : " wallpapers in ") + root.themeName)
+        if (wallpapersModel.count > 0)
+          Qt.callLater(function() { grid.positionViewAtIndex(root.selectedIndex, GridView.Contain) })
       }
     }
     onExited: {
       if (root.busy) {
         root.busy = false
         root.setStatus(wallpapersModel.count > 0
-          ? wallpapersModel.count + " wallpaper in " + root.themeName
-          : "Errore nel caricamento del catalogo")
+          ? wallpapersModel.count + (wallpapersModel.count === 1 ? " wallpaper in " : " wallpapers in ") + root.themeName
+          : "Error loading catalog")
       }
     }
   }
@@ -219,7 +245,7 @@ Item {
     id: actionProc
     onExited: {
       root.busy = false
-      root.setStatus("Operazione completata")
+      root.setStatus("Operation completed")
       root.refresh()
     }
   }
@@ -279,7 +305,7 @@ Item {
           anchors.verticalCenter: parent.verticalCenter
           text: root.view === "themes"
             ? "Wallpaper manager"
-            : root.themeName + " — sfoglia e gestisci"
+            : root.themeName + " — browse and manage"
           color: root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.title
@@ -294,21 +320,21 @@ Item {
 
           Button {
             visible: root.view === "wallpapers"
-            text: "Indietro"
+            text: "Back"
             iconText: "󰁍"
             hasCursor: root.view === "wallpapers"
             onClicked: root.goBack()
           }
 
           Button {
-            text: "Aggiorna"
+            text: "Refresh"
             iconText: "󰑓"
             hasCursor: true
             onClicked: root.refresh()
           }
 
           Button {
-            text: "Chiudi"
+            text: "Close"
             iconText: "󰩍"
             hasCursor: true
             onClicked: root.close()
@@ -317,8 +343,8 @@ Item {
       }
 
       // ---- themes view ------------------------------------------------------
-      ListView {
-        id: themesList
+      GridView {
+        id: themesGrid
         visible: root.view === "themes"
         anchors.top: header.bottom
         anchors.left: parent.left
@@ -329,13 +355,30 @@ Item {
         clip: true
         focus: root.view === "themes"
 
+        readonly property int columnsHint: Math.max(2, Math.floor(width / root.minTileWidth))
+        readonly property int colCount: Math.max(1, Math.floor(width / cellWidth))
+        cellWidth: Math.floor(width / columnsHint)
+        cellHeight: Math.floor(cellWidth * 0.9)
+
+        function moveTo(index) {
+          root.selectedIndex = index
+          positionViewAtIndex(index, GridView.Contain)
+        }
+
         Keys.priority: Keys.BeforeItem
         Keys.onPressed: function(event) {
+          if (!isFinite(root.selectedIndex)) root.selectedIndex = 0
           if (event.key === Qt.Key_Up || event.key === Qt.Key_K) {
-            root.selectedIndex = Math.max(0, root.selectedIndex - 1)
+            moveTo(Math.max(0, root.selectedIndex - colCount))
             event.accepted = true
           } else if (event.key === Qt.Key_Down || event.key === Qt.Key_J) {
-            root.selectedIndex = Math.min(themesModel.count - 1, root.selectedIndex + 1)
+            moveTo(Math.min(themesModel.count - 1, root.selectedIndex + colCount))
+            event.accepted = true
+          } else if (event.key === Qt.Key_Left || event.key === Qt.Key_H) {
+            moveTo(Math.max(0, root.selectedIndex - 1))
+            event.accepted = true
+          } else if (event.key === Qt.Key_Right || event.key === Qt.Key_L) {
+            moveTo(Math.min(themesModel.count - 1, root.selectedIndex + 1))
             event.accepted = true
           } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
             root.selectTheme(root.selectedIndex)
@@ -347,43 +390,82 @@ Item {
         }
 
         delegate: Item {
-          id: themeRow
+          id: themeTile
           required property int index
           required property var model
-          width: themesList.width
-          height: Style.space(56)
           readonly property bool selected: root.view === "themes" && root.selectedIndex === index
+
+          width: themesGrid.cellWidth - Style.space(10)
+          height: themesGrid.cellHeight - Style.space(10)
 
           Rectangle {
             anchors.fill: parent
             radius: Style.cornerRadius
-            color: themeRow.selected ? Style.selectedFillFor(root.foreground, root.accent)
-                                     : (mouseArea.containsMouse ? Style.hoverFillFor(root.foreground, root.accent)
+            color: themeTile.selected ? Style.selectedFillFor(root.foreground, root.accent)
+                                     : (themeMouse.containsMouse ? Style.hoverFillFor(root.foreground, root.accent)
                                                                 : root.tileFill)
-            border.color: themeRow.selected ? Style.selectedBorderFor(root.foreground, root.accent)
-                                            : (mouseArea.containsMouse ? Style.hoverBorderFor(root.foreground, root.accent)
-                                                                       : root.tileBorder)
-            border.width: themeRow.selected ? Math.max(1, Style.selectedBorderWidth) : 1
-          }
+            border.color: themeTile.selected ? Style.selectedBorderFor(root.foreground, root.accent)
+                                             : (themeMouse.containsMouse ? Style.hoverBorderFor(root.foreground, root.accent)
+                                                                         : root.tileBorder)
+            border.width: themeTile.selected ? Math.max(1, Style.selectedBorderWidth) : 1
 
-          Text {
-            anchors.left: parent.left
-            anchors.leftMargin: Style.space(16)
-            anchors.verticalCenter: parent.verticalCenter
-            text: model.name
-            color: root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.subtitle
-          }
+            Image {
+              id: themePreview
+              anchors.top: parent.top
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.topMargin: Style.space(5)
+              anchors.leftMargin: Style.space(5)
+              anchors.rightMargin: Style.space(5)
+              height: parent.height - Style.space(66)
+              source: themeTile.model.preview
+              fillMode: Image.PreserveAspectCrop
+              asynchronous: true
+              cache: true
+              sourceSize.width: 512
+              clip: true
+            }
 
-          MouseArea {
-            id: mouseArea
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: {
-              root.selectedIndex = index
-              root.selectTheme(index)
+            Text {
+              anchors.top: themePreview.bottom
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.topMargin: Style.space(4)
+              anchors.leftMargin: Style.space(6)
+              anchors.rightMargin: Style.space(6)
+              text: themeTile.model.name
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              elide: Text.ElideRight
+            }
+
+            Text {
+              anchors.bottom: parent.bottom
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.bottomMargin: Style.space(4)
+              anchors.leftMargin: Style.space(6)
+              anchors.rightMargin: Style.space(6)
+              text: themeTile.model.sections
+                + (themeTile.model.sections === 1 ? " section · " : " sections · ")
+                + themeTile.model.count + (themeTile.model.count === 1 ? " wallpaper" : " wallpapers")
+              color: Util.alpha(root.foreground, 0.75)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+            }
+
+            MouseArea {
+              id: themeMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: {
+                root.selectedIndex = index
+                root.selectTheme(index)
+              }
             }
           }
         }
@@ -405,25 +487,32 @@ Item {
         // Grid adapts to the card width: as many columns as fit while keeping
         // each tile at least ~190px wide (so previews stay readable).
         readonly property int columnsHint: Math.max(2, Math.floor(width / root.minTileWidth))
+        readonly property int colCount: Math.max(1, Math.floor(width / cellWidth))
         cellWidth: Math.floor(width / columnsHint)
         cellHeight: Math.floor(cellWidth * 0.9)
 
+        function moveTo(index) {
+          root.selectedIndex = index
+          positionViewAtIndex(index, GridView.Contain)
+        }
+
         Keys.priority: Keys.BeforeItem
         Keys.onPressed: function(event) {
+          if (!isFinite(root.selectedIndex)) root.selectedIndex = 0
           if (event.key === Qt.Key_Up || event.key === Qt.Key_K) {
-            root.selectedIndex = Math.max(0, root.selectedIndex - grid.columns)
+            moveTo(Math.max(0, root.selectedIndex - colCount))
             event.accepted = true
           } else if (event.key === Qt.Key_Down || event.key === Qt.Key_J) {
-            root.selectedIndex = Math.min(wallpapersModel.count - 1, root.selectedIndex + grid.columns)
+            moveTo(Math.min(wallpapersModel.count - 1, root.selectedIndex + colCount))
             event.accepted = true
           } else if (event.key === Qt.Key_Left || event.key === Qt.Key_H) {
-            root.selectedIndex = Math.max(0, root.selectedIndex - 1)
+            moveTo(Math.max(0, root.selectedIndex - 1))
             event.accepted = true
           } else if (event.key === Qt.Key_Right || event.key === Qt.Key_L) {
-            root.selectedIndex = Math.min(wallpapersModel.count - 1, root.selectedIndex + 1)
+            moveTo(Math.min(wallpapersModel.count - 1, root.selectedIndex + 1))
             event.accepted = true
           } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-            root.actionInstall()
+            root.showPreview()
             event.accepted = true
           } else if (event.key === Qt.Key_Delete || event.key === Qt.Key_Backspace) {
             root.actionRemove()
@@ -523,7 +612,7 @@ Item {
                 color: Util.alpha(root.accent, 0.30)
                 Text {
                   anchors.centerIn: parent
-                  text: "installato"
+                  text: "installed"
                   color: root.accent
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
@@ -578,14 +667,14 @@ Item {
           spacing: Style.space(8)
 
           Button {
-            text: "Installa"
+            text: "Install"
             iconText: "󰚌"
             hasCursor: true
             onClicked: root.actionInstall()
           }
 
           Button {
-            text: "Rimuovi"
+            text: "Remove"
             iconText: "󰇸"
             hasCursor: true
             onClicked: root.actionRemove()
@@ -606,14 +695,14 @@ Item {
           spacing: Style.space(8)
 
           Button {
-            text: "Installa tutto"
+            text: "Install all"
             iconText: "󰑬"
             hasCursor: true
             onClicked: root.actionInstallAll()
           }
 
           Button {
-            text: "Rimuovi tutto"
+            text: "Remove all"
             iconText: "󰇸"
             hasCursor: true
             onClicked: root.actionRemoveAll()
@@ -649,6 +738,217 @@ Item {
             color: Util.alpha(root.foreground, 0.85)
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
+          }
+        }
+      }
+
+      // ---- fullscreen preview -----------------------------------------------
+      Item {
+        id: previewView
+        visible: root.view === "preview"
+        anchors.fill: parent
+        focus: root.view === "preview"
+        z: 10
+
+        // index of the wallpaper currently shown (swaps when the next one is ready)
+        property int displayIndex: -1
+
+        function displayItem() {
+          if (displayIndex < 0 || displayIndex >= wallpapersModel.count) return null
+          return wallpapersModel.get(displayIndex)
+        }
+
+        // target wallpaper, preloaded in background while the current one stays up
+        readonly property string nextSource: {
+          var item = root.currentItem()
+          if (!item) return ""
+          return item.installed === "1"
+            ? Util.fileUrl(root.backgroundsDir + "/" + root.themeName + "/" + item.filename)
+            : item.url
+        }
+
+        Rectangle {
+          anchors.fill: parent
+          radius: Style.cornerRadius + Style.space(2)
+          color: root.background
+          border.color: root.cardBorder
+          border.width: Math.max(1, Style.normalBorderWidth)
+        }
+
+        // title bar with wallpaper info (name, resolution, state)
+        Rectangle {
+          id: previewHeader
+          anchors.top: parent.top
+          anchors.left: parent.left
+          anchors.right: parent.right
+          height: Style.space(64)
+          color: root.barFill
+          radius: Style.cornerRadius
+
+          Column {
+            anchors.left: parent.left
+            anchors.leftMargin: Style.space(18)
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.space(2)
+
+            Row {
+              spacing: Style.space(10)
+
+              Text {
+                text: displayItem() ? displayItem().code : ""
+                color: root.accent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.title
+                font.bold: true
+              }
+
+              Text {
+                text: displayItem() ? displayItem().name : ""
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.title
+                font.bold: true
+                elide: Text.ElideRight
+                width: previewHeader.width - Style.space(280)
+              }
+            }
+
+            Text {
+              text: {
+                var item = displayItem()
+                if (!item) return ""
+                if (previewImage.status === Image.Error)
+                  return "Failed to load image"
+                if (previewImage.status !== Image.Ready)
+                  return "Loading " + item.filename + "…"
+                return previewImage.implicitWidth + " × " + previewImage.implicitHeight
+                  + " px · " + item.filename
+              }
+              color: Util.alpha(root.foreground, 0.70)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+              width: previewHeader.width - Style.space(180)
+            }
+          }
+
+          Row {
+            anchors.right: parent.right
+            anchors.rightMargin: Style.space(14)
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.space(8)
+
+            Rectangle {
+              visible: displayItem() && displayItem().installed === "1"
+              width: Style.space(60)
+              height: Style.space(18)
+              radius: Style.space(3)
+              color: Util.alpha(root.accent, 0.30)
+              Text {
+                anchors.centerIn: parent
+                text: "installed"
+                color: root.accent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+
+            Rectangle {
+              visible: displayItem() && displayItem().isDefault === "1"
+              width: Style.space(52)
+              height: Style.space(18)
+              radius: Style.space(3)
+              color: Util.alpha(root.urgent, 0.32)
+              Text {
+                anchors.centerIn: parent
+                text: "default"
+                color: root.urgent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+          }
+        }
+
+        Image {
+          id: previewImage
+          anchors.top: previewHeader.bottom
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.bottom: parent.bottom
+          anchors.margins: Style.space(18)
+          fillMode: Image.PreserveAspectFit
+          asynchronous: true
+          cache: true
+          clip: true
+          opacity: status === Image.Ready ? 1 : 0
+          Behavior on opacity { NumberAnimation { duration: 180 } }
+        }
+
+        // hidden preloader: fetches the target wallpaper in the background and
+        // swaps it onto the visible image only when it is fully loaded, so the
+        // previous wallpaper never disappears while the next one downloads.
+        Image {
+          id: nextImage
+          visible: false
+          asynchronous: true
+          cache: true
+          source: previewView.nextSource
+          onStatusChanged: {
+            if (status === Image.Ready) {
+              previewImage.source = nextImage.source
+              previewView.displayIndex = root.selectedIndex
+            } else if (status === Image.Error) {
+              previewImage.source = ""
+              previewView.displayIndex = root.selectedIndex
+            }
+          }
+        }
+
+        // spinner over the current image while the next one is loading
+        BusyIndicator {
+          anchors.centerIn: parent
+          width: Style.space(48)
+          height: Style.space(48)
+          running: nextImage.status === Image.Loading
+          visible: nextImage.status === Image.Loading
+        }
+
+        Text {
+          anchors.horizontalCenter: parent.horizontalCenter
+          anchors.bottom: parent.bottom
+          anchors.bottomMargin: Style.space(6)
+          text: "←/→ next · Enter install · Esc back"
+          color: Util.alpha(root.foreground, 0.55)
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+
+        MouseArea {
+          anchors.fill: parent
+          onClicked: root.closePreview()
+        }
+
+        Keys.priority: Keys.BeforeItem
+        Keys.onPressed: function(event) {
+          if (event.key === Qt.Key_Escape) {
+            root.closePreview()
+            event.accepted = true
+          } else if (event.key === Qt.Key_Left || event.key === Qt.Key_H) {
+            root.previewNext(-1)
+            event.accepted = true
+          } else if (event.key === Qt.Key_Right || event.key === Qt.Key_L) {
+            root.previewNext(1)
+            event.accepted = true
+          } else if (event.key === Qt.Key_Up || event.key === Qt.Key_K) {
+            root.previewNext(-1)
+            event.accepted = true
+          } else if (event.key === Qt.Key_Down || event.key === Qt.Key_J) {
+            root.previewNext(1)
+            event.accepted = true
+          } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+            root.actionInstall()
+            event.accepted = true
           }
         }
       }

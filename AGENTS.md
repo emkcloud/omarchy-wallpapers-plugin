@@ -73,9 +73,19 @@ Built and tested on this machine (branch `main`). What works today:
   previews readable. Do NOT put anchors on the delegate (broke grid → single
   column).
 - **Keyboard**: themes view — arrows/j-k move, Enter selects, Esc closes.
-  Grid — arrows/j-k-h-l move, Enter=install, Del/Backspace=remove, D=set
-  default, Esc=back to themes (Esc again closes). Mouse: click selects,
-  double-click = set default, click outside card closes.
+  Grid — arrows/j-k-h-l move (vertical via a computed `colCount`, not the
+  nonexistent `GridView.columns`), Enter=fullscreen preview, Del/Backspace=
+  remove, D=set default, Esc=back to themes (Esc again closes). Preview — ←/→
+  (h/l) or ↑/↓ (j/k) next/prev, Enter=install, Esc=back to grid. Mouse: click
+  selects, double-click = set default, click outside card closes.
+- **Fullscreen preview** (Enter on a tile): full-res wallpaper at natural size
+  in a header bar with name, real resolution, filename and installed/default
+  badges. **Double-buffered**: the current image stays visible while the next
+  one is preloaded in a hidden `nextImage`; the swap happens only when the new
+  one is `Ready` (instant from the pixmap cache), so navigating never shows a
+  blank screen. A `BusyIndicator` spins over the current image while a remote
+  wallpaper downloads. The preview header uses the same height as the main one
+  (`Style.space(64)`) to avoid resize jumps between screens.
 
 ### Bugs fixed along the way (do not reintroduce)
 
@@ -88,6 +98,11 @@ Built and tested on this machine (branch `main`). What works today:
    shell restart is required (see below). This once made the user see a stale,
    "transparent" version.
 4. Tiles must not anchor-horizontalCenter themselves (single-column bug).
+5. `GridView` has no `columns` property in Qt 6 — `grid.columns` /
+   `themesGrid.columns` are `undefined`, so Up/Down turned `selectedIndex`
+   into `NaN` (left/right worked since they use `±1`). Compute the column
+   count manually (`colCount = max(1, floor(width / cellWidth))`) and call
+   `positionViewAtIndex` after every move to keep the selection visible.
 
 ## Local development
 
@@ -114,4 +129,8 @@ Keep `manifest.json` at the repo root (required by `omarchy plugin add`).
 ## Notes for the agent
 
 - The user speaks Italian: respond and comment in Italian.
+- **UI language**: all user-facing strings in `WallpaperManager.qml` are in
+  **English** (decision 2026-09-02). Multilingual support is TBD — do not
+  introduce a translation framework yet; just keep strings in English until
+  the user decides how to handle i18n.
 - Commit messages: concise (short and to the point).
