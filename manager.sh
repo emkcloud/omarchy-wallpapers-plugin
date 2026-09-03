@@ -17,7 +17,7 @@ CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy/wallpaper-manager"
 usage() {
   echo "Usage: $0 <command> [args...]" >&2
   echo "Commands:" >&2
-  echo "  themes                            List themes as TSV (name,url,sections,count,preview)" >&2
+  echo "  themes                            List themes as TSV (name,title,url,sections,count,preview)" >&2
   echo "  catalog <theme> <catalog-url>     Wallpapers of a theme as TSV" >&2
   echo "  install <theme> [name]            Install wallpapers (delegates to wallpapers.py)" >&2
   echo "  remove <theme> [name]             Remove wallpapers (delegates to wallpapers.py)" >&2
@@ -45,7 +45,7 @@ cmd_themes() {
   fetch "$DATASETS_URL" | jq -r '
     .collections | to_entries[]
     | select(.value.kind == "theme")
-    | [.key, .value.catalog.url, (.value.sections | length), (.value.count // 0), (.value.preview // "")]
+    | [.key, (.value.title // .key), .value.catalog.url, (.value.sections | length), (.value.count // 0), (.value.preview // "")]
     | @tsv
   '
 }
