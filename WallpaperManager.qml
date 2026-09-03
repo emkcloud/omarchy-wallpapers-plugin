@@ -325,6 +325,24 @@ Item {
         anchors.margins: Style.space(18)
         model: themesModel
         clip: true
+        focus: root.view === "themes"
+
+        Keys.priority: Keys.BeforeItem
+        Keys.onPressed: function(event) {
+          if (event.key === Qt.Key_Up || event.key === Qt.Key_K) {
+            root.selectedIndex = Math.max(0, root.selectedIndex - 1)
+            event.accepted = true
+          } else if (event.key === Qt.Key_Down || event.key === Qt.Key_J) {
+            root.selectedIndex = Math.min(themesModel.count - 1, root.selectedIndex + 1)
+            event.accepted = true
+          } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+            root.selectTheme(root.selectedIndex)
+            event.accepted = true
+          } else if (event.key === Qt.Key_Escape) {
+            root.close()
+            event.accepted = true
+          }
+        }
 
         delegate: Item {
           id: themeRow
