@@ -3,6 +3,7 @@ import Quickshell.Io
 import Quickshell.Wayland
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Effects
 import QtQuick.Layouts
 import qs.Commons
 import qs.Ui
@@ -49,6 +50,60 @@ Item {
 
   ListModel { id: themesModel }
   ListModel { id: wallpapersModel }
+
+  // ---- rounded thumbnail ----------------------------------------------------
+  // Thumbnails must follow the window-manager rounding: `Style.cornerRadius`
+  // mirrors Hyprland's `decoration:rounding` (the shell re-reads it on startup
+  // and on theme change), so changing `rounding` in looknfeel.lua is picked up
+  // here too. `clip: true` on an Image only clips rectangularly, hence the
+  // MultiEffect mask.
+  //
+  // `inset` is the distance from the parent card's edge: concentric-radii rule
+  // (`r_inner = r_outer - gap`) keeps the padding visually uniform. Tiles use
+  // `inset: 0` (image flush to the card) and round only the top corners, so the
+  // thumbnail radius is exactly the card radius.
+  component RoundedImage: Item {
+    id: roundedImage
+
+    property alias source: roundedImageSource.source
+    property alias status: roundedImageSource.status
+    property alias fillMode: roundedImageSource.fillMode
+    property int inset: 0
+    property int radius: Math.max(0, Style.cornerRadius - inset)
+    property int topRadius: radius
+    property int bottomRadius: radius
+
+    Rectangle {
+      id: roundedImageMask
+      anchors.fill: parent
+      visible: false
+      layer.enabled: true
+      color: "white"
+      topLeftRadius: roundedImage.topRadius
+      topRightRadius: roundedImage.topRadius
+      bottomLeftRadius: roundedImage.bottomRadius
+      bottomRightRadius: roundedImage.bottomRadius
+    }
+
+    Item {
+      anchors.fill: parent
+      layer.enabled: roundedImage.topRadius > 0 || roundedImage.bottomRadius > 0
+      layer.smooth: true
+      layer.effect: MultiEffect {
+        maskEnabled: true
+        maskSource: roundedImageMask
+      }
+
+      Image {
+        id: roundedImageSource
+        anchors.fill: parent
+        fillMode: Image.PreserveAspectCrop
+        asynchronous: true
+        cache: true
+        sourceSize.width: 512
+      }
+    }
+  }
 
   // ---- lifecycle ------------------------------------------------------------
   function open(payload) {
@@ -399,38 +454,31 @@ Item {
           height: themesGrid.cellHeight - Style.space(10)
 
           Rectangle {
+            id: themeCard
             anchors.fill: parent
             radius: Style.cornerRadius
             color: themeTile.selected ? Style.selectedFillFor(root.foreground, root.accent)
                                      : (themeMouse.containsMouse ? Style.hoverFillFor(root.foreground, root.accent)
                                                                 : root.tileFill)
-            border.color: themeTile.selected ? Style.selectedBorderFor(root.foreground, root.accent)
-                                             : (themeMouse.containsMouse ? Style.hoverBorderFor(root.foreground, root.accent)
-                                                                         : root.tileBorder)
-            border.width: themeTile.selected ? Math.max(1, Style.selectedBorderWidth) : 1
 
-            Image {
+            RoundedImage {
               id: themePreview
               anchors.top: parent.top
               anchors.left: parent.left
               anchors.right: parent.right
-              anchors.topMargin: Style.space(5)
-              anchors.leftMargin: Style.space(5)
-              anchors.rightMargin: Style.space(5)
               height: parent.height - Style.space(66)
+              // Flush with the card edges: only the top corners are rounded, at
+              // the full card radius.
+              topRadius: Style.cornerRadius
+              bottomRadius: 0
               source: themeTile.model.preview
-              fillMode: Image.PreserveAspectCrop
-              asynchronous: true
-              cache: true
-              sourceSize.width: 512
-              clip: true
             }
 
             Text {
               anchors.top: themePreview.bottom
               anchors.left: parent.left
               anchors.right: parent.right
-              anchors.topMargin: Style.space(4)
+              anchors.topMargin: Style.space(6)
               anchors.leftMargin: Style.space(6)
               anchors.rightMargin: Style.space(6)
               text: themeTile.model.name
@@ -455,6 +503,18 @@ Item {
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
               elide: Text.ElideRight
+            }
+
+            // Border drawn as the last child so it paints on top of the flush
+            // thumbnail (a Rectangle's own border is painted below its children).
+            Rectangle {
+              anchors.fill: parent
+              color: "transparent"
+              radius: themeCard.radius
+              border.color: themeTile.selected ? Style.selectedBorderFor(root.foreground, root.accent)
+                                               : (themeMouse.containsMouse ? Style.hoverBorderFor(root.foreground, root.accent)
+                                                                           : root.tileBorder)
+              border.width: themeTile.selected ? Math.max(1, Style.selectedBorderWidth) : 1
             }
 
             MouseArea {
@@ -536,43 +596,36 @@ Item {
           height: grid.cellHeight - Style.space(10)
 
           Rectangle {
+            id: tileCard
             anchors.fill: parent
             radius: Style.cornerRadius
             color: tile.selected ? Style.selectedFillFor(root.foreground, root.accent)
                                  : (tileMouse.containsMouse ? Style.hoverFillFor(root.foreground, root.accent)
                                                             : root.tileFill)
-            border.color: tile.selected ? Style.selectedBorderFor(root.foreground, root.accent)
-                                        : (tileMouse.containsMouse ? Style.hoverBorderFor(root.foreground, root.accent)
-                                                                   : root.tileBorder)
-            border.width: tile.selected ? Math.max(1, Style.selectedBorderWidth) : 1
 
-            Image {
+            RoundedImage {
               id: preview
               anchors.top: parent.top
               anchors.left: parent.left
               anchors.right: parent.right
-              anchors.topMargin: Style.space(5)
-              anchors.leftMargin: Style.space(5)
-              anchors.rightMargin: Style.space(5)
               height: parent.height - Style.space(66)
+              // Flush with the card edges: only the top corners are rounded, at
+              // the full card radius.
+              topRadius: Style.cornerRadius
+              bottomRadius: 0
               // Local file when already installed (instant), reduced remote
               // preview otherwise; fall back to the full-res URL if a preview
               // is missing.
               source: tile.model.installed === "1"
                 ? Util.fileUrl(root.backgroundsDir + "/" + root.themeName + "/" + tile.model.filename)
                 : (tile.model.preview !== "" ? tile.model.preview : tile.model.url)
-              fillMode: Image.PreserveAspectCrop
-              asynchronous: true
-              cache: true
-              sourceSize.width: 512
-              clip: true
             }
 
             Row {
               anchors.top: preview.bottom
               anchors.left: parent.left
               anchors.right: parent.right
-              anchors.topMargin: Style.space(4)
+              anchors.topMargin: Style.space(6)
               anchors.leftMargin: Style.space(6)
               anchors.rightMargin: Style.space(6)
               spacing: Style.space(6)
@@ -606,13 +659,15 @@ Item {
 
               Rectangle {
                 visible: tile.model.installed === "1"
-                width: Style.space(60)
-                height: Style.space(16)
-                radius: Style.space(3)
+                width: installedLabel.implicitWidth + Style.space(12)
+                height: installedLabel.implicitHeight + Style.space(4)
+                radius: Style.cornerRadius
                 color: Util.alpha(root.accent, 0.30)
                 Text {
+                  id: installedLabel
                   anchors.centerIn: parent
                   text: "installed"
+                  textFormat: Text.PlainText
                   color: root.accent
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
@@ -621,18 +676,32 @@ Item {
 
               Rectangle {
                 visible: tile.model.isDefault === "1"
-                width: Style.space(52)
-                height: Style.space(16)
-                radius: Style.space(3)
+                width: defaultLabel.implicitWidth + Style.space(12)
+                height: defaultLabel.implicitHeight + Style.space(4)
+                radius: Style.cornerRadius
                 color: Util.alpha(root.urgent, 0.32)
                 Text {
+                  id: defaultLabel
                   anchors.centerIn: parent
                   text: "default"
+                  textFormat: Text.PlainText
                   color: root.urgent
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
                 }
               }
+            }
+
+            // Border drawn as the last child so it paints on top of the flush
+            // thumbnail (a Rectangle's own border is painted below its children).
+            Rectangle {
+              anchors.fill: parent
+              color: "transparent"
+              radius: tileCard.radius
+              border.color: tile.selected ? Style.selectedBorderFor(root.foreground, root.accent)
+                                          : (tileMouse.containsMouse ? Style.hoverBorderFor(root.foreground, root.accent)
+                                                                     : root.tileBorder)
+              border.width: tile.selected ? Math.max(1, Style.selectedBorderWidth) : 1
             }
 
             // Lazy preview via the reduced remote preview URL: GridView only
@@ -753,10 +822,9 @@ Item {
         // index of the wallpaper currently shown (swaps when the next one is ready)
         property int displayIndex: -1
 
-        function displayItem() {
-          if (displayIndex < 0 || displayIndex >= wallpapersModel.count) return null
-          return wallpapersModel.get(displayIndex)
-        }
+        // natural size of the wallpaper currently shown; drives the fitted
+        // rounded frame so the image corners follow the theme geometry
+        property size fittedSize: Qt.size(0, 0)
 
         // target wallpaper, preloaded in background while the current one stays up
         readonly property string nextSource: {
@@ -795,7 +863,7 @@ Item {
               spacing: Style.space(10)
 
               Text {
-                text: displayItem() ? displayItem().code : ""
+                text: root.currentItem() ? root.currentItem().code : ""
                 color: root.accent
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.title
@@ -803,7 +871,7 @@ Item {
               }
 
               Text {
-                text: displayItem() ? displayItem().name : ""
+                text: root.currentItem() ? root.currentItem().name : ""
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.title
@@ -815,8 +883,10 @@ Item {
 
             Text {
               text: {
-                var item = displayItem()
+                var item = root.currentItem()
                 if (!item) return ""
+                if (nextImage.status === Image.Loading)
+                  return "Loading " + item.filename + "…"
                 if (previewImage.status === Image.Error)
                   return "Failed to load image"
                 if (previewImage.status !== Image.Ready)
@@ -839,14 +909,16 @@ Item {
             spacing: Style.space(8)
 
             Rectangle {
-              visible: displayItem() && displayItem().installed === "1"
-              width: Style.space(60)
-              height: Style.space(18)
-              radius: Style.space(3)
+              visible: root.currentItem() && root.currentItem().installed === "1"
+              width: previewInstalledLabel.implicitWidth + Style.space(12)
+              height: previewInstalledLabel.implicitHeight + Style.space(4)
+              radius: Style.cornerRadius
               color: Util.alpha(root.accent, 0.30)
               Text {
+                id: previewInstalledLabel
                 anchors.centerIn: parent
                 text: "installed"
+                textFormat: Text.PlainText
                 color: root.accent
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -854,14 +926,16 @@ Item {
             }
 
             Rectangle {
-              visible: displayItem() && displayItem().isDefault === "1"
-              width: Style.space(52)
-              height: Style.space(18)
-              radius: Style.space(3)
+              visible: root.currentItem() && root.currentItem().isDefault === "1"
+              width: previewDefaultLabel.implicitWidth + Style.space(12)
+              height: previewDefaultLabel.implicitHeight + Style.space(4)
+              radius: Style.cornerRadius
               color: Util.alpha(root.urgent, 0.32)
               Text {
+                id: previewDefaultLabel
                 anchors.centerIn: parent
                 text: "default"
+                textFormat: Text.PlainText
                 color: root.urgent
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -870,19 +944,58 @@ Item {
           }
         }
 
-        Image {
-          id: previewImage
+        Item {
+          id: previewImageFrame
           anchors.top: previewHeader.bottom
           anchors.left: parent.left
           anchors.right: parent.right
           anchors.bottom: parent.bottom
           anchors.margins: Style.space(18)
-          fillMode: Image.PreserveAspectFit
-          asynchronous: true
-          cache: true
-          clip: true
-          opacity: status === Image.Ready ? 1 : 0
-          Behavior on opacity { NumberAnimation { duration: 180 } }
+
+          // rounded mask sized exactly to the fitted image, so the image
+          // corners are rounded even when the wallpaper letterboxes
+          Rectangle {
+            id: previewImageMask
+            x: fitted.x
+            y: fitted.y
+            width: fitted.width
+            height: fitted.height
+            visible: false
+            layer.enabled: true
+            color: "white"
+            radius: Style.cornerRadius
+          }
+
+          // fitted rect: aspect-fit box computed from the natural image size
+          Item {
+            id: fitted
+            readonly property real s: {
+              var iw = previewView.fittedSize.width
+              var ih = previewView.fittedSize.height
+              if (iw <= 0 || ih <= 0) return 0
+              return Math.min(previewImageFrame.width / iw, previewImageFrame.height / ih)
+            }
+            x: (previewImageFrame.width - previewView.fittedSize.width * s) / 2
+            y: (previewImageFrame.height - previewView.fittedSize.height * s) / 2
+            width: previewView.fittedSize.width * s
+            height: previewView.fittedSize.height * s
+            layer.enabled: true
+            layer.smooth: true
+            layer.effect: MultiEffect {
+              maskEnabled: true
+              maskSource: previewImageMask
+            }
+
+            Image {
+              id: previewImage
+              anchors.fill: parent
+              fillMode: Image.PreserveAspectFit
+              asynchronous: true
+              cache: true
+              opacity: status === Image.Ready ? 1 : 0
+              Behavior on opacity { NumberAnimation { duration: 180 } }
+            }
+          }
         }
 
         // hidden preloader: fetches the target wallpaper in the background and
@@ -897,6 +1010,7 @@ Item {
           onStatusChanged: {
             if (status === Image.Ready) {
               previewImage.source = nextImage.source
+              previewView.fittedSize = Qt.size(nextImage.implicitWidth, nextImage.implicitHeight)
               previewView.displayIndex = root.selectedIndex
             } else if (status === Image.Error) {
               previewImage.source = ""

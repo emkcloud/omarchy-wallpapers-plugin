@@ -134,3 +134,10 @@ Keep `manifest.json` at the repo root (required by `omarchy plugin add`).
   introduce a translation framework yet; just keep strings in English until
   the user decides how to handle i18n.
 - Commit messages: concise (short and to the point).
+- **Do NOT verify the UI with screenshots** (`grim` + reading the image): it is
+  slow and expensive. After restarting the shell, just ask the user to look at
+  the overlay and report the visual result.
+- Corner rounding must always come from `Style.cornerRadius` (mirrors
+  Hyprland's `decoration:rounding`), never a hardcoded number. Images need the
+  `RoundedImage` inline component (`layer.effect: MultiEffect` + mask) because
+  `clip: true` on an `Image` only clips rectangularly.
