@@ -44,6 +44,7 @@ Item {
   readonly property color barFill: Util.alpha(Color.foreground, 0.12)
   readonly property color tileFill: Util.alpha(Color.foreground, 0.10)
   readonly property color tileBorder: Util.alpha(Color.foreground, 0.30)
+  readonly property int minTileWidth: Style.space(190)
   readonly property string fontFamily: Style.font.family
 
   ListModel { id: themesModel }
@@ -398,9 +399,13 @@ Item {
         anchors.margins: Style.space(18)
         model: wallpapersModel
         clip: true
-        cellWidth: Style.space(210)
-        cellHeight: Style.space(172)
         focus: root.view === "wallpapers"
+
+        // Grid adapts to the card width: as many columns as fit while keeping
+        // each tile at least ~190px wide (so previews stay readable).
+        readonly property int columnsHint: Math.max(2, Math.floor(width / root.minTileWidth))
+        cellWidth: Math.floor(width / columnsHint)
+        cellHeight: Math.floor(cellWidth * 0.9)
 
         Keys.priority: Keys.BeforeItem
         Keys.onPressed: function(event) {
@@ -437,11 +442,8 @@ Item {
           required property var model
           readonly property bool selected: root.view === "wallpapers" && root.selectedIndex === index
 
-          width: grid.cellWidth - Style.space(8)
-          height: grid.cellHeight - Style.space(8)
-          anchors.horizontalCenter: parent ? parent.horizontalCenter : undefined
-
-          property bool _loaded: false
+          width: grid.cellWidth - Style.space(10)
+          height: grid.cellHeight - Style.space(10)
 
           Rectangle {
             anchors.fill: parent
@@ -459,8 +461,10 @@ Item {
               anchors.top: parent.top
               anchors.left: parent.left
               anchors.right: parent.right
-              height: Style.space(112)
-              anchors.margins: Style.space(6)
+              anchors.topMargin: Style.space(5)
+              anchors.leftMargin: Style.space(5)
+              anchors.rightMargin: Style.space(5)
+              height: parent.height - Style.space(66)
               // Local file when already installed (instant), remote URL otherwise.
               source: tile.model.installed === "1"
                 ? Util.fileUrl(root.backgroundsDir + "/" + root.themeName + "/" + tile.model.filename)
@@ -476,7 +480,9 @@ Item {
               anchors.top: preview.bottom
               anchors.left: parent.left
               anchors.right: parent.right
-              anchors.margins: Style.space(6)
+              anchors.topMargin: Style.space(4)
+              anchors.leftMargin: Style.space(6)
+              anchors.rightMargin: Style.space(6)
               spacing: Style.space(6)
 
               Text {
@@ -501,7 +507,9 @@ Item {
               anchors.bottom: parent.bottom
               anchors.left: parent.left
               anchors.right: parent.right
-              anchors.margins: Style.space(6)
+              anchors.bottomMargin: Style.space(4)
+              anchors.leftMargin: Style.space(6)
+              anchors.rightMargin: Style.space(6)
               spacing: Style.space(6)
 
               Rectangle {
