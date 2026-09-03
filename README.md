@@ -1,5 +1,10 @@
 # omarchy-wallpapers-plugin
 
+> ⚠️ **DO NOT USE IN DEVELOPMENT.**
+> This plugin is experimental and under active development. It may break,
+> change behavior, or be removed at any time without notice. Do not rely on it
+> in a development environment or on machines where stability matters.
+
 Omarchy shell plugin: **`emkcloud.wallpaper-manager`**.
 
 Sfoglia i wallpaper del repository [emkcloud/omarchy-wallpapers](https://github.com/emkcloud/omarchy-wallpapers):
