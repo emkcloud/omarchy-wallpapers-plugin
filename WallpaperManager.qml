@@ -11,7 +11,14 @@ Item {
 
   // Injected by omarchy-shell.
   property var manifest: null
-  readonly property string pluginDir: manifest && manifest.__sourceDir ? manifest.__sourceDir : ""
+  // The shell strips `__sourceDir` from third-party manifests before injecting
+  // them, so the script and the logo are resolved relative to this file's own
+  // directory instead (same pattern as the shell's plugins, e.g. agents).
+  readonly property string pluginDir: {
+    if (manifest && manifest.__sourceDir) return manifest.__sourceDir.replace(/\/$/, "")
+    var url = Qt.resolvedUrl(".").toString()
+    return url.replace(/^file:\/\//, "").replace(/\/$/, "")
+  }
 
   readonly property string scriptPath: {
     var p = pluginDir
@@ -411,6 +418,14 @@ Item {
         root.setStatus(themesModel.count + (themesModel.count === 1 ? " theme available" : " themes available"))
         if (themesModel.count > 0)
           Qt.callLater(function() { themesGrid.positionViewAtIndex(root.selectedIndex, GridView.Contain) })
+      }
+    }
+    onExited: {
+      if (root.busy) {
+        root.busy = false
+        root.setStatus(themesModel.count > 0
+          ? themesModel.count + (themesModel.count === 1 ? " theme available" : " themes available")
+          : "Error loading themes")
       }
     }
   }

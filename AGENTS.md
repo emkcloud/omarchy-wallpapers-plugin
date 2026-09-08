@@ -34,9 +34,13 @@ set-default), theme by theme.
 - Overlay lifecycle: implement `open(payload)` / `close()`; summon with
   `omarchy-shell shell summon <id> '{}'` and hide with `shell hide <id>`.
 - `keepLoaded: true` keeps the window mounted between summons.
-- The plugin receives injected properties from the shell: `manifest`
-  (carries `__sourceDir`, used to locate `manager.sh`), `shell`,
+- The plugin receives injected properties from the shell: `manifest`, `shell`,
   `pluginRegistry`. Declare `property var manifest: null` to receive them.
+  **Do NOT use `manifest.__sourceDir`**: the shell strips it from the manifest
+  given to third-party plugins (`publicPluginManifest` in `shell.qml`). Locate
+  `manager.sh` / `logo.png` relative to the QML file itself instead:
+  `Qt.resolvedUrl(".")` → strip `file://` and the trailing `/` (pattern used
+  by the shell's own plugins, e.g. `agents/Panel.qml`).
 - Reference sources (read-only): `/usr/share/omarchy/shell/README.md`,
   `/usr/share/omarchy/shell/plugins/image-picker/`,
   `/usr/share/omarchy/shell/plugins/dev-gallery/`,
