@@ -12,11 +12,11 @@ set-default), theme by theme.
 ## Repository layout
 
 - `manifest.json` — plugin manifest (id `emkcloud.wallpaper-manager`, kind
-  `overlay`, entry point `ui/WallpaperManager.qml`). Validated by
+  `overlay`, entry point `interface/WallpaperManager.qml`). Validated by
   `omarchy plugin validate`.
-- `ui/` — the QML UI. Kept in a subdirectory so root holds only plugin metadata
+- `interface/` — the QML UI. Kept in a subdirectory so root holds only plugin metadata
   and config; the entry point is exactly one level deep.
-- `ui/WallpaperManager.qml` — the entire UI. Quickshell/QML, **one file**, all
+- `interface/WallpaperManager.qml` — the entire UI. Quickshell/QML, **one file**, all
   views plus the inline components `RoundedImage`, `HeroLogo`, `Pill`.
 - `config/` — plugin config, kept out of the repo root.
 - `config/config.json` — plugin config, read by both `manager.sh` and the QML.
@@ -64,7 +64,7 @@ set-default), theme by theme.
   **Do NOT use `manifest.__sourceDir`**: the shell strips it from the manifest
   given to third-party plugins (`publicPluginManifest` in `shell.qml`). Locate
   everything relative to the QML file instead, then walk up to the plugin root:
-  the QML sits one level deep (`ui/`), so `Qt.resolvedUrl("..")` → strip
+  the QML sits one level deep (`interface/`), so `Qt.resolvedUrl("..")` → strip
   `file://` and the trailing `/` gives the root (same pattern used by the
   shell's own plugins, e.g. `agents/Panel.qml`), then join the relative paths
   from `config/config.json`.
@@ -73,7 +73,7 @@ set-default), theme by theme.
   `/usr/share/omarchy/shell/plugins/dev-gallery/`,
   `/usr/share/omarchy/shell/services/PluginRegistry.qml`.
 
-## Code map — `ui/WallpaperManager.qml`
+## Code map — `interface/WallpaperManager.qml`
 
 The whole plugin is one QML file. It is written **logic-first, UI-last**: state,
 shared components and the script-driven processes come before the `PanelWindow`
@@ -407,7 +407,7 @@ checkout, validated and rescanned by the shell).
 ## Notes for the agent
 
 - The user speaks Italian: respond and comment in Italian.
-- **UI language**: all user-facing strings in `ui/WallpaperManager.qml` are in
+- **UI language**: all user-facing strings in `interface/WallpaperManager.qml` are in
   **English** (decision 2026-09-02). Multilingual support is TBD — do not
   introduce a translation framework yet; just keep strings in English until
   the user decides how to handle i18n.

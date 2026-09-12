@@ -14,7 +14,7 @@ Item {
   // The shell strips `__sourceDir` from third-party manifests before injecting
   // them, so the plugin root is resolved relative to this file's own location
   // instead (same pattern as the shell's plugins, e.g. agents). The QML lives
-  // one level deep (`ui/`), so the root is its parent directory.
+  // one level deep (`interface/`), so the root is its parent directory.
   readonly property string pluginRoot: {
     if (manifest && manifest.__sourceDir) return manifest.__sourceDir.replace(/\/$/, "")
     var url = Qt.resolvedUrl("..").toString()
