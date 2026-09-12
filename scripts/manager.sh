@@ -49,11 +49,13 @@ usage() {
   cat >&2 <<EOF
 Usage: $0 <command> [args...]
 Commands:
-  themes                            List themes as TSV (name,title,url,collections,count,preview)
+  themes                            List themes as TSV (name,title,url,collections,count,preview,installed,palette,description,image)
   catalog <theme> <catalog-url>     Wallpapers of a theme as TSV
   install <theme> [filename]        Install all wallpapers, or one by filename/name/code
+  random-install <theme> [count]    Install <count> (default 5) random wallpapers
   remove <theme> [filename]         Remove all wallpapers, or one by filename/name/code
   set-default <theme> <filename> <url>  Download if needed + set as current background
+  random-default <theme>            Set a random wallpaper of the theme as current background
 Repository: $REPO@$REF
 EOF
 }
@@ -206,15 +208,23 @@ cmd_themes() {
     echo "Failed to fetch datasets." >&2
     return 1
   }
-  local name title catalog collections count preview
-  while IFS=$'\t' read -r name title catalog collections count preview; do
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "$name" "$title" "$(rebase_url "$catalog")" "$collections" "$count" "$(rebase_url "$preview")"
+  local name title catalog collections count preview palette description image installed
+  # Read the jq row with a non-whitespace separator: `IFS=$'\t'` collapses
+  # runs of tabs, so the empty palette field would shift the description in.
+  while IFS=$'\x1f' read -r name title catalog collections count preview palette description image; do
+    [[ -n $name ]] || continue
+    installed=0
+    if [[ -d "$DEST_BASE/$name" ]]; then
+      installed="$(find "$DEST_BASE/$name" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')"
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$name" "$title" "$(rebase_url "$catalog")" "$collections" "$count" \
+      "$(rebase_url "$preview")" "$installed" "$palette" "$description" "$(rebase_url "$image")"
   done < <(jq -r '
     .themes | to_entries[]
     | select(.value.kind == "theme")
-    | [.key, (.value.title // .key), (.value.catalog.url // ""), (.value.collections | length), (.value.count // 0), (.value.preview // "")]
-    | @tsv
+    | [.key, (.value.title // .key), (.value.catalog.url // ""), (.value.collections | length), (.value.count // 0), (.value.preview // ""), ((.value.palette // []) | join(",")), (.value.description // ""), (.value.image // "")]
+    | map(tostring) | join("\u001f")
   ' "$DATASETS_JSON")
 }
 
@@ -355,6 +365,90 @@ cmd_set_default() {
   omarchy-theme-bg-set "$path"
 }
 
+# Pick a random wallpaper of a theme (no selector) and set it as the current
+# background, downloading it first if needed.
+cmd_random_default() {
+  local theme="$1"
+  ensure_catalog "$theme" || {
+    echo "Failed to fetch catalog for '$theme'." >&2
+    return 1
+  }
+  local catalog total index filename url
+  catalog="$DATASETS_DIR/$theme/catalog.json"
+  total="$(jq -r '.wallpapers | length' "$catalog")"
+  if (( total == 0 )); then
+    echo "No wallpapers for theme '$theme'." >&2
+    return 1
+  fi
+  index=$(( RANDOM % total ))
+  IFS=$'\t' read -r filename url < <(
+    jq -r --argjson i "$index" '.wallpapers[$i] | [.filename, .url] | @tsv' "$catalog"
+  )
+  cmd_set_default "$theme" "$filename" "$url"
+}
+
+# Install a random selection of a theme's wallpapers (default 5). Used by the
+# "Random install (5)" button on the themes detail pane.
+cmd_random_install() {
+  local theme="$1" count="${2:-5}"
+  ensure_datasets || {
+    echo "Failed to fetch datasets." >&2
+    return 1
+  }
+  if [[ "$(jq -r --arg t "$theme" '.themes[$t] | type' "$DATASETS_JSON")" == "null" ]]; then
+    echo "Theme '$theme' not found in the repository." >&2
+    return 1
+  fi
+  theme_installed_in_omarchy "$theme" || {
+    echo "Theme '$theme' is not installed in Omarchy. Install it first." >&2
+    return 1
+  }
+  ensure_catalog "$theme" || {
+    echo "Failed to fetch catalog for '$theme'." >&2
+    return 1
+  }
+  local catalog total
+  catalog="$DATASETS_DIR/$theme/catalog.json"
+  total="$(jq -r '.wallpapers | length' "$catalog")"
+  if (( total == 0 )); then
+    echo "No wallpapers for theme '$theme'." >&2
+    return 1
+  fi
+  if (( count > total )); then count=$total; fi
+  if (( count < 1 )); then count=1; fi
+
+  local -a sel_url=() sel_dest=() sel_sha=()
+  local filename url sha
+  while IFS= read -r filename; do
+    IFS=$'\t' read -r url sha < <(
+      jq -r --arg f "$filename" '.wallpapers[] | select(.filename == $f) | [.url, .sha256] | @tsv' "$catalog"
+    )
+    sel_url+=("$(rebase_url "$url")")
+    sel_dest+=("$DEST_BASE/$theme/$filename")
+    sel_sha+=("$sha")
+  done < <(jq -r '.wallpapers[].filename' "$catalog" | shuf -n "$count")
+
+  mkdir -p "$DEST_BASE/$theme"
+  local fail_file i
+  fail_file="$(mktemp)"
+  for i in "${!sel_url[@]}"; do
+    download_one "${sel_url[$i]}" "${sel_dest[$i]}" "${sel_sha[$i]}" 2>>"$fail_file" &
+    while (( $(jobs -rp | wc -l) >= 8 )); do
+      wait -n || true
+    done
+  done
+  wait || true
+
+  refresh_bg_cache
+  if [[ -s $fail_file ]]; then
+    cat "$fail_file" >&2
+    rm -f -- "$fail_file"
+    return 1
+  fi
+  rm -f -- "$fail_file"
+  echo "Installed ${#sel_url[@]} random wallpaper(s) in $DEST_BASE/$theme."
+}
+
 if [[ $# -eq 0 ]]; then
   usage
   exit 1
@@ -367,7 +461,9 @@ case "$command" in
   themes) cmd_themes ;;
   catalog) cmd_catalog "$@" ;;
   install) cmd_install "$@" ;;
+  random-install) cmd_random_install "$@" ;;
   remove) cmd_remove "$@" ;;
   set-default) cmd_set_default "$@" ;;
+  random-default) cmd_random_default "$@" ;;
   *) usage; exit 1 ;;
 esac

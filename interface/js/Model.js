@@ -11,8 +11,8 @@ function parseThemes(raw) {
   var out = []
   var lines = String(raw || "").split("\n")
   for (var i = 0; i < lines.length; i++) {
-    var line = lines[i].trim()
-    if (!line) continue
+    var line = lines[i].replace(/\r$/, "")
+    if (!line.trim()) continue
     var parts = line.split("\t")
     if (parts.length >= 6)
       out.push({
@@ -21,7 +21,11 @@ function parseThemes(raw) {
         catalogUrl: parts[2],
         collections: parseInt(parts[3], 10),
         count: parseInt(parts[4], 10),
-        preview: parts[5]
+        preview: parts[5],
+        installed: parts.length > 6 ? parseInt(parts[6], 10) : 0,
+        palette: parts.length > 7 ? parts[7] : "",
+        description: parts.length > 8 ? parts[8] : "",
+        image: parts.length > 9 ? parts[9] : ""
       })
   }
   return out
@@ -59,6 +63,37 @@ function themeLabel(item) {
   return String(label).replace(/[-_]+/g, " ").toUpperCase()
 }
 
+// --- theme state -----------------------------------------------------------
+
+// "installed" when every catalog entry is present on disk, "partial" when only
+// some are, "available" when none is.
+function themeState(item) {
+  if (!item) return "available"
+  var total = item.count || 0
+  var got = item.installed || 0
+  if (total > 0 && got >= total) return "installed"
+  if (got > 0) return "partial"
+  return "available"
+}
+
+// Short caption under the theme name: "250 · installed" / "12/250 installed".
+function themeStatusLabel(item) {
+  if (!item) return ""
+  var state = themeState(item)
+  if (state === "partial") return item.installed + "/" + item.count + " installed"
+  return String(item.count || 0) + " · " + (state === "installed" ? "installed" : "available")
+}
+
+// Dataset `palette` is a comma-separated hex list; split it for the swatches.
+function paletteList(item) {
+  if (!item || !item.palette) return []
+  return String(item.palette).split(",").map(function(s) {
+    return s.trim()
+  }).filter(function(s) {
+    return s.length > 0
+  })
+}
+
 // --- cursor arithmetic -----------------------------------------------------
 
 // Clamp a cursor move to the model bounds; `step` may be ±1, a whole row or a
@@ -75,6 +110,7 @@ function stepIndex(index, step, count) {
 function textAction(text) {
   if (text === "d" || text === "D") return "default"
   if (text === "r" || text === "R") return "refresh"
+  if (text === "i" || text === "I") return "install"
   return ""
 }
 

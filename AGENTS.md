@@ -305,9 +305,10 @@ default, Esc returns to the grid.
 
   | command | args | stdout (TSV) |
   |---|---|---|
-  | `themes` | — | `name  title  catalogUrl  collections  count  preview` |
+  | `themes` | — | `name  title  catalogUrl  collections  count  preview  installed  palette  description  image` (`preview` = card thumbnail, `image` = 2K for the detail pane; `palette` = comma-separated hex, read straight from the dataset — no hardcoded fallback) |
   | `catalog` | `<theme> <catalog-url>` | `filename  name  code  url  sha256  installed  isDefault  preview` (local catalog; the URL arg is only a fallback) |
   | `install` | `<theme> [selector]` | human text; no selector = all, selector matches id/name/code/filename |
+  | `random-install` | `<theme> [count]` | human text; installs `<count>` random wallpapers (default 5) |
   | `remove` | `<theme> [selector]` | human text; same selector matching |
   | `set-default` | `<theme> <filename> <url>` | human text; downloads if missing then `omarchy-theme-bg-set` |
 

@@ -3,6 +3,7 @@ import Quickshell.Io
 import Quickshell.Wayland
 import QtQuick
 import QtQuick.Effects
+import QtQuick.Shapes
 import qs.Commons
 import qs.Ui
 import "components"
@@ -69,6 +70,14 @@ Item {
   property int selectedIndex: 0
   property bool busy: false
   property string statusText: ""
+  // Theme currently being bulk-installed, so its row can flag the "installing"
+  // state (blue dot, per the mockup).
+  property string installingTheme: ""
+  // "Add remote source" placeholder: shows a COMING SOON label for 3s on click.
+  property bool addSourceSoon: false
+  // Bumped whenever `themesModel` is reloaded: property bindings that read the
+  // model rows (`selectedTheme`, `themeCounts`) depend on it to re-evaluate.
+  property int themesRevision: 0
 
   // Cursor model (see Ui/CursorSurface.qml): mouse hover and keyboard share a
   // single cursor. Items derive their visuals from `hasCursor`, never from
@@ -90,8 +99,11 @@ Item {
   readonly property int contentMargin: Style.spacing.panelPadding
   readonly property int contentSpacing: Style.spacing.md
   readonly property int minTileWidth: Style.space(190)
-  // Themes are few, so their grid gets wider tiles (and larger previews).
-  readonly property int themeTileWidth: Style.space(340)
+  // Themes are few and shown as a vertical master list.
+  readonly property int themeRowHeight: Style.space(64)
+  // Shared height so "Add remote source" and the detail action buttons line up
+  // on both sides of the vertical rule.
+  readonly property int actionButtonHeight: Style.space(36)
   readonly property int tileGap: Style.space(4)
   readonly property int tileInset: Math.max(1, Style.normalBorderWidth)
   readonly property string fontFamily: Style.font.menuFamily
@@ -104,6 +116,32 @@ Item {
   ListModel { id: themesModel }
   ListModel { id: wallpapersModel }
 
+  // Theme highlighted in the master-detail themes screen. Depends on
+  // `themesRevision` because reading rows through `ListModel.get()` is not a
+  // tracked QML dependency.
+  readonly property var selectedTheme: {
+    var rev = themesRevision
+    if (selectedIndex < 0 || selectedIndex >= themesModel.count) return null
+    return themesModel.get(selectedIndex)
+  }
+
+  // "N installed · M available" summary shown in the themes footer.
+  readonly property var themeCounts: {
+    var rev = themesRevision
+    var installed = 0
+    var available = 0
+    for (var i = 0; i < themesModel.count; i++) {
+      if ((themesModel.get(i).installed || 0) > 0) installed++
+      else available++
+    }
+    return { "installed": installed, "available": available }
+  }
+
+  // Stable status-dot colors: brand green/blue (assets/images/logo.png palette)
+  // for installed/installing, dim for available.
+  readonly property color statusInstalled: "#05DF72"
+  readonly property color statusInstalling: "#155DFC"
+
   // ---- lifecycle ------------------------------------------------------------
   function open(payload) {
     opened = true
@@ -111,6 +149,8 @@ Item {
     selectedIndex = 0
     cursorActive = true
     statusText = ""
+    installingTheme = ""
+    addSourceSoon = false
     loadThemes()
   }
 
@@ -167,19 +207,22 @@ Item {
   }
 
   function refresh() {
-    if (view === "wallpapers") loadWallpapers()
+    if (view === "themes") loadThemes()
+    else if (view === "wallpapers") loadWallpapers()
   }
 
   // ---- cursor state machine -------------------------------------------------
   // Ui/PanelKeyCatcher.qml turns raw keys into semantic signals; the panel
-  // keeps the state machine. GridView has no `columns` in Qt 6, so the column
-  // count is computed by hand (see AGENTS.md).
-  function activeGrid() {
-    return view === "themes" ? themesGrid : grid
-  }
-
+  // keeps the state machine. The themes screen is a vertical ListView, the
+  // wallpapers screen a GridView (which has no `columns` in Qt 6, so the column
+  // count is computed by hand — see AGENTS.md).
   function activeCount() {
     return view === "themes" ? themesModel.count : wallpapersModel.count
+  }
+
+  function positionActive(index) {
+    if (view === "themes") themesList.positionViewAtIndex(index, ListView.Contain)
+    else grid.positionViewAtIndex(index, GridView.Contain)
   }
 
   function stepCursor(step) {
@@ -188,7 +231,7 @@ Item {
 
     cursorActive = true
     selectedIndex = Model.stepIndex(selectedIndex, step, count)
-    activeGrid().positionViewAtIndex(selectedIndex, GridView.Contain)
+    positionActive(selectedIndex)
   }
 
   function moveCursor(dx, dy) {
@@ -196,22 +239,31 @@ Item {
       previewNext(dx !== 0 ? dx : dy)
       return
     }
+    if (view === "themes") {
+      stepCursor(dy !== 0 ? dy : dx)
+      return
+    }
 
-    stepCursor(dx !== 0 ? dx : dy * activeGrid().colCount)
+    stepCursor(dx !== 0 ? dx : dy * grid.colCount)
   }
 
   // PageUp/PageDown: jump a whole visible page of tiles (rows on screen ×
-  // columns). PanelKeyCatcher does not map these keys, so they bubble up to
-  // the card's Keys.onPressed fallback.
+  // columns; rows only on the themes list). PanelKeyCatcher does not map these
+  // keys, so they bubble up to the card's Keys.onPressed fallback.
   function pageCursor(dir) {
     if (view === "preview") {
       previewNext(dir)
       return
     }
+    if (view === "themes") {
+      var rows = Math.max(1, Math.floor(themesList.height / root.themeRowHeight))
+      stepCursor(dir * rows)
+      return
+    }
 
-    var g = activeGrid()
-    var rows = Math.max(1, Math.floor(g.height / g.cellHeight))
-    stepCursor(dir * rows * g.colCount)
+    var g = grid
+    var visibleRows = Math.max(1, Math.floor(g.height / g.cellHeight))
+    stepCursor(dir * visibleRows * g.colCount)
   }
 
   function activateCursor() {
@@ -230,6 +282,10 @@ Item {
     var action = Model.textAction(text)
     if (action === "default") actionSetDefault()
     else if (action === "refresh") refresh()
+    else if (action === "install") {
+      if (view === "themes") actionInstallTheme()
+      else actionInstall()
+    }
   }
 
   function takeCursor(index) {
@@ -290,6 +346,34 @@ Item {
     runAction(["install", themeName])
   }
 
+  // Bulk install straight from the themes screen: no need to open the theme.
+  function actionInstallTheme() {
+    var theme = selectedTheme
+    if (!theme) return
+    installingTheme = theme.name
+    busy = true
+    setStatus("Installing all of " + theme.name + "…")
+    runAction(["install", theme.name])
+  }
+
+  function actionRandomDefault() {
+    var theme = selectedTheme
+    if (!theme) return
+    busy = true
+    setStatus("Setting a random default for " + theme.name + "…")
+    runAction(["random-default", theme.name])
+  }
+
+  // Install a small random sample (5) of the selected theme's wallpapers.
+  function actionRandomInstall() {
+    var theme = selectedTheme
+    if (!theme) return
+    installingTheme = theme.name
+    busy = true
+    setStatus("Installing 5 random wallpapers of " + theme.name + "…")
+    runAction(["random-install", theme.name, "5"])
+  }
+
   function actionRemoveAll() {
     busy = true
     setStatus("Removing all of theme " + themeName + "…")
@@ -311,10 +395,11 @@ Item {
         themesModel.clear()
         var rows = Model.parseThemes(text)
         for (var i = 0; i < rows.length; i++) themesModel.append(rows[i])
+        root.themesRevision++
         root.busy = false
         root.setStatus(Model.themesStatus(themesModel.count))
         if (themesModel.count > 0)
-          Qt.callLater(function() { themesGrid.positionViewAtIndex(root.selectedIndex, GridView.Contain) })
+          Qt.callLater(function() { themesList.positionViewAtIndex(root.selectedIndex, ListView.Contain) })
       }
     }
     onExited: {
@@ -357,6 +442,7 @@ Item {
     id: actionProc
     onExited: {
       root.busy = false
+      root.installingTheme = ""
       root.setStatus("Operation completed")
       root.refresh()
     }
@@ -449,11 +535,14 @@ Item {
           Row {
             spacing: Style.spacing.controlGap
 
-            Pill {
+            Button {
               visible: root.dev
-              anchors.verticalCenter: parent.verticalCenter
-              label: "developer"
-              tint: root.urgent
+              text: "DEVELOPER"
+              iconText: "\uf121"
+              bordered: true
+              foreground: root.accent
+              accent: root.accent
+              fontFamily: root.fontFamily
             }
 
             Button {
@@ -506,10 +595,11 @@ Item {
           trailingControl: heroActions
           title: root.view === "themes" ? "Wallpaper manager" : root.themeName
           detail: root.view === "themes"
-            ? (themesModel.count > 0 ? String(themesModel.count) : "")
+            ? ""
             : (wallpapersModel.count > 0 ? String(wallpapersModel.count) : "")
           meta: root.view === "themes"
-            ? "remote collections"
+            ? ("remote collections · " + themesModel.count
+              + (themesModel.count === 1 ? " theme" : " themes"))
             : "browse and manage"
         }
 
@@ -517,102 +607,452 @@ Item {
           id: heroRule
           visible: root.view !== "preview"
           anchors.top: hero.bottom
-          anchors.topMargin: root.contentSpacing
+          anchors.topMargin: Style.space(14)
           foreground: root.foreground
         }
 
-        // ---- themes view ----------------------------------------------------
-        GridView {
-          id: themesGrid
+        // ---- themes view (master-detail) ------------------------------------
+        // Left: vertical list of themes. Right: large preview with the theme
+        // palette, description and bulk actions. One `selectedIndex` drives the
+        // list highlight and the detail pane for mouse and keyboard alike.
+        Item {
+          id: themesView
 
           visible: root.view === "themes"
           anchors.top: heroRule.bottom
-          anchors.topMargin: root.contentSpacing
           anchors.left: parent.left
           anchors.right: parent.right
           anchors.bottom: footer.top
-          anchors.bottomMargin: root.contentSpacing
-          model: themesModel
-          clip: true
 
-          readonly property int columnsHint: Math.max(2, Math.floor(width / root.themeTileWidth))
-          readonly property int colCount: Math.max(1, Math.floor(width / cellWidth))
-          cellWidth: Math.floor(width / columnsHint)
-          cellHeight: Math.floor(cellWidth * 0.72)
+          Row {
+            id: themesRow
 
-          delegate: Item {
-            id: themeTile
-            required property int index
-            required property var model
+            anchors.fill: parent
+            spacing: 0
 
-            width: themesGrid.cellWidth
-            height: themesGrid.cellHeight
+            // ---- master: theme list
+            Item {
+              id: themeListPane
 
-            CursorSurface {
-              id: themeCard
+              width: Math.max(Style.space(210),
+                Math.floor((themesRow.width - themesRow.spacing) * 0.26))
+              height: parent.height
 
-              anchors.fill: parent
-              anchors.margins: root.tileGap
-              foreground: root.foreground
-              accent: root.accent
-              bordered: true
-              hasCursor: root.cursorActive && root.view === "themes" && root.selectedIndex === themeTile.index
+              ListView {
+                id: themesList
 
-              RoundedImage {
-                id: themePreview
                 anchors.top: parent.top
+                anchors.topMargin: Style.space(12)
                 anchors.left: parent.left
                 anchors.right: parent.right
-                anchors.margins: root.tileInset
-                height: parent.height - Style.space(60)
-                inset: root.tileInset
-                bottomRadius: 0
-                source: themeTile.model.preview
+                anchors.rightMargin: root.contentMargin
+                anchors.bottom: addSource.top
+                anchors.bottomMargin: root.contentSpacing
+                clip: true
+                spacing: Style.space(4)
+                model: themesModel
+
+                delegate: Item {
+                  id: themeRow
+                  required property int index
+                  required property var model
+
+                  width: themesList.width
+                  height: root.themeRowHeight
+
+                  // Dark row plate, slightly lifted off the card, as in the
+                  // mockup. The CursorSurface paints the cursor/selected fill on
+                  // top of it.
+                  Rectangle {
+                    anchors.fill: parent
+                    radius: Style.cornerRadius
+                    color: Util.alpha(root.foreground, 0.05)
+                  }
+
+                  CursorSurface {
+                    id: themeRowCard
+
+                    anchors.fill: parent
+                    foreground: root.foreground
+                    accent: root.accent
+                    hasCursor: root.cursorActive && root.view === "themes"
+                      && root.selectedIndex === themeRow.index
+
+                    RoundedImage {
+                      id: themeRowThumb
+
+                      anchors.left: parent.left
+                      anchors.leftMargin: Style.space(6)
+                      anchors.verticalCenter: parent.verticalCenter
+                      width: Style.space(72)
+                      height: Style.space(48)
+                      inset: Style.space(2)
+                      source: themeRow.model.preview
+                    }
+
+                    Column {
+                      anchors.left: themeRowThumb.right
+                      anchors.leftMargin: Style.space(10)
+                      anchors.right: themeDot.left
+                      anchors.rightMargin: Style.space(10)
+                      anchors.verticalCenter: parent.verticalCenter
+                      spacing: Style.space(2)
+
+                      Text {
+                        width: parent.width
+                        textFormat: Text.PlainText
+                        text: Model.themeLabel(themeRow.model)
+                        color: root.foreground
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.subtitle
+                        font.bold: true
+                        font.letterSpacing: 1.2
+                        elide: Text.ElideRight
+                      }
+
+                      Text {
+                        width: parent.width
+                        textFormat: Text.PlainText
+                        text: Model.themeStatusLabel(themeRow.model)
+                        color: root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                        elide: Text.ElideRight
+                      }
+                    }
+
+                    Rectangle {
+                      id: themeDot
+
+                      anchors.right: parent.right
+                      anchors.rightMargin: Style.space(12)
+                      anchors.verticalCenter: parent.verticalCenter
+                      width: Style.space(9)
+                      height: width
+                      radius: width / 2
+                      color: {
+                        if (root.busy && root.installingTheme === themeRow.model.name)
+                          return root.statusInstalling
+                        var state = Model.themeState(themeRow.model)
+                        if (state === "installed") return root.statusInstalled
+                        if (state === "partial") return root.statusInstalling
+                        return Util.alpha(root.foreground, 0.25)
+                      }
+                    }
+
+                    HoverHandler {
+                      cursorShape: Qt.PointingHandCursor
+                      onHoveredChanged: if (hovered) root.takeCursor(themeRow.index)
+                    }
+
+                    TapHandler {
+                      onTapped: {
+                        root.takeCursor(themeRow.index)
+                        root.selectTheme(themeRow.index)
+                      }
+                    }
+                  }
+                }
               }
 
-              Text {
-                anchors.top: themePreview.bottom
+              // Placeholder for multiple remote sources; wired when the script
+              // learns to manage more than the single configured repo.
+              Item {
+                id: addSource
+
                 anchors.left: parent.left
                 anchors.right: parent.right
-                anchors.topMargin: Style.space(6)
-                anchors.leftMargin: Style.space(8)
-                anchors.rightMargin: Style.space(8)
-                textFormat: Text.PlainText
-                text: Model.themeLabel(themeTile.model)
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.subtitle
-                font.bold: true
-                font.letterSpacing: 1.2
-                elide: Text.ElideRight
-              }
-
-              Text {
+                anchors.rightMargin: root.contentMargin
                 anchors.bottom: parent.bottom
+                anchors.bottomMargin: Style.space(12)
+                height: root.actionButtonHeight
+
+                // Dotted rounded outline (Rectangle borders cannot dash).
+                Shape {
+                  id: addSourceOutline
+                  anchors.fill: parent
+
+                  readonly property real r: Math.max(0, Style.cornerRadius)
+                  readonly property real w: width - addSourceOutlinePath.strokeWidth
+                  readonly property real h: height - addSourceOutlinePath.strokeWidth
+                  readonly property real inset: addSourceOutlinePath.strokeWidth / 2
+
+                  ShapePath {
+                    id: addSourceOutlinePath
+                    strokeColor: root.dim
+                    strokeWidth: 1
+                    fillColor: "transparent"
+                    strokeStyle: ShapePath.DashLine
+                    dashPattern: [3, 3]
+                    capStyle: ShapePath.FlatCap
+
+                    startX: addSourceOutline.inset + addSourceOutline.r
+                    startY: addSourceOutline.inset
+                    PathLine {
+                      x: addSourceOutline.inset + addSourceOutline.w - addSourceOutline.r
+                      y: addSourceOutline.inset
+                    }
+                    PathArc {
+                      x: addSourceOutline.inset + addSourceOutline.w
+                      y: addSourceOutline.inset + addSourceOutline.r
+                      radiusX: addSourceOutline.r
+                      radiusY: addSourceOutline.r
+                    }
+                    PathLine {
+                      x: addSourceOutline.inset + addSourceOutline.w
+                      y: addSourceOutline.inset + addSourceOutline.h - addSourceOutline.r
+                    }
+                    PathArc {
+                      x: addSourceOutline.inset + addSourceOutline.w - addSourceOutline.r
+                      y: addSourceOutline.inset + addSourceOutline.h
+                      radiusX: addSourceOutline.r
+                      radiusY: addSourceOutline.r
+                    }
+                    PathLine {
+                      x: addSourceOutline.inset + addSourceOutline.r
+                      y: addSourceOutline.inset + addSourceOutline.h
+                    }
+                    PathArc {
+                      x: addSourceOutline.inset
+                      y: addSourceOutline.inset + addSourceOutline.h - addSourceOutline.r
+                      radiusX: addSourceOutline.r
+                      radiusY: addSourceOutline.r
+                    }
+                    PathLine {
+                      x: addSourceOutline.inset
+                      y: addSourceOutline.inset + addSourceOutline.r
+                    }
+                    PathArc {
+                      x: addSourceOutline.inset + addSourceOutline.r
+                      y: addSourceOutline.inset
+                      radiusX: addSourceOutline.r
+                      radiusY: addSourceOutline.r
+                    }
+                  }
+                }
+
+                Text {
+                  anchors.centerIn: parent
+                  textFormat: Text.PlainText
+                  text: root.addSourceSoon ? "COMING SOON (◕‿◕)" : "+ Add remote source"
+                  color: root.addSourceSoon ? root.accent : root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
+                TapHandler {
+                  onTapped: {
+                    root.addSourceSoon = true
+                    addSourceReset.restart()
+                  }
+                }
+
+                Timer {
+                  id: addSourceReset
+                  interval: 3000
+                  onTriggered: root.addSourceSoon = false
+                }
+              }
+
+              // Right rule of the master column, with the content padded off it.
+              Rectangle {
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                anchors.right: parent.right
+                width: 1
+                color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12)
+              }
+            }
+
+            // ---- detail: preview + palette + actions
+            Item {
+              id: themeDetail
+
+              width: themesRow.width - themeListPane.width - themesRow.spacing
+              height: parent.height
+              clip: true
+
+              // Full-bleed preview: no radius, no padding, the whole cell is
+              // the image (the cell edges are the section rules).
+              Image {
+                id: detailImage
+
+                anchors.fill: parent
+                fillMode: Image.PreserveAspectCrop
+                asynchronous: true
+                cache: true
+                // Full-res 2K image for the big pane; fall back to the card
+                // thumbnail when the dataset has no `image`.
+                source: {
+                  var theme = root.selectedTheme
+                  if (!theme) return ""
+                  return (theme.image && theme.image !== "") ? theme.image : theme.preview
+                }
+              }
+
+              // Dark gradient so the palette, name and description stay legible
+              // over the wallpaper.
+              Rectangle {
+                anchors.fill: parent
+                gradient: Gradient {
+                  GradientStop { position: 0.0; color: Util.alpha(root.background, 0.0) }
+                  GradientStop { position: 0.45; color: Util.alpha(root.background, 0.3) }
+                  GradientStop { position: 0.75; color: Util.alpha(root.background, 0.85) }
+                  GradientStop { position: 1.0; color: root.background }
+                }
+              }
+
+              Column {
                 anchors.left: parent.left
                 anchors.right: parent.right
-                anchors.bottomMargin: Style.space(6)
-                anchors.leftMargin: Style.space(8)
-                anchors.rightMargin: Style.space(8)
-                textFormat: Text.PlainText
-                text: themeTile.model.collections
-                  + (themeTile.model.collections === 1 ? " collection · " : " collections · ")
-                  + themeTile.model.count + (themeTile.model.count === 1 ? " wallpaper" : " wallpapers")
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                elide: Text.ElideRight
-              }
+                anchors.bottom: parent.bottom
+                anchors.leftMargin: Style.space(22)
+                anchors.rightMargin: Style.space(22)
+                anchors.bottomMargin: Style.space(12)
+                spacing: Style.space(22)
 
-              HoverHandler {
-                cursorShape: Qt.PointingHandCursor
-                onHoveredChanged: if (hovered) root.takeCursor(themeTile.index)
-              }
+                // Exact ink boxes: `TextMetrics.tightBoundingRect` gives the real
+                // glyph extents, so each block is trimmed to what is actually
+                // drawn. Every gap in the column is then exactly `spacing` — a
+                // flex `space-y`, independent of font bearings.
+                FontMetrics { id: titleMetrics; font: titleText.font }
+                FontMetrics { id: bodyMetrics; font: descriptionText.font }
+                TextMetrics { id: titleInk; font: titleText.font; text: titleText.text }
+                TextMetrics { id: descInk; font: descriptionText.font; text: descriptionText.text }
 
-              TapHandler {
-                onTapped: {
-                  root.takeCursor(themeTile.index)
-                  root.selectTheme(themeTile.index)
+                Row {
+                  id: paletteRow
+                  spacing: Style.space(6)
+                  // No palette in the dataset -> no swatches and no gap.
+                  visible: paletteRepeater.count > 0
+
+                  Repeater {
+                    id: paletteRepeater
+                    model: Model.paletteList(root.selectedTheme)
+
+                    delegate: Rectangle {
+                      width: Style.space(26)
+                      height: width
+                      radius: Math.max(2, Style.cornerRadius - Style.space(2))
+                      color: modelData
+                      // subtle outline so the theme's dark neutrals (background,
+                      // muted) stay visible on the wallpaper/scrim.
+                      border.width: Math.max(1, Style.normalBorderWidth)
+                      border.color: Util.alpha(root.foreground, 0.25)
+                    }
+                  }
+                }
+
+                Item {
+                  id: titleBlock
+                  width: parent.width
+                  height: titleInk.tightBoundingRect.height
+
+                  Text {
+                    id: titleText
+                    width: parent.width
+                    // pull the line box up so the ink top sits at the block top
+                    y: -(titleMetrics.ascent + titleInk.tightBoundingRect.y)
+                    textFormat: Text.PlainText
+                    text: Model.themeLabel(root.selectedTheme)
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.displayLarge
+                    font.bold: true
+                    elide: Text.ElideRight
+                    lineHeightMode: Text.FixedHeight
+                    lineHeight: titleMetrics.ascent + titleMetrics.descent
+                  }
+                }
+
+                Item {
+                  id: descriptionBlock
+
+                  width: parent.width
+                  // Internal line pitch stays comfortable (1.4×); the block is
+                  // trimmed to the real ink, so the outer half-leading is gone.
+                  readonly property real lineBox: Math.round(Style.font.body * 1.4)
+                  readonly property real leading: lineBox - (bodyMetrics.ascent + bodyMetrics.descent)
+                  readonly property real lineCount: descriptionText.lineCount
+                  height: Math.max(0, (lineCount - 1) * lineBox + descInk.tightBoundingRect.height)
+
+                  Text {
+                    id: descriptionText
+
+                    // pull the line box up so the first line's ink top sits at
+                    // the block top
+                    y: -(bodyMetrics.ascent + descriptionBlock.leading / 2
+                      + descInk.tightBoundingRect.y)
+                    width: parent.width
+                    textFormat: Text.PlainText
+                    text: {
+                      var theme = root.selectedTheme
+                      if (!theme) return ""
+                      var bits = []
+                      if (theme.description) bits.push(theme.description)
+                      bits.push(theme.collections
+                        + (theme.collections === 1 ? " collection" : " collections"))
+                      bits.push(theme.count
+                        + (theme.count === 1 ? " wallpaper" : " wallpapers"))
+                      bits.push(theme.installed + " installed locally")
+                      return bits.join(" · ")
+                    }
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    lineHeightMode: Text.FixedHeight
+                    lineHeight: descriptionBlock.lineBox
+                    wrapMode: Text.WordWrap
+                    maximumLineCount: 3
+                    elide: Text.ElideRight
+                  }
+                }
+
+                Item {
+                  width: parent.width
+                  height: detailActions.height
+
+                  Row {
+                    id: detailActions
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    spacing: Style.spacing.controlGap
+
+                    Button {
+                      text: "Browse " + (root.selectedTheme ? root.selectedTheme.count : "")
+                      iconText: "󰉋"
+                      height: root.actionButtonHeight
+                      bordered: false
+                      background: Util.alpha(root.foreground, 0.12)
+                      foreground: root.foreground
+                      accent: root.accent
+                      fontFamily: root.fontFamily
+                      onClicked: root.selectTheme(root.selectedIndex)
+                    }
+
+                    Button {
+                      text: "Install"
+                      iconText: "󰇚"
+                      height: root.actionButtonHeight
+                      bordered: true
+                      foreground: root.foreground
+                      accent: root.accent
+                      fontFamily: root.fontFamily
+                      onClicked: root.actionInstallTheme()
+                    }
+
+                    Button {
+                      text: "Random install (5)"
+                      iconText: "󰇚"
+                      height: root.actionButtonHeight
+                      bordered: true
+                      foreground: root.foreground
+                      accent: root.accent
+                      fontFamily: root.fontFamily
+                      onClicked: root.actionRandomInstall()
+                    }
+                  }
                 }
               }
             }
@@ -760,9 +1200,116 @@ Item {
           anchors.left: parent.left
           anchors.right: parent.right
           anchors.bottom: parent.bottom
-          spacing: root.contentSpacing
+          spacing: Style.space(14)
 
           PanelSeparator { foreground: root.foreground }
+
+          // Themes footer: installed/available summary on the left, progress of
+          // the selected theme in the middle, key hints on the right.
+          Item {
+            id: themesFooterRow
+
+            visible: root.view === "themes"
+            width: parent.width
+            height: Math.max(themesSummary.implicitHeight,
+              themeProgress.implicitHeight, themesHints.implicitHeight)
+
+            Row {
+              id: themesSummary
+
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(8)
+
+              Rectangle {
+                anchors.verticalCenter: parent.verticalCenter
+                width: Style.space(8)
+                height: width
+                radius: width / 2
+                color: root.statusInstalled
+              }
+
+              Text {
+                textFormat: Text.PlainText
+                text: root.themeCounts.installed + " installed · "
+                  + root.themeCounts.available + " available"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+
+            Column {
+              id: themeProgress
+
+              anchors.centerIn: parent
+              width: Math.min(Style.space(360), parent.width * 0.4)
+              spacing: Style.space(4)
+
+              readonly property real ratio: {
+                var theme = root.selectedTheme
+                if (!theme || !theme.count) return 0
+                return Math.max(0, Math.min(1, (theme.installed || 0) / theme.count))
+              }
+
+              Item {
+                width: parent.width
+                height: progressLabel.implicitHeight
+
+                Text {
+                  id: progressLabel
+
+                  anchors.left: parent.left
+                  textFormat: Text.PlainText
+                  text: {
+                    var theme = root.selectedTheme
+                    if (!theme) return ""
+                    return theme.name + " · " + (theme.installed || 0) + "/" + (theme.count || 0)
+                  }
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+
+                Text {
+                  id: progressPercent
+
+                  anchors.right: parent.right
+                  textFormat: Text.PlainText
+                  text: Math.round(themeProgress.ratio * 100) + "%"
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+              }
+
+              Rectangle {
+                width: parent.width
+                height: Style.space(4)
+                radius: height / 2
+                color: Util.alpha(root.foreground, 0.12)
+
+                Rectangle {
+                  width: parent.width * themeProgress.ratio
+                  height: parent.height
+                  radius: parent.radius
+                  color: root.accent
+                }
+              }
+            }
+
+            Text {
+              id: themesHints
+
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              textFormat: Text.StyledText
+              text: "<b>enter</b> browse   <b>i</b> install   <b>esc</b> close"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
 
           Item {
             id: actionRow
@@ -840,7 +1387,10 @@ Item {
 
           Text {
             id: statusLabel
-            visible: text !== ""
+            // On the themes view the summary/progress row already reports the
+            // state; the caption only adds value while loading or running an
+            // operation.
+            visible: text !== "" && (root.view !== "themes" || root.busy)
             width: parent.width
             textFormat: Text.PlainText
             text: root.statusText
@@ -908,11 +1458,14 @@ Item {
             Row {
               spacing: Style.spacing.controlGap
 
-              Pill {
+              Button {
                 visible: root.dev
-                anchors.verticalCenter: parent.verticalCenter
-                label: "developer"
-                tint: root.urgent
+                text: "DEVELOPER"
+                iconText: "\uf121"
+                bordered: true
+                foreground: root.accent
+                accent: root.accent
+                fontFamily: root.fontFamily
               }
 
               Pill {
@@ -984,8 +1537,8 @@ Item {
             id: previewHint
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.bottom: parent.bottom
-            textFormat: Text.PlainText
-            text: "h/l or arrows to walk · Enter to install · d or double click to set default · Esc to go back"
+            textFormat: Text.StyledText
+            text: "<b>h/l</b> or <b>arrows</b> to walk · <b>Enter</b> to install · <b>d</b> or <b>double click</b> to set default · <b>Esc</b> to go back"
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
