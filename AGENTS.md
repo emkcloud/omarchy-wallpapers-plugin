@@ -85,7 +85,7 @@ that renders them. This is the source order and where each concern lives:
 | state | `view`, `themeName`, `themeCatalogUrl`, `selectedIndex`, `cursorActive`, `busy`, `statusText`, `themesModel`, `wallpapersModel` | single source of truth |
 | tokens | `foreground`, `background`, `accent`, `urgent`, `scrim`, `dim`, `borderSpec`, `contentMargin`, `contentSpacing`, `minTileWidth`, `tileGap`, `tileInset`, `fontFamily`, `heroHeight` | `Color.menu.*` / `Style.*` aliases |
 | inline components | `RoundedImage`, `HeroLogo`, `Pill` | atoms shared by both grids and the preview |
-| lifecycle | `open()`, `close()`, `onOpenedChanged` | summon / hide |
+| startup / termination | `open()`, `close()`, `onOpenedChanged` | summon / hide |
 | cursor state machine | `activeGrid`, `activeCount`, `stepCursor`, `moveCursor`, `pageCursor`, `activateCursor`, `dismissCursor`, `handleTextKey`, `takeCursor` | one `selectedIndex` driven by mouse *and* keyboard |
 | actions | `currentItem`, `showPreview`, `closePreview`, `previewNext`, `actionInstall`, `actionRemove`, `actionSetDefault`, `actionInstallAll`, `actionRemoveAll`, `runAction` | user operations |
 | processes | `themesProc`, `catalogProc`, `actionProc` | run `manager.sh`, parse TSV |
@@ -100,9 +100,9 @@ The plugin is one overlay that shows **three screens**, switched by the single
 
 | `view` | screen | content |
 |---|---|---|
-| `"themes"` | 1 — theme list | all remote themes (`kind=="theme"`) |
-| `"wallpapers"` | 2 — wallpaper list | the wallpapers of the selected theme |
-| `"preview"` | 3 — single wallpaper | fullscreen preview + actions |
+| `"themes"` | theme list | all remote themes (`kind=="theme"`) |
+| `"wallpapers"` | wallpaper list | the wallpapers of the selected theme |
+| `"preview"` | single wallpaper | fullscreen preview + actions |
 
 Every screen is the same skeleton inside the container: **hero header** (icon,
 title, meta caption, optional pills/buttons) + `PanelSeparator` + **body** +
@@ -112,16 +112,14 @@ anchors. Cross-cutting rules — selection, keyboard, buttons, pills, status,
 rounding — live once in the **Design canon**; the steps point there instead of
 repeating them.
 
-### 0. Lifecycle — `open` / `close`
+### 1. Startup application — `open`
 
 **Functional.** Summoning the plugin shows the container with the themes screen
-already loading; Esc from the themes screen closes it; re-summoning reloads.
+already loading.
 
 **Technical.**
 - `open(payload)` resets the state (`view = "themes"`, `selectedIndex = 0`,
   `cursorActive = true`, `statusText = ""`) then calls `loadThemes()`.
-- `close()` only sets `opened = false`; `keepLoaded` keeps the window mounted
-  between summons.
 - When opened, keyboard focus is forced onto the `PanelKeyCatcher` (`keys`) via
   `Qt.callLater`, so the arrows work immediately.
 - Script and logo are resolved from the **plugin root** (not
@@ -130,9 +128,9 @@ already loading; Esc from the themes screen closes it; re-summoning reloads.
   `config/config.json` (`paths`).
 - Loading any screen follows one pattern: set `busy = true` + status text →
   start a `Process` → `StdioCollector` parses the TSV rows into a `ListModel`
-  and clears `busy` on finish/exit. See step 5.
+  and clears `busy` on finish/exit. See step 6.
 
-### 1. Container — the overlay chrome
+### 2. Container — the overlay chrome
 
 **Functional.** A dim scrim covers the whole screen; a single flat card sits
 centered; clicking outside the card closes the overlay.
@@ -157,7 +155,7 @@ centered; clicking outside the card closes the overlay.
   `root.heroHeight = Math.max(hero.implicitHeight, previewHero.implicitHeight)`,
   so switching view never shifts the separator and the content below it.
 
-### 2. Screen 1 — theme list (`view = "themes"`)
+### 3. Theme list (`view = "themes"`)
 
 **Functional.** Grid of theme cards: each card is a preview image, the
 uppercased theme name, and a "N collections · M wallpapers" line. Header shows
@@ -168,7 +166,7 @@ status caption. Enter/Space or click opens the theme; Esc closes the plugin.
 **Technical.**
 - Header: `PanelHero` (`hero`) — title "Wallpaper manager", `detail` = theme
   count, `meta` = "remote collections", icon = `HeroLogo` with glyph `󰸌`,
-  `trailingControl` = `heroActions` (the same Back/Refresh/Close row as step 3,
+  `trailingControl` = `heroActions` (the same Back/Refresh/Close row as step 4,
   where Back is `visible` only on the wallpapers view).
 - Body: `GridView` `themesGrid` over `themesModel`. Dynamic columns:
   `columnsHint = Math.max(2, Math.floor(width / root.minTileWidth))` with
@@ -179,7 +177,7 @@ status caption. Enter/Space or click opens the theme; Esc closes the plugin.
   cursor) + `RoundedImage` thumbnail (remote `preview` URL) + name and
   collections/count texts. Hover calls `root.takeCursor(index)`; tap selects the
   theme.
-- Data: `loadThemes()` runs `manager.sh themes` (TSV columns in step 5) into
+- Data: `loadThemes()` runs `manager.sh themes` (TSV columns in step 6) into
   `themesModel`.
 - Labels use `root.themeLabel(model)`: the dataset `title` uppercased
   (`"tokyo-night"` → `"TOKYO NIGHT"`); slug normalized (`-`/`_` → space) if a
@@ -189,7 +187,7 @@ status caption. Enter/Space or click opens the theme; Esc closes the plugin.
   `themeName` changes makes them re-resolve paths against the new theme), sets
   `themeName` / `themeCatalogUrl` and switches to `"wallpapers"`.
 
-### 3. Screen 2 — wallpaper list (`view = "wallpapers"`)
+### 4. Wallpaper list (`view = "wallpapers"`)
 
 **Functional.** Grid of the selected theme's wallpapers: each tile is a
 thumbnail, the accent-colored code + name, and installed/default pills. Header
@@ -215,13 +213,13 @@ removes; d sets default; r refreshes; Esc returns to themes (Esc again closes).
   visible on this view: primary Install/Remove/Default on the left, bulk Install
   all/Remove all on the right), then the dim status caption. No footer bar.
 - Data: `loadWallpapers()` sets `catalogProc.command` **before**
-  `catalogProc.running = true` (bug #2), then parses the TSV columns in step 5
+  `catalogProc.running = true` (bug #2), then parses the TSV columns in step 6
   into `wallpapersModel`.
 - Keyboard: movement is vertical via the computed `colCount` (GridView has no
   `columns` property in Qt 6), and `positionViewAtIndex` is called after every
   move to keep the selection visible.
 
-### 4. Screen 3 — single wallpaper preview (`view = "preview"`)
+### 5. Single wallpaper preview (`view = "preview"`)
 
 **Functional.** The wallpaper full-res, aspect-fitted and rounded, with a header
 (`<code> - <name> (WxH)`, filename or loading/failed feedback in the meta line,
@@ -249,7 +247,7 @@ default, Esc returns to the grid.
   tap on the image is inert, being the first half of the double tap).
   `previewNext(delta)` walks the selection; Esc = `closePreview()`.
 
-### 5. Data flow & actions
+### 6. Data flow & actions
 
 - **Language**: UI is QML (Qt 6 Quick + Quickshell); remote data and actions are
   bash (`manager.sh`, curl + jq + sha256); the default background is set with
@@ -282,6 +280,19 @@ default, Esc returns to the grid.
   `clip: true` is not enough), `HeroLogo` (assets/images/logo.png with a
   nerd-font glyph fallback), `Pill` (state pills, transparent fill + flat
   tinted border).
+
+### 7. Termination application — `close`
+
+**Functional.** Esc from the themes screen (or a click on the scrim) hides the
+overlay; nothing is torn down, so re-summoning is instant and reloads the themes
+list.
+
+**Technical.**
+- `close()` only sets `opened = false`; there is no teardown because
+  `keepLoaded: true` keeps the window mounted between summons.
+- The scrim `MouseArea` and the Close button both call `root.close()`; Esc goes
+  through the cursor state machine (`dismissCursor()` → `close()` on the themes
+  view, a step back on the others).
 
 ## Design canon (decision 2026-09-03)
 
