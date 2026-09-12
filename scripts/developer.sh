@@ -75,6 +75,9 @@ cmd_link() {
     sleep 0.05
   done
 
+  # Disable first so enabling re-inserts the bar entry: a plugin already enabled
+  # as a plain overlay keeps its old location and would never show in the bar.
+  omarchy plugin disable "$DEV_ID" >/dev/null 2>&1 || true
   omarchy plugin enable "$DEV_ID"
   omarchy-shell shell summon "$DEV_ID" '{}' >/dev/null || true
 

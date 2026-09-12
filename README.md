@@ -26,18 +26,21 @@ Da questo repository (radice = plugin):
 omarchy plugin add https://github.com/emkcloud/omarchy-wallpapers-plugin.git --enable --yes
 ```
 
-Oppure in locale per lo sviluppo:
+Al termine compare un'**icona nella barra**: è il launcher del plugin, un click
+apre/chiude l'overlay. Se il plugin era già installato come solo overlay, fai
+`omarchy plugin disable …` + `enable` (o da Settings → Plugins) perché l'icona
+venga inserita.
+
+Per lo sviluppo locale (id separato `…-developer`, symlink a questo checkout):
 
 ```bash
-ln -s /home/massimo/Repositories/omarchy-wallpapers-plugin \
-      ~/.config/omarchy/plugins/emkcloud.wallpaper-manager
-omarchy-shell shell rescanPlugins
-omarchy-shell shell enablePlugin emkcloud.wallpaper-manager '{}'
+bash scripts/developer.sh link     # crea/abilita/apre il plugin dev
+bash scripts/developer.sh unlink   # lo rimuove
 ```
 
 ## Utilizzo
 
-Apri il plugin con:
+Clicca l'icona nella barra, oppure:
 
 ```bash
 omarchy-shell shell summon emkcloud.wallpaper-manager '{}'

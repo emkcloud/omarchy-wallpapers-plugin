@@ -6,10 +6,19 @@
   "author": "emkcloud",
   "description": "Sfoglia i wallpaper del repo emkcloud/omarchy-wallpapers: installa, rimuovi o imposta il default nel tema Omarchy locale",
   "kinds": [
-    "overlay"
+    "overlay",
+    "bar-widget"
   ],
   "keepLoaded": true,
   "entryPoints": {
-    "overlay": "interface/WallpaperManager.qml"
+    "overlay": "interface/WallpaperManager.qml",
+    "barWidget": "interface/BarLauncher.qml"
+  },
+  "barWidget": {
+    "displayName": "Wallpaper manager",
+    "description": "Sfoglia e gestisci i wallpaper",
+    "category": "Appearance",
+    "allowMultiple": false,
+    "defaultSection": "right"
   }
 }

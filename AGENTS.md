@@ -11,14 +11,19 @@ set-default), theme by theme.
 
 ## Repository layout
 
-- `manifest.json` — plugin manifest (id `emkcloud.wallpaper-manager`, kind
-  `overlay`, entry point `interface/WallpaperManager.qml`). Validated by
+- `manifest.json` — plugin manifest (id `emkcloud.wallpaper-manager`, kinds
+  `overlay` + `bar-widget`). Entry points: `interface/WallpaperManager.qml`
+  (overlay) and `interface/BarLauncher.qml` (bar launcher). Validated by
   `omarchy plugin validate`.
 - `interface/` — the QML UI. Kept in a subdirectory so root holds only plugin
-  metadata and config; the entry point is exactly one level deep.
+  metadata and config; the entry points are exactly one level deep.
 - `interface/WallpaperManager.qml` — the UI view + thin controller: state,
   `Process`/`FileView` and the three screens. Imports `"components"` and
   `"js/Model.js" as Model`.
+- `interface/BarLauncher.qml` — bar launcher: one click toggles this plugin's own
+  overlay via the scoped shell facade (`bar.shell.toggle(pluginId, …)`). The
+  developer install shares the file but gets a distinct glyph from its
+  `-developer` moduleName.
 - `interface/js/` — JavaScript logic modules, kept out of the QML files.
 - `interface/js/Model.js` — pure logic, no QML ids/state: TSV parsing,
   `themeLabel`, cursor arithmetic, key mapping, status text, `parsePaths`.
@@ -74,6 +79,12 @@ set-default), theme by theme.
 
 - Plugin id must NOT use the reserved `omarchy.*` namespace.
 - `kinds` supported: `bar-widget`, `panel`, `overlay`, `menu`, `service`, `bar`.
+- This plugin pairs two kinds: `overlay` (the three-screen UI) and
+  `bar-widget` (the launcher). Enabling a `bar-widget` inserts it into
+  `bar.layout[barWidget.defaultSection]`, which is also what marks the plugin
+  enabled — so the bar icon is the standard way users open it, no CLI needed.
+  A plugin already enabled as a plain overlay must be disabled + re-enabled to
+  pick up the bar entry.
 - Overlay lifecycle: implement `open(payload)` / `close()`; summon with
   `omarchy-shell shell summon <id> '{}'` and hide with `shell hide <id>`.
 - `keepLoaded: true` keeps the window mounted between summons.
@@ -119,8 +130,12 @@ The steps below walk the same file in **runtime order**, not source order.
 
 ## Application layout
 
-The plugin is one overlay that shows **three screens**, switched by the single
-`view` property on `root`:
+The plugin ships two entry points: the overlay described below, and
+`interface/BarLauncher.qml` (a `WidgetButton` that toggles that overlay from the
+bar). Both share the same code; the bar icon is just a launcher.
+
+The overlay shows **three screens**, switched by the single `view` property on
+`root`:
 
 | `view` | screen | content |
 |---|---|---|
@@ -435,8 +450,10 @@ bash scripts/developer.sh unlink   # remove it
 `link` generates the dev `manifest.json` from the official one (only `.id` and
 `.name` change) and symlinks `interface`, `scripts`, `config`, `assets`,
 `datasets`. It also clears `datasets/` (keeping `.gitkeep`) so every dev session
-re-downloads the dataset and exercises the full path. `unlink` refuses to delete
-anything without the `.dev-wrapper` marker.
+re-downloads the dataset and exercises the full path. Because the plugin is a
+`bar-widget`, `link` does a `disable` + `enable` so the bar icon is (re)placed;
+the same is needed once for an already-enabled official install. `unlink`
+refuses to delete anything without the `.dev-wrapper` marker.
 
 > ⚠️ **Symlink vs hot-reload.** The shell watches `~/.config/omarchy/plugins/`
 > with inotify, which does **not** follow symlinks. The dev wrapper is symlinks,
