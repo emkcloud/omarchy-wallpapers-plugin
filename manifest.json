@@ -10,6 +10,6 @@
   ],
   "keepLoaded": true,
   "entryPoints": {
-    "overlay": "WallpaperManager.qml"
+    "overlay": "ui/WallpaperManager.qml"
   }
 }

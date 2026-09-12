@@ -12,23 +12,57 @@ Item {
   // Injected by omarchy-shell.
   property var manifest: null
   // The shell strips `__sourceDir` from third-party manifests before injecting
-  // them, so the script and the logo are resolved relative to this file's own
-  // directory instead (same pattern as the shell's plugins, e.g. agents).
-  readonly property string pluginDir: {
+  // them, so the plugin root is resolved relative to this file's own location
+  // instead (same pattern as the shell's plugins, e.g. agents). The QML lives
+  // one level deep (`ui/`), so the root is its parent directory.
+  readonly property string pluginRoot: {
     if (manifest && manifest.__sourceDir) return manifest.__sourceDir.replace(/\/$/, "")
-    var url = Qt.resolvedUrl(".").toString()
+    var url = Qt.resolvedUrl("..").toString()
     return url.replace(/^file:\/\//, "").replace(/\/$/, "")
   }
 
+  // ---- layout paths ---------------------------------------------------------
+  // Resolved from `config.json` at the plugin root, so where the script and the
+  // logo live is data, not code (`paths.scripts` / `paths.assets` /
+  // `paths.logo`). Silent fallback to the shipped layout if the file is missing
+  // or invalid; the defaults match the repo layout so the logo never flickers.
+  property var pluginPaths: ({
+    scripts: "scripts",
+    assets: "assets",
+    logo: "assets/images/logo.png"
+  })
+
+  FileView {
+    id: configFile
+    path: root.pluginRoot ? root.pluginRoot + "/config.json" : ""
+    watchChanges: false
+    printErrors: false
+    onLoaded: {
+      try {
+        var cfg = JSON.parse(text() || "{}")
+        if (cfg && cfg.paths) {
+          root.pluginPaths = {
+            scripts: cfg.paths.scripts || root.pluginPaths.scripts,
+            assets: cfg.paths.assets || root.pluginPaths.assets,
+            logo: cfg.paths.logo || root.pluginPaths.logo
+          }
+        }
+      } catch (e) {
+        // keep the defaults
+      }
+    }
+  }
+
   readonly property string scriptPath: {
-    var p = pluginDir
-    return p ? p.replace(/\/$/, "") + "/manager.sh" : "manager.sh"
+    var p = pluginRoot
+    var s = pluginPaths.scripts
+    return p ? p.replace(/\/$/, "") + "/" + s + "/manager.sh" : s + "/manager.sh"
   }
 
   // emkcloud logo shipped with the plugin, used as the hero icon in every view.
   readonly property string logoPath: {
-    var p = pluginDir
-    return p ? Util.fileUrl(p.replace(/\/$/, "") + "/logo.png") : ""
+    var p = pluginRoot
+    return p ? Util.fileUrl(p.replace(/\/$/, "") + "/" + pluginPaths.logo) : ""
   }
 
   // ---- view state -----------------------------------------------------------

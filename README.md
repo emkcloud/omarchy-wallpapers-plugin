@@ -62,6 +62,9 @@ omarchy-shell shell summon emkcloud.wallpaper-manager '{}'
 - Il ref del repo upstream è pinnato in `config.json` (`release`): `manager.sh`
   riscrive su quel ref ogni URL embedded nei JSON, così i clienti restano su una
   snapshot testata finché non si aggiorna il plugin (`omarchy plugin update`).
+- Il layout è in `config.json` (`paths`: `scripts`, `assets`, `logo`): script e
+  logo vengono risolti da lì, quindi gli asset possono spostarsi senza toccare
+  il QML.
 - I colori seguono il tema Omarchy attivo (`qs.Commons.Color` / `Style`).
 
 ## Licenza

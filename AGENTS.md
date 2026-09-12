@@ -12,28 +12,44 @@ set-default), theme by theme.
 ## Repository layout
 
 - `manifest.json` — plugin manifest (id `emkcloud.wallpaper-manager`, kind
-  `overlay`, entry point `WallpaperManager.qml`). Validated by
+  `overlay`, entry point `ui/WallpaperManager.qml`). Validated by
   `omarchy plugin validate`.
-- `WallpaperManager.qml` — the entire UI. Quickshell/QML, **one file**, all
+- `ui/` — the QML UI. Kept in a subdirectory so root holds only plugin metadata
+  and config; the entry point is exactly one level deep.
+- `ui/WallpaperManager.qml` — the entire UI. Quickshell/QML, **one file**, all
   views plus the inline components `RoundedImage`, `HeroLogo`, `Pill`.
-- `manager.sh` — bash helper: fetches JSON from the wallpapers repo, computes
-  local install state, and runs install/remove/set-default natively (curl + jq +
-  sha256). Talks to the QML via TSV on stdout.
-- `config.json` — pins the upstream release: `{"repo": "...", "release": "..."}`.
-  `manager.sh` reads the `release` (a tag) and builds every upstream URL from it,
-  then rebases the absolute URLs embedded in the generated JSON onto that ref, so
-  clients stay frozen on a tested snapshot while `main` keeps moving. Missing or
-  invalid file falls back to `main`. Bump this file and push to roll a new
-  release: clients pick it up with `omarchy plugin update`.
-- `logo.png` — emkcloud brand mark (the org GitHub avatar), used as the hero
-  icon. The only image in this repo. The original near-black backdrop
-  (`#010409`, rounded square) has been made **transparent** so the mark sits on
+- `config.json` — plugin config, read by both `manager.sh` and the QML.
+  - `repo` / `release` — pin the upstream snapshot. `manager.sh` reads the
+    `release` (a tag), builds every upstream URL from it, then rebases the
+    absolute URLs embedded in the generated JSON onto that ref, so clients stay
+    frozen on a tested snapshot while `main` keeps moving. Missing or invalid
+    falls back to `main`. Bump `release` and push to roll a new release: clients
+    pick it up with `omarchy plugin update`.
+  - `paths` — `scripts`, `assets`, `logo`, all relative to the plugin root, so
+    the layout is data-driven and assets can live anywhere. The QML resolves
+    `scriptPath` / `logoPath` from these (silent fallback to the shipped layout
+    if the file is missing/invalid); `manager.sh` ignores `paths`, it finds the
+    config via `SCRIPT_DIR/../config.json`.
+- `scripts/` — helper scripts, kept out of the repo root.
+- `scripts/manager.sh` — bash helper: fetches JSON from the wallpapers repo,
+  computes local install state, and runs install/remove/set-default natively
+  (curl + jq + sha256). Talks to the QML via TSV on stdout. Reads `config.json`
+  from the repo root (`SCRIPT_DIR/../config.json`).
+- `assets/` — local plugin assets. Scalable by kind; today only
+  `assets/images/logo.png` exists, but future icons/fonts belong here too. This
+  is **not** the upstream wallpaper repo.
+- `assets/images/logo.png` — emkcloud brand mark (the org GitHub avatar), used
+  as the hero icon. The original near-black backdrop (`#010409`, rounded
+  square) has been made **transparent** so the mark sits on
   `Color.menu.background`: alpha is derived from the max RGB channel
   (`-separate -evaluate-sequence Max -level 4%,85%`), which keeps the three
   brand colors bit-exact (`#155DFC`, `#E12AFB`, `#05DF72`) and preserves the
   anti-aliased edges. Do NOT re-flatten it on black.
 - `datasets/`, `images/`, `masters/` — never here. The wallpapers live in the
   separate repo `emkcloud/omarchy-wallpapers`.
+- `README.md` — user-facing docs (install, usage, requirements).
+- `LICENSE` — project license.
+- `AGENTS.md` — this file.
 
 ## Plugin contract (Omarchy)
 
@@ -46,29 +62,35 @@ set-default), theme by theme.
   `pluginRegistry`. Declare `property var manifest: null` to receive them.
   **Do NOT use `manifest.__sourceDir`**: the shell strips it from the manifest
   given to third-party plugins (`publicPluginManifest` in `shell.qml`). Locate
-  `manager.sh` / `logo.png` relative to the QML file itself instead:
-  `Qt.resolvedUrl(".")` → strip `file://` and the trailing `/` (pattern used
-  by the shell's own plugins, e.g. `agents/Panel.qml`).
+  everything relative to the QML file instead, then walk up to the plugin root:
+  the QML sits one level deep (`ui/`), so `Qt.resolvedUrl("..")` → strip
+  `file://` and the trailing `/` gives the root (same pattern used by the
+  shell's own plugins, e.g. `agents/Panel.qml`), then join the relative paths
+  from `config.json`.
 - Reference sources (read-only): `/usr/share/omarchy/shell/README.md`,
   `/usr/share/omarchy/shell/plugins/image-picker/`,
   `/usr/share/omarchy/shell/plugins/dev-gallery/`,
   `/usr/share/omarchy/shell/services/PluginRegistry.qml`.
 
-## Operational rules
+## Code map — `ui/WallpaperManager.qml`
 
-- Themed colors come from `qs.Commons.Color` / `qs.Commons.Style` — never hardcode.
-- Remote data flows through `manager.sh` (curl + jq); QML parses TSV output.
-- Upstream ref comes from `config.json` (`release`); `manager.sh` builds
-  `https://raw.githubusercontent.com/<repo>/<release>` and rebases every embedded
-  URL onto it (`rebase_url`). Never hardcode `main` in `manager.sh`.
-- Actions (install/remove/set-default) are implemented natively in `manager.sh`
-  (sha256 checks, parallel download via background jobs, bg cache refresh) plus
-  `omarchy-theme-bg-set` for the default background. There is no `wallpapers.py`
-  dependency or cache anymore.
-- Install target (local Omarchy): `~/.config/omarchy/backgrounds/<theme>/`.
-- Preview thumbnails load directly from the remote `url` in the catalog (the
-  `GridView` only instantiates visible delegates, so loading is lazy). No local
-  preview cache.
+The whole plugin is one QML file. It is written **logic-first, UI-last**: state,
+shared components and the script-driven processes come before the `PanelWindow`
+that renders them. This is the source order and where each concern lives:
+
+| Source order | ids / functions | Role |
+|---|---|---|
+| paths | `pluginRoot`, `configFile`, `pluginPaths`, `scriptPath`, `logoPath` | resolve the layout from `config.json` `paths`, from the plugin root |
+| state | `view`, `themeName`, `themeCatalogUrl`, `selectedIndex`, `cursorActive`, `busy`, `statusText`, `themesModel`, `wallpapersModel` | single source of truth |
+| tokens | `foreground`, `background`, `accent`, `urgent`, `scrim`, `dim`, `borderSpec`, `contentMargin`, `contentSpacing`, `minTileWidth`, `tileGap`, `tileInset`, `fontFamily`, `heroHeight` | `Color.menu.*` / `Style.*` aliases |
+| inline components | `RoundedImage`, `HeroLogo`, `Pill` | atoms shared by both grids and the preview |
+| lifecycle | `open()`, `close()`, `onOpenedChanged` | summon / hide |
+| cursor state machine | `activeGrid`, `activeCount`, `stepCursor`, `moveCursor`, `pageCursor`, `activateCursor`, `dismissCursor`, `handleTextKey`, `takeCursor` | one `selectedIndex` driven by mouse *and* keyboard |
+| actions | `currentItem`, `showPreview`, `closePreview`, `previewNext`, `actionInstall`, `actionRemove`, `actionSetDefault`, `actionInstallAll`, `actionRemoveAll`, `runAction` | user operations |
+| processes | `themesProc`, `catalogProc`, `actionProc` | run `manager.sh`, parse TSV |
+| overlay UI | `panel`, `card`, `keys`, `hero`, `heroRule`, `themesGrid`, `grid`, `footer`, `previewView` | the chrome and the three screens |
+
+The steps below walk the same file in **runtime order**, not source order.
 
 ## Application layout
 
@@ -83,11 +105,13 @@ The plugin is one overlay that shows **three screens**, switched by the single
 
 Every screen is the same skeleton inside the container: **hero header** (icon,
 title, meta caption, optional pills/buttons) + `PanelSeparator` + **body** +
-dim status caption at the bottom. Each section below covers the functional
-anatomy first (what the user sees and does), then the technical implementation
-(how it is built).
+dim status caption at the bottom. Each step covers the functional anatomy first
+(what the user sees and does), then the technical implementation and its code
+anchors. Cross-cutting rules — selection, keyboard, buttons, pills, status,
+rounding — live once in the **Design canon**; the steps point there instead of
+repeating them.
 
-### 0. STARTUP — lifecycle
+### 0. Lifecycle — `open` / `close`
 
 **Functional.** Summoning the plugin shows the container with the themes screen
 already loading; Esc from the themes screen closes it; re-summoning reloads.
@@ -97,31 +121,32 @@ already loading; Esc from the themes screen closes it; re-summoning reloads.
   `cursorActive = true`, `statusText = ""`) then calls `loadThemes()`.
 - `close()` only sets `opened = false`; `keepLoaded` keeps the window mounted
   between summons.
-- When opened, keyboard focus is forced onto the `PanelKeyCatcher` (`keys`)
-  via `Qt.callLater`, so the arrows work immediately.
-- Script and logo are resolved **relative to the QML file**, not
-  `manifest.__sourceDir` (the shell strips it): `Qt.resolvedUrl(".")` → strip
-  `file://` and the trailing `/`.
-- Loading any screen is always the same pattern: set `busy = true` + status
-  text → start a `Process` → `StdioCollector` parses the TSV lines into a
-  `ListModel` and clears `busy` on finish/exit.
+- When opened, keyboard focus is forced onto the `PanelKeyCatcher` (`keys`) via
+  `Qt.callLater`, so the arrows work immediately.
+- Script and logo are resolved from the **plugin root** (not
+  `manifest.__sourceDir`, which the shell strips): `Qt.resolvedUrl("..")` →
+  strip `file://` and the trailing `/`, then join the relative paths from
+  `config.json` (`paths`).
+- Loading any screen follows one pattern: set `busy = true` + status text →
+  start a `Process` → `StdioCollector` parses the TSV rows into a `ListModel`
+  and clears `busy` on finish/exit. See step 5.
 
-### 1. CONTAINER — the overlay chrome
+### 1. Container — the overlay chrome
 
 **Functional.** A dim scrim covers the whole screen; a single flat card sits
 centered; clicking outside the card closes the overlay.
 
 **Technical.**
-- `PanelWindow` fullscreen, `WlrLayer.Overlay`, transparent, keyboard exclusive
-  while open.
+- `PanelWindow` (`panel`) fullscreen, `WlrLayer.Overlay`, transparent, keyboard
+  exclusive while open.
 - Scrim: fullscreen `Rectangle` filled with `Color.menu.scrim`, plus a
   `MouseArea` whose click calls `root.close()`.
-- Card: one `BorderSurface` (id `card`) centered; size
+- Card: one `BorderSurface` (`card`) centered; size
   `Math.min(Style.space(N), parent - Style.gapsOut * 2)`; `Color.menu.background`,
   `radius: Style.cornerRadius`, `borderSpec: Border.surfaceSpec("menu", "border",
   …)` (never `border.color`), `padding: Style.spacing.panelPadding`. No inner
   fills: separation is `Style.spacing.md` of empty space + `PanelSeparator`.
-- Inside the card, `PanelKeyCatcher` (id `keys`) wraps the content and maps raw
+- Inside the card, `PanelKeyCatcher` (`keys`) wraps the content and maps raw
   keys to semantic signals handled by `root`'s state machine (`moveCursor`,
   `activateCursor`, `dismissCursor`, `deleteRequested`, `textKey`).
 - Fallback `Keys.onPressed` on the card (the catcher does not accept these, so
@@ -131,17 +156,19 @@ centered; clicking outside the card closes the overlay.
   `root.heroHeight = Math.max(hero.implicitHeight, previewHero.implicitHeight)`,
   so switching view never shifts the separator and the content below it.
 
-### 2. SCREEN 1 — theme list (`view = "themes"`)
+### 2. Screen 1 — theme list (`view = "themes"`)
 
 **Functional.** Grid of theme cards: each card is a preview image, the
-uppercased theme name, and a "N collections · M wallpapers" line. Header shows the
-title, the total theme count and the "remote collections" meta; the footer is
-just the dim status caption. Enter/Space or click opens the theme; Esc closes
-the plugin.
+uppercased theme name, and a "N collections · M wallpapers" line. Header shows
+the title, the total theme count, the "remote collections" meta and
+Refresh/Close buttons (Back is hidden on this view). The footer is just the dim
+status caption. Enter/Space or click opens the theme; Esc closes the plugin.
 
 **Technical.**
-- Header: `PanelHero` (id `hero`) — title "Wallpaper manager", `detail` = theme
-  count, `meta` = "remote collections", icon = `HeroLogo` with glyph `󰸌`.
+- Header: `PanelHero` (`hero`) — title "Wallpaper manager", `detail` = theme
+  count, `meta` = "remote collections", icon = `HeroLogo` with glyph `󰸌`,
+  `trailingControl` = `heroActions` (the same Back/Refresh/Close row as step 3,
+  where Back is `visible` only on the wallpapers view).
 - Body: `GridView` `themesGrid` over `themesModel`. Dynamic columns:
   `columnsHint = Math.max(2, Math.floor(width / root.minTileWidth))` with
   `minTileWidth ~ Style.space(190)`; `cellWidth = floor(width / columnsHint)`,
@@ -151,8 +178,8 @@ the plugin.
   cursor) + `RoundedImage` thumbnail (remote `preview` URL) + name and
   collections/count texts. Hover calls `root.takeCursor(index)`; tap selects the
   theme.
-- Data: `loadThemes()` runs `manager.sh themes` → TSV
-  `name|title|catalogUrl|collections|count|preview` parsed into `themesModel`.
+- Data: `loadThemes()` runs `manager.sh themes` (TSV columns in step 5) into
+  `themesModel`.
 - Labels use `root.themeLabel(model)`: the dataset `title` uppercased
   (`"tokyo-night"` → `"TOKYO NIGHT"`); slug normalized (`-`/`_` → space) if a
   dataset has no `title`.
@@ -161,40 +188,39 @@ the plugin.
   `themeName` changes makes them re-resolve paths against the new theme), sets
   `themeName` / `themeCatalogUrl` and switches to `"wallpapers"`.
 
-### 3. SCREEN 2 — wallpaper list (`view = "wallpapers"`)
+### 3. Screen 2 — wallpaper list (`view = "wallpapers"`)
 
 **Functional.** Grid of the selected theme's wallpapers: each tile is a
 thumbnail, the accent-colored code + name, and installed/default pills. Header
-has Back / Refresh / Close buttons and shows the theme name + count. Footer
-has Install / Remove / Default on the left and Install all / Remove all on the
+has Back / Refresh / Close buttons and shows the theme name + count. Footer has
+Install / Remove / Default on the left and Install all / Remove all on the
 right, plus the status caption. Enter or click opens the preview; x/X or Del
 removes; d sets default; r refreshes; Esc returns to themes (Esc again closes).
 
 **Technical.**
-- Header: `PanelHero` (id `hero`) — title `root.themeName`, `detail` = wallpaper
+- Header: `PanelHero` (`hero`) — title `root.themeName`, `detail` = wallpaper
   count, `meta` = "browse and manage", `trailingControl` = `heroActions`
   (`Ui/Button`s Back/Refresh/Close, `bordered: true`).
-- Body: `GridView` (id `grid`) over `wallpapersModel`, same dynamic-columns
-  recipe as the themes grid. `current: tile.model.isDefault === "1"` marks the
-  theme's default background.
+- Body: `GridView` (`grid`) over `wallpapersModel`, same dynamic-columns recipe
+  as the themes grid. `current: tile.model.isDefault === "1"` marks the theme's
+  default background.
 - Thumbnail source priority: local installed file (instant) → remote `preview`
   → full `url`. GridView only instantiates visible delegates, so loading is
   lazy, page by page. This works for thousands of images.
 - Tile taps open the preview (same as Enter) — never toggle state, so "set
   default" by mouse lives in the preview. Do NOT put single-tap-selects back on
   the tile.
-- Footer: `Column` (id `footer`) — `PanelSeparator`, then the `actionRow`
-  (only visible on this view: primary Install/Remove/Default on the left, bulk
-  Install all/Remove all on the right), then the dim status caption. No footer
-  bar.
+- Footer: `Column` (`footer`) — `PanelSeparator`, then the `actionRow` (only
+  visible on this view: primary Install/Remove/Default on the left, bulk Install
+  all/Remove all on the right), then the dim status caption. No footer bar.
 - Data: `loadWallpapers()` sets `catalogProc.command` **before**
-  `catalogProc.running = true` (bug #2), then parses TSV
-  `filename|name|code|url|sha256|installed|is_default|preview`.
+  `catalogProc.running = true` (bug #2), then parses the TSV columns in step 5
+  into `wallpapersModel`.
 - Keyboard: movement is vertical via the computed `colCount` (GridView has no
   `columns` property in Qt 6), and `positionViewAtIndex` is called after every
   move to keep the selection visible.
 
-### 4. SCREEN 3 — single wallpaper preview (`view = "preview"`)
+### 4. Screen 3 — single wallpaper preview (`view = "preview"`)
 
 **Functional.** The wallpaper full-res, aspect-fitted and rounded, with a header
 (`<code> - <name> (WxH)`, filename or loading/failed feedback in the meta line,
@@ -203,8 +229,8 @@ h/l/j/k or arrows walk wallpapers, Enter installs, d or double click sets
 default, Esc returns to the grid.
 
 **Technical.**
-- `previewView` overlays the card (`z: 10`). Header: `PanelHero` (id
-  `previewHero`) pinned to `root.heroHeight`. The resolution suffix is appended
+- `previewView` overlays the card (`z: 10`). Header: `PanelHero`
+  (`previewHero`) pinned to `root.heroHeight`. The resolution suffix is appended
   only when `previewView.shown` (the visible image is the selected item's), so a
   name is never paired with the previous resolution. The code is inline in the
   title — no `detail` pill.
@@ -222,15 +248,27 @@ default, Esc returns to the grid.
   tap on the image is inert, being the first half of the double tap).
   `previewNext(delta)` walks the selection; Esc = `closePreview()`.
 
-### 5. Technology / data flow
+### 5. Data flow & actions
 
 - **Language**: UI is QML (Qt 6 Quick + Quickshell); remote data and actions are
   bash (`manager.sh`, curl + jq + sha256); the default background is set with
   `omarchy-theme-bg-set`.
 - **Imports**: `Quickshell`, `Quickshell.Io`, `Quickshell.Wayland`, `QtQuick`,
   `QtQuick.Effects`, `qs.Commons`, `qs.Ui`.
-- **Shell ⇄ QML protocol**: TSV lines on stdout, one record per line with a
-  fixed column list; QML splits on `\t` and appends each row to a `ListModel`
+- **`manager.sh` command surface**:
+
+  | command | args | stdout (TSV) |
+  |---|---|---|
+  | `themes` | — | `name  title  catalogUrl  collections  count  preview` |
+  | `catalog` | `<theme> <catalog-url>` | `filename  name  code  url  sha256  installed  isDefault  preview` |
+  | `install` | `<theme> [selector]` | human text; no selector = all, selector matches id/name/code/filename |
+  | `remove` | `<theme> [selector]` | human text; same selector matching |
+  | `set-default` | `<theme> <filename> <url>` | human text; downloads if missing then `omarchy-theme-bg-set` |
+
+  (`installed` / `isDefault` are `"0"`/`"1"`; `manager.sh` prints the default
+  column as `current`, the QML model names it `isDefault`.)
+- **Shell ⇄ QML protocol**: TSV lines on stdout, one record per line with the
+  fixed columns above; QML splits on `\t` and appends each row to a `ListModel`
   (`themesModel`, `wallpapersModel`).
 - **State** lives on `root`: `view`, `selectedIndex`, `cursorActive`, `busy`,
   `statusText`. Mouse and keyboard share one cursor through `CursorSurface`
@@ -240,12 +278,9 @@ default, Esc returns to the grid.
   `actionInstallAll` / `actionRemoveAll` all funnel into `runAction(args)` →
   `actionProc`; on exit the list refreshes automatically.
 - **Inline components**: `RoundedImage` (MultiEffect mask + `Style.cornerRadius`,
-  `clip: true` is not enough), `HeroLogo` (logo.png with a nerd-font glyph
-  fallback), `Pill` (state pills, transparent fill + flat tinted border).
-- **Lint**: `qmllint -I <dir containing a `qs` symlink to
-  /usr/share/omarchy/shell>`. The residual `unqualified` /
-  `missing-property` warnings on `Style.spacing.*`, `Style.font.*`,
-  `Color.menu.*` are unavoidable (the shell's own code produces them).
+  `clip: true` is not enough), `HeroLogo` (assets/images/logo.png with a
+  nerd-font glyph fallback), `Pill` (state pills, transparent fill + flat
+  tinted border).
 
 ## Design canon (decision 2026-09-03)
 
@@ -277,11 +312,11 @@ Rules that follow from that:
   Hyprland's `gaps_out`).
 - **Header** = `Ui/PanelHero`: icon + bold title (`Style.font.title`) +
   UPPERCASE meta caption + optional `detail` pill + `trailingControl` for the
-  buttons. The icon is the **emkcloud logo** (`logo.png` at the repo root, the
+  buttons. The icon is the **emkcloud logo** (`assets/images/logo.png`, the
   org avatar) via the local `HeroLogo` inline component: a `RoundedImage`
   `Style.font.displayLarge` wide, same in every view, with the old nerd-font
   glyphs (`󰸌` themes, `` wallpapers) as fallback if the file cannot be
-  resolved. `logo.png` is the only image allowed in this repo.
+  resolved. It is the only image allowed in this repo.
 - **Header height** is pinned: `root.heroHeight =
   Math.max(hero.implicitHeight, previewHero.implicitHeight)` is applied as
   `height` to both heroes, so switching view — or a title growing a resolution
@@ -353,6 +388,11 @@ omarchy-shell shell summon emkcloud.wallpaper-manager '{}'
 > `omarchy restart shell`, then re-summon. (For true hot-reload, copy the files
 > into `~/.config/omarchy/plugins/<id>/` instead of symlinking.)
 
+Lint: `qmllint -I <dir containing a `qs` symlink to /usr/share/omarchy/shell>`.
+The residual `unqualified` / `missing-property` warnings on `Style.spacing.*`,
+`Style.font.*`, `Color.menu.*` are unavoidable (the shell's own code produces
+them).
+
 ## Distribution
 
 The repo root is the plugin: `omarchy plugin add
@@ -366,7 +406,7 @@ checkout, validated and rescanned by the shell).
 ## Notes for the agent
 
 - The user speaks Italian: respond and comment in Italian.
-- **UI language**: all user-facing strings in `WallpaperManager.qml` are in
+- **UI language**: all user-facing strings in `ui/WallpaperManager.qml` are in
   **English** (decision 2026-09-02). Multilingual support is TBD — do not
   introduce a translation framework yet; just keep strings in English until
   the user decides how to handle i18n.

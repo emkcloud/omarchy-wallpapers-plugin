@@ -12,7 +12,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)"
 
-CONFIG_FILE="$SCRIPT_DIR/config.json"
+CONFIG_FILE="$SCRIPT_DIR/../config.json"
 DEFAULT_REPO="emkcloud/omarchy-wallpapers"
 DEFAULT_REF="main"
 
