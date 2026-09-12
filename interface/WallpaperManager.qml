@@ -6,7 +6,7 @@ import QtQuick.Effects
 import qs.Commons
 import qs.Ui
 import "components"
-import "Model.js" as Model
+import "js/Model.js" as Model
 
 Item {
   id: root

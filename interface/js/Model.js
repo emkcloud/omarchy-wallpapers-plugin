@@ -2,7 +2,7 @@
 // and status text. No QML ids or state live here — the view owns the models,
 // the processes and `selectedIndex`, and calls into these functions.
 //
-// QML side: `import "Model.js" as Model`.
+// QML side: `import "js/Model.js" as Model`.
 
 // --- TSV parsers -----------------------------------------------------------
 

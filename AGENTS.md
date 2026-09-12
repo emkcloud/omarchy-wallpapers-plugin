@@ -18,8 +18,9 @@ set-default), theme by theme.
   metadata and config; the entry point is exactly one level deep.
 - `interface/WallpaperManager.qml` — the UI view + thin controller: state,
   `Process`/`FileView` and the three screens. Imports `"components"` and
-  `"Model.js" as Model`.
-- `interface/Model.js` — pure logic, no QML ids/state: TSV parsing,
+  `"js/Model.js" as Model`.
+- `interface/js/` — JavaScript logic modules, kept out of the QML files.
+- `interface/js/Model.js` — pure logic, no QML ids/state: TSV parsing,
   `themeLabel`, cursor arithmetic, key mapping, status text, `parsePaths`.
 - `interface/components/` — local QML atoms shared by the screens:
   `RoundedImage.qml` (rounded image via MultiEffect mask), `HeroLogo.qml`
@@ -106,7 +107,7 @@ before the `PanelWindow`. This is the source order and where each concern lives:
 | processes | `themesProc`, `catalogProc`, `actionProc` | run `manager.sh`, parse TSV |
 | overlay UI | `panel`, `card`, `keys`, `hero`, `heroRule`, `themesGrid`, `grid`, `footer`, `previewView` | the chrome and the three screens |
 
-Pure helpers live in `interface/Model.js` (imported as `Model`): `parseThemes`,
+Pure helpers live in `interface/js/Model.js` (imported as `Model`): `parseThemes`,
 `parseCatalog`, `themeLabel`, `stepIndex`, `textAction`, `themesStatus`,
 `catalogStatus`, `parsePaths`. Keep it free of QML ids/state — the view owns the
 models, the processes and `selectedIndex`.
