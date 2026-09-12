@@ -42,6 +42,9 @@ set-default), theme by theme.
   below), computes local install state, and runs install/remove/set-default
   natively (curl + jq + sha256). Talks to the QML via TSV on stdout. Reads
   `config/config.json` from the plugin root (`SCRIPT_DIR/../config/config.json`).
+- `scripts/developer.sh` — dev-only helper (`link` / `unlink`): installs this
+  checkout as `emkcloud.wallpaper-manager-developer` via symlinks. See *Local
+  development*.
 - `assets/` — local plugin assets. Scalable by kind; today only
   `assets/images/logo.png` exists, but future icons/fonts belong here too. This
   is **not** the upstream wallpaper repo.
@@ -415,19 +418,33 @@ Rules that follow from that:
 
 ## Local development
 
+Two installs can coexist, distinguished by id:
+
+- **Developer** — `emkcloud.wallpaper-manager-developer`: symlinks back to this
+  checkout, created by `scripts/developer.sh link`. Edit the repo, then
+  `omarchy restart shell`.
+- **Official** — `emkcloud.wallpaper-manager`: a real git checkout, installed
+  with `omarchy plugin add … --enable --yes`; use it to test add/update exactly
+  as a user would. `scripts/developer.sh` never touches it.
+
 ```bash
-ln -s /home/massimo/Repositories/omarchy-wallpapers-plugin \
-      ~/.config/omarchy/plugins/emkcloud.wallpaper-manager
-omarchy-shell shell rescanPlugins
-omarchy-shell shell enablePlugin emkcloud.wallpaper-manager '{}'
-omarchy-shell shell summon emkcloud.wallpaper-manager '{}'
+bash scripts/developer.sh link     # create/enable/summon the dev plugin
+bash scripts/developer.sh unlink   # remove it
 ```
 
+`link` generates the dev `manifest.json` from the official one (only `.id` and
+`.name` change) and symlinks `interface`, `scripts`, `config`, `assets`,
+`datasets`. `unlink` refuses to delete anything without the `.dev-wrapper`
+marker.
+
 > ⚠️ **Symlink vs hot-reload.** The shell watches `~/.config/omarchy/plugins/`
-> with inotify, which does **not** follow symlinks. If the plugin dir is a
-> symlink, edits are NOT hot-reloaded. After changing QML, restart the shell:
+> with inotify, which does **not** follow symlinks. The dev wrapper is symlinks,
+> so edits are NOT hot-reloaded: after changing QML, restart the shell:
 > `omarchy restart shell`, then re-summon. (For true hot-reload, copy the files
 > into `~/.config/omarchy/plugins/<id>/` instead of symlinking.)
+
+`manager.sh` resolves its own path with `readlink -f`, so even through the dev
+wrapper the dataset cache still lands in this repo's `datasets/`.
 
 Lint: `qmllint -I <dir containing a `qs` symlink to /usr/share/omarchy/shell>`.
 The residual `unqualified` / `missing-property` warnings on `Style.spacing.*`,
