@@ -11,22 +11,35 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)"
+PLUGIN_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
-CONFIG_FILE="$SCRIPT_DIR/../config/config.json"
+CONFIG_FILE="$PLUGIN_ROOT/config/config.json"
 DEFAULT_REPO="emkcloud/omarchy-wallpapers"
 DEFAULT_REF="main"
+DEFAULT_DATASETS="datasets"
 
 REPO="$DEFAULT_REPO"
 REF="$DEFAULT_REF"
+DATASETS_REL="$DEFAULT_DATASETS"
 if [[ -f $CONFIG_FILE ]]; then
   cfg_repo="$(jq -r '.repo // empty' "$CONFIG_FILE" 2>/dev/null || true)"
   cfg_ref="$(jq -r '.release // empty' "$CONFIG_FILE" 2>/dev/null || true)"
+  cfg_datasets="$(jq -r '.paths.datasets // empty' "$CONFIG_FILE" 2>/dev/null || true)"
   [[ -n $cfg_repo ]] && REPO="$cfg_repo"
   [[ -n $cfg_ref ]] && REF="$cfg_ref"
+  [[ -n $cfg_datasets ]] && DATASETS_REL="$cfg_datasets"
 fi
 
 RAW_BASE="https://raw.githubusercontent.com/$REPO/$REF"
 DATASETS_URL="$RAW_BASE/datasets/datasets.json"
+
+# Local cache of the pinned dataset. Gitignored except for `.gitkeep`, and
+# tagged with the release in `.release`: since `omarchy plugin update` merges
+# with `git merge --ff-only`, ignored files survive an update, so the marker is
+# what tells us the cache belongs to a stale release.
+DATASETS_DIR="$PLUGIN_ROOT/$DATASETS_REL"
+DATASETS_JSON="$DATASETS_DIR/datasets.json"
+DATASETS_REF_FILE="$DATASETS_DIR/.release"
 
 DEST_BASE="$HOME/.config/omarchy/backgrounds"
 STATE_BG="$HOME/.local/state/omarchy/current/background"
@@ -47,6 +60,71 @@ EOF
 
 fetch() {
   curl -fsSL --max-time 60 "$@"
+}
+
+# Download $1 (URL) into $2, atomically (tmp + mv). Leaves no partial file.
+download_file() {
+  local url="$1" dest="$2" tmp
+  mkdir -p "$(dirname -- "$dest")"
+  tmp="$dest.tmp.$$"
+  if fetch "$url" -o "$tmp"; then
+    mv -- "$tmp" "$dest"
+    return 0
+  fi
+  rm -f -- "$tmp"
+  return 1
+}
+
+# Drop the cached dataset but keep the tracked `.gitkeep`.
+invalidate_datasets() {
+  [[ -d $DATASETS_DIR ]] || return 0
+  find "$DATASETS_DIR" -mindepth 1 -maxdepth 1 ! -name '.gitkeep' -exec rm -rf -- {} +
+}
+
+# Warm every theme catalog once datasets.json is in place. Best effort: a
+# failure here does not fail the caller, `ensure_catalog()` retries on demand.
+prefetch_catalogs() {
+  local theme path remote dest
+  while IFS=$'\t' read -r theme path; do
+    [[ -n $theme ]] || continue
+    dest="$DATASETS_DIR/$theme/catalog.json"
+    [[ -s $dest ]] && continue
+    remote="$RAW_BASE/${path#/}"
+    download_file "$remote" "$dest" || echo "Warning: could not cache catalog '$theme'." >&2
+  done < <(jq -r '
+    .themes | to_entries[]
+    | select(.value.kind == "theme")
+    | [.key, (.value.catalog.path // "")] | @tsv
+  ' "$DATASETS_JSON")
+  return 0
+}
+
+# Ensure the dataset for the pinned release is cached. The first run downloads
+# `datasets.json` and then warms every catalog; later runs reuse the cache until
+# the `.release` marker no longer matches.
+ensure_datasets() {
+  if [[ -s $DATASETS_JSON && -f $DATASETS_REF_FILE ]] \
+    && [[ "$(cat -- "$DATASETS_REF_FILE" 2>/dev/null || true)" == "$REF" ]]; then
+    return 0
+  fi
+  mkdir -p "$DATASETS_DIR"
+  invalidate_datasets
+  download_file "$DATASETS_URL" "$DATASETS_JSON" || return 1
+  printf '%s\n' "$REF" >"$DATASETS_REF_FILE"
+  prefetch_catalogs
+}
+
+# Ensure the catalog of one theme is cached. Normally the eager first-run
+# prefetch already did it; this is the on-demand fallback.
+ensure_catalog() {
+  local theme="$1" path remote dest
+  ensure_datasets || return 1
+  dest="$DATASETS_DIR/$theme/catalog.json"
+  [[ -s $dest ]] && return 0
+  path="$(jq -r --arg t "$theme" '.themes[$t].catalog.path // empty' "$DATASETS_JSON" 2>/dev/null || true)"
+  [[ -n $path ]] || path="datasets/$theme/catalog.json"
+  remote="$RAW_BASE/${path#/}"
+  download_file "$remote" "$dest"
 }
 
 # Rebase any absolute raw.githubusercontent.com/$REPO/<ref>/ URL onto the
@@ -124,22 +202,28 @@ download_one() {
 }
 
 cmd_themes() {
+  ensure_datasets || {
+    echo "Failed to fetch datasets." >&2
+    return 1
+  }
   local name title catalog collections count preview
   while IFS=$'\t' read -r name title catalog collections count preview; do
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$name" "$title" "$(rebase_url "$catalog")" "$collections" "$count" "$(rebase_url "$preview")"
-  done < <(fetch "$DATASETS_URL" | jq -r '
+  done < <(jq -r '
     .themes | to_entries[]
     | select(.value.kind == "theme")
     | [.key, (.value.title // .key), (.value.catalog.url // ""), (.value.collections | length), (.value.count // 0), (.value.preview // "")]
     | @tsv
-  ')
+  ' "$DATASETS_JSON")
 }
 
 cmd_catalog() {
   local theme="$1"
-  local catalog_url
-  catalog_url="$(rebase_url "$2")"
+  ensure_catalog "$theme" || {
+    echo "Failed to fetch catalog for '$theme'." >&2
+    return 1
+  }
   local filename name code url sha256 preview path current installed
   while IFS=$'\t' read -r filename name code url sha256 preview; do
     path="$DEST_BASE/$theme/$filename"
@@ -156,15 +240,18 @@ cmd_catalog() {
     fi
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$filename" "$name" "$code" "$(rebase_url "$url")" "$sha256" "$installed" "$current" "$(rebase_url "$preview")"
-  done < <(fetch "$catalog_url" | jq -r '.wallpapers[] | [.filename, .name, .code, .url, .sha256, (.preview // "")] | @tsv')
+  done < <(jq -r '.wallpapers[] | [.filename, .name, .code, .url, .sha256, (.preview // "")] | @tsv' \
+    "$DATASETS_DIR/$theme/catalog.json")
 }
 
 cmd_install() {
   local theme="$1" selector="${2:-}"
-  local data catalog_url catalog
-  data="$(fetch "$DATASETS_URL")"
-  catalog_url="$(jq -r --arg t "$theme" '.themes[$t].catalog.url // empty' <<<"$data")"
-  if [[ -z $catalog_url ]]; then
+  local catalog
+  ensure_datasets || {
+    echo "Failed to fetch datasets." >&2
+    return 1
+  }
+  if [[ "$(jq -r --arg t "$theme" '.themes[$t] | type' "$DATASETS_JSON")" == "null" ]]; then
     echo "Theme '$theme' not found in the repository." >&2
     return 1
   fi
@@ -172,7 +259,11 @@ cmd_install() {
     echo "Theme '$theme' is not installed in Omarchy. Install it first." >&2
     return 1
   }
-  catalog="$(fetch "$(rebase_url "$catalog_url")")"
+  ensure_catalog "$theme" || {
+    echo "Failed to fetch catalog for '$theme'." >&2
+    return 1
+  }
+  catalog="$(cat -- "$DATASETS_DIR/$theme/catalog.json")"
 
   local -a sel_url=() sel_dest=() sel_sha=()
   local filename id name code url sha
@@ -218,11 +309,11 @@ cmd_remove() {
     return 1
   fi
 
-  local data catalog_url catalog
-  data="$(fetch "$DATASETS_URL")"
-  catalog_url="$(jq -r --arg t "$theme" '.themes[$t].catalog.url // empty' <<<"$data")"
-  if [[ -n $catalog_url ]]; then
-    catalog="$(fetch "$(rebase_url "$catalog_url")")"
+  local catalog
+  if ensure_datasets \
+    && [[ "$(jq -r --arg t "$theme" '.themes[$t] | type' "$DATASETS_JSON" 2>/dev/null || true)" != "null" ]] \
+    && ensure_catalog "$theme"; then
+    catalog="$(cat -- "$DATASETS_DIR/$theme/catalog.json")"
   else
     catalog='{"wallpapers":[]}'
   fi

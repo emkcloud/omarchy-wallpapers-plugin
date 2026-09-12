@@ -57,15 +57,20 @@ omarchy-shell shell summon emkcloud.wallpaper-manager '{}'
 
 - Le anteprime vengono caricate direttamente dall'URL remoto del catalogo
   (la griglia carica solo le immagini visibili, quindi è lazy allo scroll).
+- I metadati (lista temi e cataloghi) vengono scaricati dal tag pinnato e
+  messi in cache in `datasets/` **al primo avvio** (`datasets.json` + tutti i
+  cataloghi, ~1 MB). Da lì in poi liste e griglie funzionano in locale; a ogni
+  aggiornamento del plugin la cache del vecchio tag viene sostituita. Se un
+  catalogo non si scarica, viene ripreso alla prima apertura del tema.
 - Le operazioni install/remove sono native in `manager.sh` (verifica sha256,
   skip se già aggiornato, download parallelo, refresh della cache sfondi).
 - Il ref del repo upstream è pinnato in `config/config.json` (`release`):
   `manager.sh` riscrive su quel ref ogni URL embedded nei JSON, così i clienti
   restano su una snapshot testata finché non si aggiorna il plugin
   (`omarchy plugin update`).
-- Il layout è in `config/config.json` (`paths`: `scripts`, `assets`, `logo`):
-  script e logo vengono risolti da lì, quindi gli asset possono spostarsi senza
-  toccare il QML.
+- Il layout è in `config/config.json` (`paths`: `scripts`, `assets`, `logo`,
+  `datasets`): script, logo e cache vengono risolti da lì, quindi si possono
+  spostare senza toccare il QML.
 - I colori seguono il tema Omarchy attivo (`qs.Commons.Color` / `Style`).
 
 ## Licenza

@@ -26,16 +26,15 @@ set-default), theme by theme.
     frozen on a tested snapshot while `main` keeps moving. Missing or invalid
     falls back to `main`. Bump `release` and push to roll a new release: clients
     pick it up with `omarchy plugin update`.
-  - `paths` — `scripts`, `assets`, `logo`, all relative to the plugin root, so
-    the layout is data-driven and assets can live anywhere. The QML resolves
-    `scriptPath` / `logoPath` from these (silent fallback to the shipped layout
-    if the file is missing/invalid); `manager.sh` ignores `paths`, it finds the
-    config via `SCRIPT_DIR/../config/config.json`.
+  - `paths` — `scripts`, `assets`, `logo`, `datasets`, all relative to the
+    plugin root, so the layout is data-driven. The QML resolves `scriptPath` /
+    `logoPath` from these (silent fallback to the shipped layout if the file is
+    missing/invalid); `manager.sh` reads `paths.datasets` for its cache dir.
 - `scripts/` — helper scripts, kept out of the repo root.
-- `scripts/manager.sh` — bash helper: fetches JSON from the wallpapers repo,
-  computes local install state, and runs install/remove/set-default natively
-  (curl + jq + sha256). Talks to the QML via TSV on stdout. Reads `config.json`
-  from `config/` in the repo root (`SCRIPT_DIR/../config/config.json`).
+- `scripts/manager.sh` — bash helper: builds the dataset cache (see `datasets/`
+  below), computes local install state, and runs install/remove/set-default
+  natively (curl + jq + sha256). Talks to the QML via TSV on stdout. Reads
+  `config/config.json` from the plugin root (`SCRIPT_DIR/../config/config.json`).
 - `assets/` — local plugin assets. Scalable by kind; today only
   `assets/images/logo.png` exists, but future icons/fonts belong here too. This
   is **not** the upstream wallpaper repo.
@@ -46,8 +45,17 @@ set-default), theme by theme.
   (`-separate -evaluate-sequence Max -level 4%,85%`), which keeps the three
   brand colors bit-exact (`#155DFC`, `#E12AFB`, `#05DF72`) and preserves the
   anti-aliased edges. Do NOT re-flatten it on black.
-- `datasets/`, `images/`, `masters/` — never here. The wallpapers live in the
-  separate repo `emkcloud/omarchy-wallpapers`.
+- `datasets/` — runtime cache of the pinned upstream dataset, gitignored except
+  for the tracked `.gitkeep`. `manager.sh` fills it on the **first run**:
+  `datasets.json` plus every theme catalog (eager warm-up; a catalog that fails
+  is fetched again on demand), tagged by a `.release` marker. `omarchy plugin
+  update` merges with `git merge --ff-only`, so ignored files survive the update:
+  the marker is what forces a wipe + re-download when `release` changes. One
+  release at a time.
+- `datasets/.gitkeep` — keeps the otherwise empty cache dir in git.
+- `.gitignore` — `datasets/*` plus `!datasets/.gitkeep`.
+- `images/`, `masters/` — never here. The wallpapers live in the separate repo
+  `emkcloud/omarchy-wallpapers`.
 - `README.md` — user-facing docs (install, usage, requirements).
 - `LICENSE` — project license.
 - `AGENTS.md` — this file.
@@ -254,12 +262,19 @@ default, Esc returns to the grid.
   `omarchy-theme-bg-set`.
 - **Imports**: `Quickshell`, `Quickshell.Io`, `Quickshell.Wayland`, `QtQuick`,
   `QtQuick.Effects`, `qs.Commons`, `qs.Ui`.
+- **Dataset cache**: the upstream JSON is cached in `paths.datasets` and read
+  locally. On the first run `ensure_datasets()` downloads `datasets.json` and
+  then warms every catalog (`prefetch_catalogs`, best-effort); a missing catalog
+  is retried by `ensure_catalog(theme)`. The `.release` marker ties the cache to
+  the pinned ref: when `release` changes the cache is wiped and rebuilt. Once
+  cached, listing needs no network; wallpapers, previews and set-default stay
+  remote. A failed `datasets.json` exits non-zero (no live fallback).
 - **`manager.sh` command surface**:
 
   | command | args | stdout (TSV) |
   |---|---|---|
   | `themes` | — | `name  title  catalogUrl  collections  count  preview` |
-  | `catalog` | `<theme> <catalog-url>` | `filename  name  code  url  sha256  installed  isDefault  preview` |
+  | `catalog` | `<theme> <catalog-url>` | `filename  name  code  url  sha256  installed  isDefault  preview` (local catalog; the URL arg is only a fallback) |
   | `install` | `<theme> [selector]` | human text; no selector = all, selector matches id/name/code/filename |
   | `remove` | `<theme> [selector]` | human text; same selector matching |
   | `set-default` | `<theme> <filename> <url>` | human text; downloads if missing then `omarchy-theme-bg-set` |

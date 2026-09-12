@@ -4,6 +4,7 @@
   "paths": {
     "scripts": "scripts",
     "assets": "assets",
-    "logo": "assets/images/logo.png"
+    "logo": "assets/images/logo.png",
+    "datasets": "datasets"
   }
 }
