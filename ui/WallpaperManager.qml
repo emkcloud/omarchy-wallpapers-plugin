@@ -22,7 +22,7 @@ Item {
   }
 
   // ---- layout paths ---------------------------------------------------------
-  // Resolved from `config.json` at the plugin root, so where the script and the
+  // Resolved from `config/config.json` at the plugin root, so where the script and the
   // logo live is data, not code (`paths.scripts` / `paths.assets` /
   // `paths.logo`). Silent fallback to the shipped layout if the file is missing
   // or invalid; the defaults match the repo layout so the logo never flickers.
@@ -34,7 +34,7 @@ Item {
 
   FileView {
     id: configFile
-    path: root.pluginRoot ? root.pluginRoot + "/config.json" : ""
+    path: root.pluginRoot ? root.pluginRoot + "/config/config.json" : ""
     watchChanges: false
     printErrors: false
     onLoaded: {

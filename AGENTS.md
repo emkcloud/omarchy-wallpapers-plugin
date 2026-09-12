@@ -18,7 +18,8 @@ set-default), theme by theme.
   and config; the entry point is exactly one level deep.
 - `ui/WallpaperManager.qml` — the entire UI. Quickshell/QML, **one file**, all
   views plus the inline components `RoundedImage`, `HeroLogo`, `Pill`.
-- `config.json` — plugin config, read by both `manager.sh` and the QML.
+- `config/` — plugin config, kept out of the repo root.
+- `config/config.json` — plugin config, read by both `manager.sh` and the QML.
   - `repo` / `release` — pin the upstream snapshot. `manager.sh` reads the
     `release` (a tag), builds every upstream URL from it, then rebases the
     absolute URLs embedded in the generated JSON onto that ref, so clients stay
@@ -29,12 +30,12 @@ set-default), theme by theme.
     the layout is data-driven and assets can live anywhere. The QML resolves
     `scriptPath` / `logoPath` from these (silent fallback to the shipped layout
     if the file is missing/invalid); `manager.sh` ignores `paths`, it finds the
-    config via `SCRIPT_DIR/../config.json`.
+    config via `SCRIPT_DIR/../config/config.json`.
 - `scripts/` — helper scripts, kept out of the repo root.
 - `scripts/manager.sh` — bash helper: fetches JSON from the wallpapers repo,
   computes local install state, and runs install/remove/set-default natively
   (curl + jq + sha256). Talks to the QML via TSV on stdout. Reads `config.json`
-  from the repo root (`SCRIPT_DIR/../config.json`).
+  from `config/` in the repo root (`SCRIPT_DIR/../config/config.json`).
 - `assets/` — local plugin assets. Scalable by kind; today only
   `assets/images/logo.png` exists, but future icons/fonts belong here too. This
   is **not** the upstream wallpaper repo.
@@ -66,7 +67,7 @@ set-default), theme by theme.
   the QML sits one level deep (`ui/`), so `Qt.resolvedUrl("..")` → strip
   `file://` and the trailing `/` gives the root (same pattern used by the
   shell's own plugins, e.g. `agents/Panel.qml`), then join the relative paths
-  from `config.json`.
+  from `config/config.json`.
 - Reference sources (read-only): `/usr/share/omarchy/shell/README.md`,
   `/usr/share/omarchy/shell/plugins/image-picker/`,
   `/usr/share/omarchy/shell/plugins/dev-gallery/`,
@@ -80,7 +81,7 @@ that renders them. This is the source order and where each concern lives:
 
 | Source order | ids / functions | Role |
 |---|---|---|
-| paths | `pluginRoot`, `configFile`, `pluginPaths`, `scriptPath`, `logoPath` | resolve the layout from `config.json` `paths`, from the plugin root |
+| paths | `pluginRoot`, `configFile`, `pluginPaths`, `scriptPath`, `logoPath` | resolve the layout from `config/config.json` `paths`, from the plugin root |
 | state | `view`, `themeName`, `themeCatalogUrl`, `selectedIndex`, `cursorActive`, `busy`, `statusText`, `themesModel`, `wallpapersModel` | single source of truth |
 | tokens | `foreground`, `background`, `accent`, `urgent`, `scrim`, `dim`, `borderSpec`, `contentMargin`, `contentSpacing`, `minTileWidth`, `tileGap`, `tileInset`, `fontFamily`, `heroHeight` | `Color.menu.*` / `Style.*` aliases |
 | inline components | `RoundedImage`, `HeroLogo`, `Pill` | atoms shared by both grids and the preview |
@@ -126,7 +127,7 @@ already loading; Esc from the themes screen closes it; re-summoning reloads.
 - Script and logo are resolved from the **plugin root** (not
   `manifest.__sourceDir`, which the shell strips): `Qt.resolvedUrl("..")` →
   strip `file://` and the trailing `/`, then join the relative paths from
-  `config.json` (`paths`).
+  `config/config.json` (`paths`).
 - Loading any screen follows one pattern: set `busy = true` + status text →
   start a `Process` → `StdioCollector` parses the TSV rows into a `ListModel`
   and clears `busy` on finish/exit. See step 5.
@@ -399,7 +400,7 @@ The repo root is the plugin: `omarchy plugin add
 https://github.com/emkcloud/omarchy-wallpapers-plugin.git --enable --yes`.
 Keep `manifest.json` at the repo root (required by `omarchy plugin add`).
 
-To roll a new upstream snapshot: bump `release` in `config.json`, commit and push.
+To roll a new upstream snapshot: bump `release` in `config/config.json`, commit and push.
 Installed clients get it with `omarchy plugin update` (a fast-forward of the git
 checkout, validated and rescanned by the shell).
 
