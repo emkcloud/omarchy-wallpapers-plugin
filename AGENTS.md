@@ -437,7 +437,9 @@ Two installs can coexist, distinguished by id:
 
 - **Developer** — `emkcloud.wallpaper-manager-developer`: symlinks back to this
   checkout, created by `scripts/developer.sh link`. Edit the repo, then
-  `omarchy restart shell`.
+  `omarchy restart shell`. Every screen flags itself with a **`developer`** pill
+  (`root.dev`, derived from the manifest id) so the two installs are never
+  confused.
 - **Official** — `emkcloud.wallpaper-manager`: a real git checkout, installed
   with `omarchy plugin add … --enable --yes`; use it to test add/update exactly
   as a user would. `scripts/developer.sh` never touches it.

@@ -13,6 +13,9 @@ Item {
 
   // Injected by omarchy-shell.
   property var manifest: null
+  // True for the `-developer` install, so every screen can flag itself.
+  readonly property bool dev: manifest !== null
+    && String(manifest.id || "").indexOf("-developer") !== -1
   // The shell strips `__sourceDir` from third-party manifests before injecting
   // them, so the plugin root is resolved relative to this file's own location
   // instead (same pattern as the shell's plugins, e.g. agents). The QML lives
@@ -445,6 +448,13 @@ Item {
 
           Row {
             spacing: Style.spacing.controlGap
+
+            Pill {
+              visible: root.dev
+              anchors.verticalCenter: parent.verticalCenter
+              label: "developer"
+              tint: root.urgent
+            }
 
             Button {
               visible: root.view === "wallpapers"
@@ -897,6 +907,13 @@ Item {
 
             Row {
               spacing: Style.spacing.controlGap
+
+              Pill {
+                visible: root.dev
+                anchors.verticalCenter: parent.verticalCenter
+                label: "developer"
+                tint: root.urgent
+              }
 
               Pill {
                 visible: root.currentItem() && root.currentItem().installed === "1"
