@@ -14,10 +14,16 @@ set-default), theme by theme.
 - `manifest.json` — plugin manifest (id `emkcloud.wallpaper-manager`, kind
   `overlay`, entry point `interface/WallpaperManager.qml`). Validated by
   `omarchy plugin validate`.
-- `interface/` — the QML UI. Kept in a subdirectory so root holds only plugin metadata
-  and config; the entry point is exactly one level deep.
-- `interface/WallpaperManager.qml` — the entire UI. Quickshell/QML, **one file**, all
-  views plus the inline components `RoundedImage`, `HeroLogo`, `Pill`.
+- `interface/` — the QML UI. Kept in a subdirectory so root holds only plugin
+  metadata and config; the entry point is exactly one level deep.
+- `interface/WallpaperManager.qml` — the UI view + thin controller: state,
+  `Process`/`FileView` and the three screens. Imports `"components"` and
+  `"Model.js" as Model`.
+- `interface/Model.js` — pure logic, no QML ids/state: TSV parsing,
+  `themeLabel`, cursor arithmetic, key mapping, status text, `parsePaths`.
+- `interface/components/` — local QML atoms shared by the screens:
+  `RoundedImage.qml` (rounded image via MultiEffect mask), `HeroLogo.qml`
+  (brand mark + glyph fallback), `Pill.qml` (state pill).
 - `config/` — plugin config, kept out of the repo root.
 - `config/config.json` — plugin config, read by both `manager.sh` and the QML.
   - `repo` / `release` — pin the upstream snapshot. `manager.sh` reads the
@@ -83,21 +89,27 @@ set-default), theme by theme.
 
 ## Code map — `interface/WallpaperManager.qml`
 
-The whole plugin is one QML file. It is written **logic-first, UI-last**: state,
-shared components and the script-driven processes come before the `PanelWindow`
-that renders them. This is the source order and where each concern lives:
+The plugin is one view file plus, since the split, a pure-logic JS module and a
+`components/` folder for the shared QML atoms. `WallpaperManager.qml` is written
+**logic-first, UI-last**: state, imports and the script-driven processes come
+before the `PanelWindow`. This is the source order and where each concern lives:
 
 | Source order | ids / functions | Role |
 |---|---|---|
 | paths | `pluginRoot`, `configFile`, `pluginPaths`, `scriptPath`, `logoPath` | resolve the layout from `config/config.json` `paths`, from the plugin root |
 | state | `view`, `themeName`, `themeCatalogUrl`, `selectedIndex`, `cursorActive`, `busy`, `statusText`, `themesModel`, `wallpapersModel` | single source of truth |
-| tokens | `foreground`, `background`, `accent`, `urgent`, `scrim`, `dim`, `borderSpec`, `contentMargin`, `contentSpacing`, `minTileWidth`, `tileGap`, `tileInset`, `fontFamily`, `heroHeight` | `Color.menu.*` / `Style.*` aliases |
-| inline components | `RoundedImage`, `HeroLogo`, `Pill` | atoms shared by both grids and the preview |
+| tokens | `foreground`, `background`, `accent`, `urgent`, `scrim`, `dim`, `borderSpec`, `contentMargin`, `contentSpacing`, `minTileWidth`, `themeTileWidth`, `tileGap`, `tileInset`, `fontFamily`, `heroHeight` | `Color.menu.*` / `Style.*` aliases |
+| components | `RoundedImage`, `HeroLogo`, `Pill` | atoms in `components/`, shared by both grids and the preview |
 | startup / termination | `open()`, `close()`, `onOpenedChanged` | summon / hide |
 | cursor state machine | `activeGrid`, `activeCount`, `stepCursor`, `moveCursor`, `pageCursor`, `activateCursor`, `dismissCursor`, `handleTextKey`, `takeCursor` | one `selectedIndex` driven by mouse *and* keyboard |
 | actions | `currentItem`, `showPreview`, `closePreview`, `previewNext`, `actionInstall`, `actionRemove`, `actionSetDefault`, `actionInstallAll`, `actionRemoveAll`, `runAction` | user operations |
 | processes | `themesProc`, `catalogProc`, `actionProc` | run `manager.sh`, parse TSV |
 | overlay UI | `panel`, `card`, `keys`, `hero`, `heroRule`, `themesGrid`, `grid`, `footer`, `previewView` | the chrome and the three screens |
+
+Pure helpers live in `interface/Model.js` (imported as `Model`): `parseThemes`,
+`parseCatalog`, `themeLabel`, `stepIndex`, `textAction`, `themesStatus`,
+`catalogStatus`, `parsePaths`. Keep it free of QML ids/state — the view owns the
+models, the processes and `selectedIndex`.
 
 The steps below walk the same file in **runtime order**, not source order.
 
@@ -176,10 +188,11 @@ status caption. Enter/Space or click opens the theme; Esc closes the plugin.
   count, `meta` = "remote collections", icon = `HeroLogo` with glyph `󰸌`,
   `trailingControl` = `heroActions` (the same Back/Refresh/Close row as step 4,
   where Back is `visible` only on the wallpapers view).
-- Body: `GridView` `themesGrid` over `themesModel`. Dynamic columns:
-  `columnsHint = Math.max(2, Math.floor(width / root.minTileWidth))` with
-  `minTileWidth ~ Style.space(190)`; `cellWidth = floor(width / columnsHint)`,
-  `cellHeight = cellWidth * 0.9`. Do NOT anchor the delegate (broke grid →
+- Body: `GridView` `themesGrid` over `themesModel`. Themes are few, so tiles
+  are wider than the wallpaper ones: dynamic columns
+  `columnsHint = Math.max(2, Math.floor(width / root.themeTileWidth))` with
+  `themeTileWidth ~ Style.space(340)`; `cellWidth = floor(width / columnsHint)`,
+  `cellHeight = cellWidth * 0.72`. Do NOT anchor the delegate (broke grid →
   single column).
 - Delegate: `CursorSurface` (bordered, `hasCursor` derived from the shared
   cursor) + `RoundedImage` thumbnail (remote `preview` URL) + name and
@@ -291,10 +304,10 @@ default, Esc returns to the grid.
 - **Actions**: `actionInstall` / `actionRemove` / `actionSetDefault` /
   `actionInstallAll` / `actionRemoveAll` all funnel into `runAction(args)` →
   `actionProc`; on exit the list refreshes automatically.
-- **Inline components**: `RoundedImage` (MultiEffect mask + `Style.cornerRadius`,
-  `clip: true` is not enough), `HeroLogo` (assets/images/logo.png with a
-  nerd-font glyph fallback), `Pill` (state pills, transparent fill + flat
-  tinted border).
+- **Local components**: `components/RoundedImage.qml` (MultiEffect mask +
+  `Style.cornerRadius`, `clip: true` is not enough), `components/HeroLogo.qml`
+  (assets/images/logo.png with a nerd-font glyph fallback),
+  `components/Pill.qml` (state pills, transparent fill + flat tinted border).
 
 ### 7. Termination application — `close`
 
@@ -340,7 +353,7 @@ Rules that follow from that:
 - **Header** = `Ui/PanelHero`: icon + bold title (`Style.font.title`) +
   UPPERCASE meta caption + optional `detail` pill + `trailingControl` for the
   buttons. The icon is the **emkcloud logo** (`assets/images/logo.png`, the
-  org avatar) via the local `HeroLogo` inline component: a `RoundedImage`
+  org avatar) via the local `components/HeroLogo.qml`: a `RoundedImage`
   `Style.font.displayLarge` wide, same in every view, with the old nerd-font
   glyphs (`󰸌` themes, `` wallpapers) as fallback if the file cannot be
   resolved. It is the only image allowed in this repo.
@@ -379,7 +392,7 @@ Rules that follow from that:
   anywhere in the shell either.)
 - Corner rounding must always come from `Style.cornerRadius` (mirrors
   Hyprland's `decoration:rounding`), never a hardcoded number. Images need the
-  `RoundedImage` inline component (`layer.effect: MultiEffect` + mask) because
+  `components/RoundedImage.qml` (`layer.effect: MultiEffect` + mask) because
   `clip: true` on an `Image` only clips rectangularly.
 
 ## Bugs fixed along the way (do not reintroduce)

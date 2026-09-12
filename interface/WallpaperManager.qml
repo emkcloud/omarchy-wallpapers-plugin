@@ -5,6 +5,8 @@ import QtQuick
 import QtQuick.Effects
 import qs.Commons
 import qs.Ui
+import "components"
+import "Model.js" as Model
 
 Item {
   id: root
@@ -37,20 +39,7 @@ Item {
     path: root.pluginRoot ? root.pluginRoot + "/config/config.json" : ""
     watchChanges: false
     printErrors: false
-    onLoaded: {
-      try {
-        var cfg = JSON.parse(text() || "{}")
-        if (cfg && cfg.paths) {
-          root.pluginPaths = {
-            scripts: cfg.paths.scripts || root.pluginPaths.scripts,
-            assets: cfg.paths.assets || root.pluginPaths.assets,
-            logo: cfg.paths.logo || root.pluginPaths.logo
-          }
-        }
-      } catch (e) {
-        // keep the defaults
-      }
-    }
+    onLoaded: root.pluginPaths = Model.parsePaths(text(), root.pluginPaths)
   }
 
   readonly property string scriptPath: {
@@ -98,6 +87,8 @@ Item {
   readonly property int contentMargin: Style.spacing.panelPadding
   readonly property int contentSpacing: Style.spacing.md
   readonly property int minTileWidth: Style.space(190)
+  // Themes are few, so their grid gets wider tiles (and larger previews).
+  readonly property int themeTileWidth: Style.space(340)
   readonly property int tileGap: Style.space(4)
   readonly property int tileInset: Math.max(1, Style.normalBorderWidth)
   readonly property string fontFamily: Style.font.menuFamily
@@ -109,117 +100,6 @@ Item {
 
   ListModel { id: themesModel }
   ListModel { id: wallpapersModel }
-
-  // ---- rounded thumbnail ----------------------------------------------------
-  // Thumbnails must follow the window-manager rounding: `Style.cornerRadius`
-  // mirrors Hyprland's `decoration:rounding` (the shell re-reads it on startup
-  // and on theme change), so changing `rounding` in looknfeel.lua is picked up
-  // here too. `clip: true` on an Image only clips rectangularly, hence the
-  // MultiEffect mask.
-  //
-  // `inset` is the distance from the parent card's edge: concentric-radii rule
-  // (`r_inner = r_outer - gap`) keeps the padding visually uniform.
-  component RoundedImage: Item {
-    id: roundedImage
-
-    property alias source: roundedImageSource.source
-    property alias status: roundedImageSource.status
-    property alias fillMode: roundedImageSource.fillMode
-    property int inset: 0
-    property int radius: Math.max(0, Style.cornerRadius - inset)
-    property int topRadius: radius
-    property int bottomRadius: radius
-
-    Rectangle {
-      id: roundedImageMask
-      anchors.fill: parent
-      visible: false
-      layer.enabled: true
-      color: "white"
-      topLeftRadius: roundedImage.topRadius
-      topRightRadius: roundedImage.topRadius
-      bottomLeftRadius: roundedImage.bottomRadius
-      bottomRightRadius: roundedImage.bottomRadius
-    }
-
-    Item {
-      anchors.fill: parent
-      layer.enabled: roundedImage.topRadius > 0 || roundedImage.bottomRadius > 0
-      layer.smooth: true
-      layer.effect: MultiEffect {
-        maskEnabled: true
-        maskSource: roundedImageMask
-      }
-
-      Image {
-        id: roundedImageSource
-        anchors.fill: parent
-        fillMode: Image.PreserveAspectCrop
-        asynchronous: true
-        cache: true
-        sourceSize.width: 512
-      }
-    }
-  }
-
-  // ---- hero logo ------------------------------------------------------------
-  // emkcloud brand mark, same size slot as the nerd-font glyph it replaces
-  // (`Style.font.displayLarge`) and rounded like every other image here. The
-  // glyph stays as fallback if the file is missing (plugin dir not resolved).
-  component HeroLogo: Item {
-    id: heroLogo
-
-    property string glyph: ""
-    readonly property bool ready: heroLogoImage.status === Image.Ready
-
-    implicitWidth: Style.font.displayLarge
-    implicitHeight: Style.font.displayLarge
-
-    RoundedImage {
-      id: heroLogoImage
-      anchors.fill: parent
-      visible: heroLogo.ready
-      source: root.logoPath
-      fillMode: Image.PreserveAspectFit
-    }
-
-    Text {
-      anchors.centerIn: parent
-      textFormat: Text.PlainText
-      visible: !heroLogo.ready
-      text: heroLogo.glyph
-      color: root.foreground
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.display
-    }
-  }
-
-  // ---- state pill -----------------------------------------------------------
-  // Same anatomy as the `detail` pill in Ui/PanelHero.qml: transparent fill,
-  // themed border, caption text. The tint carries the meaning instead of a
-  // colored blob.
-  component Pill: BorderSurface {
-    id: pill
-
-    property string label: ""
-    property color tint: root.accent
-
-    implicitWidth: pillText.implicitWidth + Style.space(10)
-    implicitHeight: pillText.implicitHeight + Style.space(4)
-    color: "transparent"
-    radius: Style.cornerRadius
-    borderSpec: Border.flat(pill.tint, Math.max(1, Style.normalBorderWidth))
-
-    Text {
-      id: pillText
-      anchors.centerIn: parent
-      textFormat: Text.PlainText
-      text: pill.label
-      color: pill.tint
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
-    }
-  }
 
   // ---- lifecycle ------------------------------------------------------------
   function open(payload) {
@@ -253,12 +133,7 @@ Item {
   }
 
   // The dataset carries a readable `title` ("Tokyo Night"); the tiles show it
-  // uppercased. Fallback for older datasets: normalize the slug.
-  function themeLabel(item) {
-    var label = item && item.title ? item.title : (item ? item.name : "")
-    return String(label).replace(/[-_]+/g, " ").toUpperCase()
-  }
-
+  // uppercased. Fallback for older datasets: normalize the slug. See Model.js.
   function selectTheme(index) {
     if (index < 0 || index >= themesModel.count) return
     var item = themesModel.get(index)
@@ -308,12 +183,9 @@ Item {
     var count = activeCount()
     if (count === 0) return
 
-    var g = activeGrid()
-    if (!isFinite(selectedIndex)) selectedIndex = 0
-
     cursorActive = true
-    selectedIndex = Math.max(0, Math.min(count - 1, selectedIndex + step))
-    g.positionViewAtIndex(selectedIndex, GridView.Contain)
+    selectedIndex = Model.stepIndex(selectedIndex, step, count)
+    activeGrid().positionViewAtIndex(selectedIndex, GridView.Contain)
   }
 
   function moveCursor(dx, dy) {
@@ -352,8 +224,9 @@ Item {
   }
 
   function handleTextKey(text) {
-    if (text === "d" || text === "D") actionSetDefault()
-    else if (text === "r" || text === "R") refresh()
+    var action = Model.textAction(text)
+    if (action === "default") actionSetDefault()
+    else if (action === "refresh") refresh()
   }
 
   function takeCursor(index) {
@@ -433,23 +306,10 @@ Item {
       waitForEnd: true
       onStreamFinished: {
         themesModel.clear()
-        var lines = String(text || "").split("\n")
-        for (var i = 0; i < lines.length; i++) {
-          var line = lines[i].trim()
-          if (!line) continue
-          var parts = line.split("\t")
-          if (parts.length >= 6)
-            themesModel.append({
-              name: parts[0],
-              title: parts[1],
-              catalogUrl: parts[2],
-              collections: parseInt(parts[3], 10),
-              count: parseInt(parts[4], 10),
-              preview: parts[5]
-            })
-        }
+        var rows = Model.parseThemes(text)
+        for (var i = 0; i < rows.length; i++) themesModel.append(rows[i])
         root.busy = false
-        root.setStatus(themesModel.count + (themesModel.count === 1 ? " theme available" : " themes available"))
+        root.setStatus(Model.themesStatus(themesModel.count))
         if (themesModel.count > 0)
           Qt.callLater(function() { themesGrid.positionViewAtIndex(root.selectedIndex, GridView.Contain) })
       }
@@ -458,7 +318,7 @@ Item {
       if (root.busy) {
         root.busy = false
         root.setStatus(themesModel.count > 0
-          ? themesModel.count + (themesModel.count === 1 ? " theme available" : " themes available")
+          ? Model.themesStatus(themesModel.count)
           : "Error loading themes")
       }
     }
@@ -471,25 +331,10 @@ Item {
       waitForEnd: true
       onStreamFinished: {
         wallpapersModel.clear()
-        var lines = String(text || "").split("\n")
-        for (var i = 0; i < lines.length; i++) {
-          var line = lines[i].trim()
-          if (!line) continue
-          var parts = line.split("\t")
-          if (parts.length >= 8)
-            wallpapersModel.append({
-              filename: parts[0],
-              name: parts[1],
-              code: parts[2],
-              url: parts[3],
-              sha256: parts[4],
-              installed: parts[5],
-              isDefault: parts[6],
-              preview: parts[7]
-            })
-        }
+        var rows = Model.parseCatalog(text)
+        for (var i = 0; i < rows.length; i++) wallpapersModel.append(rows[i])
         root.busy = false
-        root.setStatus(wallpapersModel.count + (wallpapersModel.count === 1 ? " wallpaper in " : " wallpapers in ") + root.themeName)
+        root.setStatus(Model.catalogStatus(wallpapersModel.count, root.themeName))
         if (wallpapersModel.count > 0)
           Qt.callLater(function() { grid.positionViewAtIndex(root.selectedIndex, GridView.Contain) })
       }
@@ -498,7 +343,7 @@ Item {
       if (root.busy) {
         root.busy = false
         root.setStatus(wallpapersModel.count > 0
-          ? wallpapersModel.count + (wallpapersModel.count === 1 ? " wallpaper in " : " wallpapers in ") + root.themeName
+          ? Model.catalogStatus(wallpapersModel.count, root.themeName)
           : "Error loading catalog")
       }
     }
@@ -589,6 +434,9 @@ Item {
 
           HeroLogo {
             glyph: root.view === "themes" ? "󰸌" : ""
+            source: root.logoPath
+            foreground: root.foreground
+            fontFamily: root.fontFamily
           }
         }
 
@@ -677,10 +525,10 @@ Item {
           model: themesModel
           clip: true
 
-          readonly property int columnsHint: Math.max(2, Math.floor(width / root.minTileWidth))
+          readonly property int columnsHint: Math.max(2, Math.floor(width / root.themeTileWidth))
           readonly property int colCount: Math.max(1, Math.floor(width / cellWidth))
           cellWidth: Math.floor(width / columnsHint)
-          cellHeight: Math.floor(cellWidth * 0.9)
+          cellHeight: Math.floor(cellWidth * 0.72)
 
           delegate: Item {
             id: themeTile
@@ -720,10 +568,10 @@ Item {
                 anchors.leftMargin: Style.space(8)
                 anchors.rightMargin: Style.space(8)
                 textFormat: Text.PlainText
-                text: root.themeLabel(themeTile.model)
+                text: Model.themeLabel(themeTile.model)
                 color: root.foreground
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
+                font.pixelSize: Style.font.subtitle
                 font.bold: true
                 font.letterSpacing: 1.2
                 elide: Text.ElideRight
@@ -742,7 +590,7 @@ Item {
                   + themeTile.model.count + (themeTile.model.count === 1 ? " wallpaper" : " wallpapers")
                 color: root.dim
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
+                font.pixelSize: Style.font.bodySmall
                 elide: Text.ElideRight
               }
 
@@ -1038,6 +886,9 @@ Item {
 
             HeroLogo {
               glyph: ""
+              source: root.logoPath
+              foreground: root.foreground
+              fontFamily: root.fontFamily
             }
           }
 
