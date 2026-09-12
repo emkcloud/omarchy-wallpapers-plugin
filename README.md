@@ -51,14 +51,17 @@ omarchy-shell shell summon emkcloud.wallpaper-manager '{}'
 ## Requisiti
 
 - Omarchy con shell Quickshell.
-- `curl`, `jq`, `python3` (per `manager.sh` e `wallpapers.py`).
+- `curl`, `jq` (per `manager.sh`).
 
 ## Note tecniche
 
 - Le anteprime vengono caricate direttamente dall'URL remoto del catalogo
   (la griglia carica solo le immagini visibili, quindi è lazy allo scroll).
-- Le operazioni install/remove delegano a `scripts/wallpapers.py` del repo
-  wallpapers (verifica sha256, skip se già aggiornato, refresh della cache sfondi).
+- Le operazioni install/remove sono native in `manager.sh` (verifica sha256,
+  skip se già aggiornato, download parallelo, refresh della cache sfondi).
+- Il ref del repo upstream è pinnato in `config.json` (`release`): `manager.sh`
+  riscrive su quel ref ogni URL embedded nei JSON, così i clienti restano su una
+  snapshot testata finché non si aggiorna il plugin (`omarchy plugin update`).
 - I colori seguono il tema Omarchy attivo (`qs.Commons.Color` / `Style`).
 
 ## Licenza

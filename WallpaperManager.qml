@@ -355,7 +355,7 @@ Item {
     if (!item) return
     busy = true
     setStatus("Installing " + item.name + "…")
-    runAction(["install", themeName, item.name])
+    runAction(["install", themeName, item.filename])
   }
 
   function actionRemove() {
@@ -363,7 +363,7 @@ Item {
     if (!item) return
     busy = true
     setStatus("Removing " + item.name + "…")
-    runAction(["remove", themeName, item.name])
+    runAction(["remove", themeName, item.filename])
   }
 
   function actionSetDefault() {
@@ -409,7 +409,7 @@ Item {
               name: parts[0],
               title: parts[1],
               catalogUrl: parts[2],
-              sections: parseInt(parts[3], 10),
+              collections: parseInt(parts[3], 10),
               count: parseInt(parts[4], 10),
               preview: parts[5]
             })
@@ -703,8 +703,8 @@ Item {
                 anchors.leftMargin: Style.space(8)
                 anchors.rightMargin: Style.space(8)
                 textFormat: Text.PlainText
-                text: themeTile.model.sections
-                  + (themeTile.model.sections === 1 ? " section · " : " sections · ")
+                text: themeTile.model.collections
+                  + (themeTile.model.collections === 1 ? " collection · " : " collections · ")
                   + themeTile.model.count + (themeTile.model.count === 1 ? " wallpaper" : " wallpapers")
                 color: root.dim
                 font.family: root.fontFamily

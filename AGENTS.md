@@ -9,14 +9,22 @@ wallpaper collection of the `emkcloud/omarchy-wallpapers` repo and manages the
 local installation of its wallpapers inside Omarchy (install / remove /
 set-default), theme by theme.
 
-## Structure
+## Repository layout
 
 - `manifest.json` — plugin manifest (id `emkcloud.wallpaper-manager`, kind
   `overlay`, entry point `WallpaperManager.qml`). Validated by
   `omarchy plugin validate`.
-- `WallpaperManager.qml` — the plugin UI (Quickshell/QML).
+- `WallpaperManager.qml` — the entire UI. Quickshell/QML, **one file**, all
+  views plus the inline components `RoundedImage`, `HeroLogo`, `Pill`.
 - `manager.sh` — bash helper: fetches JSON from the wallpapers repo, computes
-  local install state, caches the `wallpapers.py` helper.
+  local install state, and runs install/remove/set-default natively (curl + jq +
+  sha256). Talks to the QML via TSV on stdout.
+- `config.json` — pins the upstream release: `{"repo": "...", "release": "..."}`.
+  `manager.sh` reads the `release` (a tag) and builds every upstream URL from it,
+  then rebases the absolute URLs embedded in the generated JSON onto that ref, so
+  clients stay frozen on a tested snapshot while `main` keeps moving. Missing or
+  invalid file falls back to `main`. Bump this file and push to roll a new
+  release: clients pick it up with `omarchy plugin update`.
 - `logo.png` — emkcloud brand mark (the org GitHub avatar), used as the hero
   icon. The only image in this repo. The original near-black backdrop
   (`#010409`, rounded square) has been made **transparent** so the mark sits on
@@ -50,12 +58,194 @@ set-default), theme by theme.
 
 - Themed colors come from `qs.Commons.Color` / `qs.Commons.Style` — never hardcode.
 - Remote data flows through `manager.sh` (curl + jq); QML parses TSV output.
-- Actions delegate to `wallpapers.py` (sha256 checks, parallel download, bg cache
-  refresh) and `omarchy-theme-bg-set` for the default background.
+- Upstream ref comes from `config.json` (`release`); `manager.sh` builds
+  `https://raw.githubusercontent.com/<repo>/<release>` and rebases every embedded
+  URL onto it (`rebase_url`). Never hardcode `main` in `manager.sh`.
+- Actions (install/remove/set-default) are implemented natively in `manager.sh`
+  (sha256 checks, parallel download via background jobs, bg cache refresh) plus
+  `omarchy-theme-bg-set` for the default background. There is no `wallpapers.py`
+  dependency or cache anymore.
 - Install target (local Omarchy): `~/.config/omarchy/backgrounds/<theme>/`.
 - Preview thumbnails load directly from the remote `url` in the catalog (the
   `GridView` only instantiates visible delegates, so loading is lazy). No local
   preview cache.
+
+## Application layout
+
+The plugin is one overlay that shows **three screens**, switched by the single
+`view` property on `root`:
+
+| `view` | screen | content |
+|---|---|---|
+| `"themes"` | 1 — theme list | all remote themes (`kind=="theme"`) |
+| `"wallpapers"` | 2 — wallpaper list | the wallpapers of the selected theme |
+| `"preview"` | 3 — single wallpaper | fullscreen preview + actions |
+
+Every screen is the same skeleton inside the container: **hero header** (icon,
+title, meta caption, optional pills/buttons) + `PanelSeparator` + **body** +
+dim status caption at the bottom. Each section below covers the functional
+anatomy first (what the user sees and does), then the technical implementation
+(how it is built).
+
+### 0. STARTUP — lifecycle
+
+**Functional.** Summoning the plugin shows the container with the themes screen
+already loading; Esc from the themes screen closes it; re-summoning reloads.
+
+**Technical.**
+- `open(payload)` resets the state (`view = "themes"`, `selectedIndex = 0`,
+  `cursorActive = true`, `statusText = ""`) then calls `loadThemes()`.
+- `close()` only sets `opened = false`; `keepLoaded` keeps the window mounted
+  between summons.
+- When opened, keyboard focus is forced onto the `PanelKeyCatcher` (`keys`)
+  via `Qt.callLater`, so the arrows work immediately.
+- Script and logo are resolved **relative to the QML file**, not
+  `manifest.__sourceDir` (the shell strips it): `Qt.resolvedUrl(".")` → strip
+  `file://` and the trailing `/`.
+- Loading any screen is always the same pattern: set `busy = true` + status
+  text → start a `Process` → `StdioCollector` parses the TSV lines into a
+  `ListModel` and clears `busy` on finish/exit.
+
+### 1. CONTAINER — the overlay chrome
+
+**Functional.** A dim scrim covers the whole screen; a single flat card sits
+centered; clicking outside the card closes the overlay.
+
+**Technical.**
+- `PanelWindow` fullscreen, `WlrLayer.Overlay`, transparent, keyboard exclusive
+  while open.
+- Scrim: fullscreen `Rectangle` filled with `Color.menu.scrim`, plus a
+  `MouseArea` whose click calls `root.close()`.
+- Card: one `BorderSurface` (id `card`) centered; size
+  `Math.min(Style.space(N), parent - Style.gapsOut * 2)`; `Color.menu.background`,
+  `radius: Style.cornerRadius`, `borderSpec: Border.surfaceSpec("menu", "border",
+  …)` (never `border.color`), `padding: Style.spacing.panelPadding`. No inner
+  fills: separation is `Style.spacing.md` of empty space + `PanelSeparator`.
+- Inside the card, `PanelKeyCatcher` (id `keys`) wraps the content and maps raw
+  keys to semantic signals handled by `root`'s state machine (`moveCursor`,
+  `activateCursor`, `dismissCursor`, `deleteRequested`, `textKey`).
+- Fallback `Keys.onPressed` on the card (the catcher does not accept these, so
+  they bubble up): Del/Backspace = remove, PageUp/PageDown = jump a whole
+  visible page of tiles (`pageCursor`).
+- The two heroes (grid screens and preview) share a pinned height
+  `root.heroHeight = Math.max(hero.implicitHeight, previewHero.implicitHeight)`,
+  so switching view never shifts the separator and the content below it.
+
+### 2. SCREEN 1 — theme list (`view = "themes"`)
+
+**Functional.** Grid of theme cards: each card is a preview image, the
+uppercased theme name, and a "N collections · M wallpapers" line. Header shows the
+title, the total theme count and the "remote collections" meta; the footer is
+just the dim status caption. Enter/Space or click opens the theme; Esc closes
+the plugin.
+
+**Technical.**
+- Header: `PanelHero` (id `hero`) — title "Wallpaper manager", `detail` = theme
+  count, `meta` = "remote collections", icon = `HeroLogo` with glyph `󰸌`.
+- Body: `GridView` `themesGrid` over `themesModel`. Dynamic columns:
+  `columnsHint = Math.max(2, Math.floor(width / root.minTileWidth))` with
+  `minTileWidth ~ Style.space(190)`; `cellWidth = floor(width / columnsHint)`,
+  `cellHeight = cellWidth * 0.9`. Do NOT anchor the delegate (broke grid →
+  single column).
+- Delegate: `CursorSurface` (bordered, `hasCursor` derived from the shared
+  cursor) + `RoundedImage` thumbnail (remote `preview` URL) + name and
+  collections/count texts. Hover calls `root.takeCursor(index)`; tap selects the
+  theme.
+- Data: `loadThemes()` runs `manager.sh themes` → TSV
+  `name|title|catalogUrl|collections|count|preview` parsed into `themesModel`.
+- Labels use `root.themeLabel(model)`: the dataset `title` uppercased
+  (`"tokyo-night"` → `"TOKYO NIGHT"`); slug normalized (`-`/`_` → space) if a
+  dataset has no `title`.
+- `selectTheme(index)` clears `wallpapersModel` first (the grid delegates
+  survive the trip through the themes view; leaving them alive while
+  `themeName` changes makes them re-resolve paths against the new theme), sets
+  `themeName` / `themeCatalogUrl` and switches to `"wallpapers"`.
+
+### 3. SCREEN 2 — wallpaper list (`view = "wallpapers"`)
+
+**Functional.** Grid of the selected theme's wallpapers: each tile is a
+thumbnail, the accent-colored code + name, and installed/default pills. Header
+has Back / Refresh / Close buttons and shows the theme name + count. Footer
+has Install / Remove / Default on the left and Install all / Remove all on the
+right, plus the status caption. Enter or click opens the preview; x/X or Del
+removes; d sets default; r refreshes; Esc returns to themes (Esc again closes).
+
+**Technical.**
+- Header: `PanelHero` (id `hero`) — title `root.themeName`, `detail` = wallpaper
+  count, `meta` = "browse and manage", `trailingControl` = `heroActions`
+  (`Ui/Button`s Back/Refresh/Close, `bordered: true`).
+- Body: `GridView` (id `grid`) over `wallpapersModel`, same dynamic-columns
+  recipe as the themes grid. `current: tile.model.isDefault === "1"` marks the
+  theme's default background.
+- Thumbnail source priority: local installed file (instant) → remote `preview`
+  → full `url`. GridView only instantiates visible delegates, so loading is
+  lazy, page by page. This works for thousands of images.
+- Tile taps open the preview (same as Enter) — never toggle state, so "set
+  default" by mouse lives in the preview. Do NOT put single-tap-selects back on
+  the tile.
+- Footer: `Column` (id `footer`) — `PanelSeparator`, then the `actionRow`
+  (only visible on this view: primary Install/Remove/Default on the left, bulk
+  Install all/Remove all on the right), then the dim status caption. No footer
+  bar.
+- Data: `loadWallpapers()` sets `catalogProc.command` **before**
+  `catalogProc.running = true` (bug #2), then parses TSV
+  `filename|name|code|url|sha256|installed|is_default|preview`.
+- Keyboard: movement is vertical via the computed `colCount` (GridView has no
+  `columns` property in Qt 6), and `positionViewAtIndex` is called after every
+  move to keep the selection visible.
+
+### 4. SCREEN 3 — single wallpaper preview (`view = "preview"`)
+
+**Functional.** The wallpaper full-res, aspect-fitted and rounded, with a header
+(`<code> - <name> (WxH)`, filename or loading/failed feedback in the meta line,
+installed/default pills + Back button) and a key-hint caption at the bottom.
+h/l/j/k or arrows walk wallpapers, Enter installs, d or double click sets
+default, Esc returns to the grid.
+
+**Technical.**
+- `previewView` overlays the card (`z: 10`). Header: `PanelHero` (id
+  `previewHero`) pinned to `root.heroHeight`. The resolution suffix is appended
+  only when `previewView.shown` (the visible image is the selected item's), so a
+  name is never paired with the previous resolution. The code is inline in the
+  title — no `detail` pill.
+- Double buffer: hidden `nextImage` preloads the target (`nextSource`: local
+  file if installed, else remote `url`); the swap to `previewImage` happens only
+  on `Image.Ready`, so navigating never shows a blank screen. On load error the
+  previous wallpaper stays up and the meta reports `FAILED TO LOAD <file>`. No
+  spinner.
+- Aspect-fit: the `fitted` rect is computed from the natural size
+  (`previewView.fittedSize`); the rounded mask (`MultiEffect`) is sized exactly
+  to the fitted rect, so the corners stay rounded even when the wallpaper
+  letterboxes.
+- Input: `TapHandler` — a tap outside the image goes back, a double tap on the
+  image sets default (`previewView.onImage(point)` routes the taps; the single
+  tap on the image is inert, being the first half of the double tap).
+  `previewNext(delta)` walks the selection; Esc = `closePreview()`.
+
+### 5. Technology / data flow
+
+- **Language**: UI is QML (Qt 6 Quick + Quickshell); remote data and actions are
+  bash (`manager.sh`, curl + jq + sha256); the default background is set with
+  `omarchy-theme-bg-set`.
+- **Imports**: `Quickshell`, `Quickshell.Io`, `Quickshell.Wayland`, `QtQuick`,
+  `QtQuick.Effects`, `qs.Commons`, `qs.Ui`.
+- **Shell ⇄ QML protocol**: TSV lines on stdout, one record per line with a
+  fixed column list; QML splits on `\t` and appends each row to a `ListModel`
+  (`themesModel`, `wallpapersModel`).
+- **State** lives on `root`: `view`, `selectedIndex`, `cursorActive`, `busy`,
+  `statusText`. Mouse and keyboard share one cursor through `CursorSurface`
+  (visuals from `hasCursor` / `current`, never `containsMouse`), so exactly one
+  tile is ever highlighted.
+- **Actions**: `actionInstall` / `actionRemove` / `actionSetDefault` /
+  `actionInstallAll` / `actionRemoveAll` all funnel into `runAction(args)` →
+  `actionProc`; on exit the list refreshes automatically.
+- **Inline components**: `RoundedImage` (MultiEffect mask + `Style.cornerRadius`,
+  `clip: true` is not enough), `HeroLogo` (logo.png with a nerd-font glyph
+  fallback), `Pill` (state pills, transparent fill + flat tinted border).
+- **Lint**: `qmllint -I <dir containing a `qs` symlink to
+  /usr/share/omarchy/shell>`. The residual `unqualified` /
+  `missing-property` warnings on `Style.spacing.*`, `Style.font.*`,
+  `Color.menu.*` are unavoidable (the shell's own code produces them).
 
 ## Design canon (decision 2026-09-03)
 
@@ -125,62 +315,12 @@ Rules that follow from that:
   pointless. Loading feedback is textual and instant: `LOADING <file>` /
   `FAILED TO LOAD <file>` in the hero meta line. (`BusyIndicator` does not exist
   anywhere in the shell either.)
-- Lint with `qmllint -I <dir containing a `qs` symlink to
-  /usr/share/omarchy/shell>`. The residual `unqualified` /
-  `missing-property` warnings on `Style.spacing.*`, `Style.font.*`,
-  `Color.menu.*` are unavoidable (the shell's own code produces them).
+- Corner rounding must always come from `Style.cornerRadius` (mirrors
+  Hyprland's `decoration:rounding`), never a hardcoded number. Images need the
+  `RoundedImage` inline component (`layer.effect: MultiEffect` + mask) because
+  `clip: true` on an `Image` only clips rectangularly.
 
-## Current state (history)
-
-Built and tested on this machine (branch `main`). What works today:
-
-- **Flow**: summon → `manager.sh themes` fetches `datasets.json` (only
-  `kind=="theme"` collections) and emits TSV
-  (`name|title|catalogUrl|sections|count|preview`) → pick a theme →
-  `manager.sh catalog <theme> <url>` fetches `catalog.json` and emits TSV
-  (`filename|name|code|url|sha256|installed|is_default`) → grid of tiles.
-- **Collection label**: the tiles show `root.themeLabel(model)`, i.e. the
-  readable `title` of the dataset (`"tokyo-night"` → `"Tokyo Night"`, added by
-  `build_collection` in the wallpapers repo) uppercased → `TOKYO NIGHT`. If a
-  dataset has no `title` the slug is normalized (`-`/`_` → space) as fallback.
-- **Preview strategy**: tiles load the **reduced `preview` URL** from the
-  catalog (`previews/<theme>/<section>/…-preview.webp`), not the full-res
-  image. If the wallpaper is already installed locally, the tile uses the local
-  file (instant); if a wallpaper lacks a `preview`, it falls back to its full
-  `url`. The `GridView` only instantiates visible delegates → lazy, page-by-page
-  loading. This works for thousands of images.
-- **Grid layout**: `GridView` with dynamic columns
-  (`columnsHint` = `max(2, width / minTileWidth)`), `cellWidth = width/columns`,
-  `cellHeight = cellWidth*0.9`. `minTileWidth ~ Style.space(190)` keeps
-  previews readable. Do NOT put anchors on the delegate (broke grid → single
-  column).
-- **Keyboard**: driven by `Ui/PanelKeyCatcher` (see "Design canon"). Themes view
-  — arrows/h-j-k-l move, Enter/Space selects, Esc closes. Grid — same movement
-  (vertical via a computed `colCount`, not the nonexistent `GridView.columns`),
-  Enter=fullscreen preview, x/X or Del/Backspace=remove, PageUp/PageDown=jump
-  a page of tiles, d=set default,
-  r=refresh, Esc=back to themes (Esc again closes). Preview — h/l or j/k or
-  arrows next/prev, Enter=install, Esc=back to grid. Mouse: hover moves the
-  shared cursor, **click on a tile opens the fullscreen preview** (same as
-  Enter), click outside the card closes. Since a single click on a tile already
-  switches view, "set default" by mouse lives **in the preview**: double click
-  on the wallpaper (`previewView.onImage(point)` routes the taps — a tap outside
-  the image goes back, on the image the single tap is inert because it is the
-  first half of the double tap). Do NOT put single-tap-selects back on the tile.
-- **Fullscreen preview** (Enter on a tile): full-res wallpaper at natural size
-  under a `PanelHero` whose title is `<code> - <name> (<width>x<height>)` — the
-  code inline in the title (no `detail` pill, decision 2026-09-03) and the real
-  resolution of the visible image, appended only once the image of the selected
-  item is `Ready` (`previewView.shown`) so a name is never paired with the
-  previous resolution. Filename in the meta line, installed/default pills in
-  `trailingControl`.
-  **Double-buffered**: the current image stays visible while the next one is
-  preloaded in a hidden `nextImage`; the swap happens only when the new one is
-  `Ready` (instant from the pixmap cache), so navigating never shows a blank
-  screen. On load error the previous wallpaper stays on screen and the meta line
-  reports `FAILED TO LOAD <file>`. No spinner.
-
-### Bugs fixed along the way (do not reintroduce)
+## Bugs fixed along the way (do not reintroduce)
 
 1. `fetch()` in `manager.sh` must pass extra curl args (`curl ... "$@"`, not
    only `"$1"`) — otherwise `-o` is dropped and downloads fail.
@@ -219,6 +359,10 @@ The repo root is the plugin: `omarchy plugin add
 https://github.com/emkcloud/omarchy-wallpapers-plugin.git --enable --yes`.
 Keep `manifest.json` at the repo root (required by `omarchy plugin add`).
 
+To roll a new upstream snapshot: bump `release` in `config.json`, commit and push.
+Installed clients get it with `omarchy plugin update` (a fast-forward of the git
+checkout, validated and rescanned by the shell).
+
 ## Notes for the agent
 
 - The user speaks Italian: respond and comment in Italian.
@@ -230,7 +374,3 @@ Keep `manifest.json` at the repo root (required by `omarchy plugin add`).
 - **Do NOT verify the UI with screenshots** (`grim` + reading the image): it is
   slow and expensive. After restarting the shell, just ask the user to look at
   the overlay and report the visual result.
-- Corner rounding must always come from `Style.cornerRadius` (mirrors
-  Hyprland's `decoration:rounding`), never a hardcoded number. Images need the
-  `RoundedImage` inline component (`layer.effect: MultiEffect` + mask) because
-  `clip: true` on an `Image` only clips rectangularly.
