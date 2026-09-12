@@ -10,6 +10,9 @@
 #
 #   scripts/developer.sh link     # create wrapper + enable + summon
 #   scripts/developer.sh unlink   # remove the wrapper
+#
+# `link` also clears the dataset cache, so a dev session always exercises the
+# download path.
 
 set -euo pipefail
 
@@ -31,7 +34,7 @@ usage() {
   cat >&2 <<EOF
 Usage: $0 <link|unlink>
 
-  link     Install this checkout as $DEV_ID via symlinks
+  link     Install this checkout as $DEV_ID via symlinks and clear datasets/
   unlink   Remove the $DEV_ID wrapper
 
 Repository: $REPO
@@ -56,6 +59,11 @@ cmd_link() {
     '.id = $id | .name = $name' "$REPO/manifest.json" >"$DEV_DIR/manifest.json.tmp"
   mv -f -- "$DEV_DIR/manifest.json.tmp" "$DEV_DIR/manifest.json"
   : >"$MARKER"
+
+  # Drop the dataset cache so a dev session always exercises the download path.
+  if [[ -d "$REPO/datasets" ]]; then
+    find "$REPO/datasets" -mindepth 1 -maxdepth 1 ! -name '.gitkeep' -exec rm -rf -- {} +
+  fi
 
   omarchy-shell shell rescanPlugins >/dev/null
 

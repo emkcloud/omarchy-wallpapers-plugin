@@ -434,8 +434,9 @@ bash scripts/developer.sh unlink   # remove it
 
 `link` generates the dev `manifest.json` from the official one (only `.id` and
 `.name` change) and symlinks `interface`, `scripts`, `config`, `assets`,
-`datasets`. `unlink` refuses to delete anything without the `.dev-wrapper`
-marker.
+`datasets`. It also clears `datasets/` (keeping `.gitkeep`) so every dev session
+re-downloads the dataset and exercises the full path. `unlink` refuses to delete
+anything without the `.dev-wrapper` marker.
 
 > ⚠️ **Symlink vs hot-reload.** The shell watches `~/.config/omarchy/plugins/`
 > with inotify, which does **not** follow symlinks. The dev wrapper is symlinks,
