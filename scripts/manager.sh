@@ -10,6 +10,27 @@
 
 set -euo pipefail
 
+# When the UI cancels an operation (Esc), kill the in-flight downloads and
+# clear the partial `.tmp` files they leave behind. `download_one` runs curl as
+# a child of a background job, so we must kill the grandchildren too before the
+# job shells go away.
+cleanup_children() {
+  local p k
+  for p in $(jobs -p 2>/dev/null || true); do
+    for k in $(pgrep -P "$p" 2>/dev/null || true); do
+      kill "$k" 2>/dev/null || true
+    done
+    kill "$p" 2>/dev/null || true
+  done
+  sleep 0.2
+  find "${DEST_BASE:-$HOME/.config/omarchy/backgrounds}" -name '*.tmp' -type f -delete 2>/dev/null || true
+  if [[ -n ${CACHE_BASE:-} && -d ${CACHE_BASE:-} ]]; then
+    find "$CACHE_BASE" -name '.tmp.*' -type f -delete 2>/dev/null || true
+  fi
+  exit 130
+}
+trap cleanup_children INT TERM
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)"
 PLUGIN_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
@@ -45,17 +66,25 @@ DEST_BASE="$HOME/.config/omarchy/backgrounds"
 STATE_BG="$HOME/.local/state/omarchy/current/background"
 CONFIG_BG="$HOME/.config/omarchy/current/background"
 
+# Image cache, one directory per plugin id so the official and the developer
+# installs never share files. The QML passes its manifest id via
+# WALLPAPER_MANAGER_ID; a bare CLI run falls back to the official id.
+WALLPAPER_MANAGER_ID="${WALLPAPER_MANAGER_ID:-emkcloud.wallpaper-manager}"
+CACHE_BASE="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy/$WALLPAPER_MANAGER_ID"
+
 usage() {
   cat >&2 <<EOF
 Usage: $0 <command> [args...]
 Commands:
-  themes                            List themes as TSV (name,title,url,collections,count,preview,installed,palette,description,image)
+  themes                            List themes as TSV (name,title,url,collections,count,preview,installed,palette,description,image,present)
   catalog <theme> <catalog-url>     Wallpapers of a theme as TSV
   install <theme> [filename]        Install all wallpapers, or one by filename/name/code
   random-install <theme> [count]    Install <count> (default 5) random wallpapers
   remove <theme> [filename]         Remove all wallpapers, or one by filename/name/code
   set-default <theme> <filename> <url>  Download if needed + set as current background
   random-default <theme>            Set a random wallpaper of the theme as current background
+  image <url>                       Print the local cache path of an image, downloading it if missing
+  prewarm <url>...                  Warm the image cache in the background (best-effort)
 Repository: $REPO@$REF
 EOF
 }
@@ -75,6 +104,62 @@ download_file() {
   fi
   rm -f -- "$tmp"
   return 1
+}
+
+# Local path of a remote image, downloading it once. The cache key is the URL,
+# which already carries the pinned release ref, so a release bump invalidates
+# the cache on its own. Prints the path on success, nothing on failure (the UI
+# then falls back to the remote URL). `flock` keeps concurrent callers (detail
+# + prefetch) from downloading the same image twice.
+cmd_image() {
+  local url="$1" key ext dest
+  [[ -n $url ]] || return 1
+  key="$(printf '%s' "$url" | md5sum | cut -d' ' -f 1)"
+  ext="${url%%\?*}"
+  ext="${ext##*.}"
+  case "$ext" in
+    webp | jpg | jpeg | png | gif | bmp | avif) ;;
+    *) ext="img" ;;
+  esac
+  dest="$CACHE_BASE/$key.$ext"
+
+  if [[ -s $dest ]]; then
+    printf '%s\n' "$dest"
+    return 0
+  fi
+  mkdir -p "$CACHE_BASE"
+  (
+    local tmp ok=1
+    flock -w 60 9 || exit 1
+    if [[ -s $dest ]]; then
+      printf '%s\n' "$dest"
+      exit 0
+    fi
+    tmp="$(mktemp "$CACHE_BASE/.tmp.XXXXXX")"
+    if fetch "$url" -o "$tmp"; then
+      mv -f -- "$tmp" "$dest"
+      ok=0
+    fi
+    if [[ $ok -eq 0 ]]; then
+      printf '%s\n' "$dest"
+    else
+      rm -f -- "$tmp"
+    fi
+    exit "$ok"
+  ) 9>"$dest.lock"
+}
+
+# Best-effort parallel warm-up of the image cache; no stdout.
+cmd_prewarm() {
+  (( $# > 0 )) || return 0
+  local url
+  for url in "$@"; do
+    cmd_image "$url" >/dev/null 2>&1 &
+    while (( $(jobs -rp | wc -l) >= 8 )); do
+      wait -n || true
+    done
+  done
+  wait || true
 }
 
 # Drop the cached dataset but keep the tracked `.gitkeep`.
@@ -203,23 +288,40 @@ download_one() {
   return 1
 }
 
+# Machine-readable progress on stdout, consumed by the QML footer bar:
+#   PROGRESS <theme> <installed-on-disk> <operation-total>
+# `installed-on-disk` is the definitive count (same metric as `cmd_themes`), so
+# the bar is correct even for partial themes and random installs. `.tmp` files
+# from in-flight downloads are excluded.
+emit_progress() {
+  local theme="$1" total="$2" n
+  n="$(find "$DEST_BASE/$theme" -maxdepth 1 -type f ! -name '*.tmp' 2>/dev/null | wc -l)" || true
+  n="${n//[[:space:]]/}"
+  printf 'PROGRESS\t%s\t%s\t%s\n' "$theme" "${n:-0}" "$total"
+}
+
 cmd_themes() {
   ensure_datasets || {
     echo "Failed to fetch datasets." >&2
     return 1
   }
-  local name title catalog collections count preview palette description image installed
+  local name title catalog collections count preview palette description image installed present
   # Read the jq row with a non-whitespace separator: `IFS=$'\t'` collapses
   # runs of tabs, so the empty palette field would shift the description in.
   while IFS=$'\x1f' read -r name title catalog collections count preview palette description image; do
     [[ -n $name ]] || continue
     installed=0
     if [[ -d "$DEST_BASE/$name" ]]; then
-      installed="$(find "$DEST_BASE/$name" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')"
+      installed="$(find "$DEST_BASE/$name" -maxdepth 1 -type f ! -name '*.tmp' 2>/dev/null | wc -l | tr -d ' ')"
     fi
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    # "present" = the Omarchy theme itself exists locally; install/remove of
+    # its wallpapers only makes sense when it does.
+    present=0
+    if theme_installed_in_omarchy "$name"; then present=1; fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$name" "$title" "$(rebase_url "$catalog")" "$collections" "$count" \
-      "$(rebase_url "$preview")" "$installed" "$palette" "$description" "$(rebase_url "$image")"
+      "$(rebase_url "$preview")" "$installed" "$palette" "$description" \
+      "$(rebase_url "$image")" "$present"
   done < <(jq -r '
     .themes | to_entries[]
     | select(.value.kind == "theme")
@@ -291,15 +393,20 @@ cmd_install() {
   fi
 
   mkdir -p "$DEST_BASE/$theme"
-  local fail_file i
+  local fail_file i total=${#sel_url[@]}
   fail_file="$(mktemp)"
+  emit_progress "$theme" "$total"
   for i in "${!sel_url[@]}"; do
     download_one "${sel_url[$i]}" "${sel_dest[$i]}" "${sel_sha[$i]}" 2>>"$fail_file" &
     while (( $(jobs -rp | wc -l) >= 8 )); do
       wait -n || true
+      emit_progress "$theme" "$total"
     done
   done
-  wait || true
+  while (( $(jobs -rp | wc -l) > 0 )); do
+    wait -n || true
+    emit_progress "$theme" "$total"
+  done
 
   refresh_bg_cache
   if [[ -s $fail_file ]]; then
@@ -336,13 +443,16 @@ cmd_remove() {
     fi
   done < <(jq -r '.wallpapers[] | [.filename, .id, .name, .code] | @tsv' <<<"$catalog")
 
-  local f base removed=0
+  local f base removed=0 total
+  total="$(find "$dest" -maxdepth 1 -type f ! -name '*.tmp' 2>/dev/null | wc -l)" || true
+  total="${total//[[:space:]]/}"
   for f in "$dest"/*; do
     [[ -f $f ]] || continue
     base="$(basename -- "$f")"
     if [[ ${to_remove["$base"]+set} ]]; then
       rm -f -- "$f"
       removed=$((removed + 1))
+      emit_progress "$theme" "${total:-0}"
     fi
   done
   if (( removed > 0 )) && [[ -z "$(ls -A -- "$dest" 2>/dev/null)" ]]; then
@@ -429,15 +539,20 @@ cmd_random_install() {
   done < <(jq -r '.wallpapers[].filename' "$catalog" | shuf -n "$count")
 
   mkdir -p "$DEST_BASE/$theme"
-  local fail_file i
+  local fail_file i total=${#sel_url[@]}
   fail_file="$(mktemp)"
+  emit_progress "$theme" "$total"
   for i in "${!sel_url[@]}"; do
     download_one "${sel_url[$i]}" "${sel_dest[$i]}" "${sel_sha[$i]}" 2>>"$fail_file" &
     while (( $(jobs -rp | wc -l) >= 8 )); do
       wait -n || true
+      emit_progress "$theme" "$total"
     done
   done
-  wait || true
+  while (( $(jobs -rp | wc -l) > 0 )); do
+    wait -n || true
+    emit_progress "$theme" "$total"
+  done
 
   refresh_bg_cache
   if [[ -s $fail_file ]]; then
@@ -465,5 +580,7 @@ case "$command" in
   remove) cmd_remove "$@" ;;
   set-default) cmd_set_default "$@" ;;
   random-default) cmd_random_default "$@" ;;
+  image) cmd_image "$@" ;;
+  prewarm) cmd_prewarm "$@" ;;
   *) usage; exit 1 ;;
 esac

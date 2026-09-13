@@ -70,14 +70,51 @@ Item {
   property int selectedIndex: 0
   property bool busy: false
   property string statusText: ""
-  // Theme currently being bulk-installed, so its row can flag the "installing"
-  // state (blue dot, per the mockup).
-  property string installingTheme: ""
+  // Themes search: `filterText` narrows the left list (no model when empty),
+  // `searching` routes all keys to the search editor instead of the cursor
+  // shortcuts. Entered with `/`, exited with Esc/Tab.
+  property string filterText: ""
+  property bool searching: false
+  // Set when Esc stops a running action, so `actionProc.onExited` reports a
+  // cancellation instead of a completion.
+  property bool actionCancelled: false
+  // UI mirror of "an action is running". Driven explicitly (set on start, reset
+  // on cancel/exit) instead of reading `actionProc.running`, whose value can lag
+  // behind cancellation and leave the buttons dimmed.
+  property bool actionRunning: false
+  // Tooltip on the disabled bulk buttons while another operation is running.
+  readonly property string busyHint: "Finish or press Esc to stop"
+  // Theme the running action operates on (set centrally in `runAction`), so its
+  // row can flag the "installing" state and the footer keeps showing its
+  // progress even while the user browses another theme.
+  property string actionTheme: ""
   // "Add remote source" placeholder: shows a COMING SOON label for 3s on click.
   property bool addSourceSoon: false
+  // Custom Install placeholder: same COMING SOON feedback, always clickable.
+  property bool setupSoon: false
   // Bumped whenever `themesModel` is reloaded: property bindings that read the
   // model rows (`selectedTheme`, `themeCounts`) depend on it to re-evaluate.
   property int themesRevision: 0
+
+  // ---- image cache ----------------------------------------------------------
+  // Big remote images are downloaded once by `manager.sh image` into
+  // ~/.cache/omarchy/<pluginId>/ and then loaded from disk, so switching
+  // selection never re-downloads or re-decodes the 2K original. The id comes
+  // from the injected manifest, so the official and developer installs keep
+  // separate caches.
+  readonly property string pluginId: manifest && manifest.id
+    ? String(manifest.id) : "emkcloud.wallpaper-manager"
+  property string detailImagePath: ""      // resolved local path
+  property string detailImageSource: ""    // URL that path corresponds to
+  property string pendingDetailUrl: ""     // latest URL queued for resolution
+  property string previewImagePath: ""
+  property string previewImageSource: ""
+  property string pendingPreviewUrl: ""
+  // Live progress is coalesced: `manager.sh` emits one line per wallpaper and
+  // applying each one would re-evaluate the themes screen hundreds of times
+  // during an install. Buffer the latest value and flush on a timer instead.
+  property string pendingProgressTheme: ""
+  property int pendingProgressInstalled: -1
 
   // Cursor model (see Ui/CursorSurface.qml): mouse hover and keyboard share a
   // single cursor. Items derive their visuals from `hasCursor`, never from
@@ -114,15 +151,98 @@ Item {
   readonly property int heroHeight: Math.max(hero.implicitHeight, previewHero.implicitHeight)
 
   ListModel { id: themesModel }
+  // Filtered view of `themesModel`, used by the left list only while a search
+  // is active; with no filter the list reads `themesModel` directly so live
+  // install progress keeps updating.
+  ListModel { id: themesDisplayModel }
   ListModel { id: wallpapersModel }
+
+  // What the themes list and cursor read from.
+  readonly property var activeThemesModel: filterText === "" ? themesModel : themesDisplayModel
+
+  function rebuildThemeDisplay() {
+    themesDisplayModel.clear()
+    for (var i = 0; i < themesModel.count; i++) {
+      var row = themesModel.get(i)
+      if (Model.themeMatches(row, filterText)) themesDisplayModel.append(row)
+    }
+    // ListModel.get() is not a tracked dependency: bump so `selectedTheme`
+    // (and the detail pane) re-read the rebuilt rows.
+    themesRevision++
+  }
 
   // Theme highlighted in the master-detail themes screen. Depends on
   // `themesRevision` because reading rows through `ListModel.get()` is not a
   // tracked QML dependency.
   readonly property var selectedTheme: {
     var rev = themesRevision
-    if (selectedIndex < 0 || selectedIndex >= themesModel.count) return null
-    return themesModel.get(selectedIndex)
+    if (selectedIndex < 0 || selectedIndex >= activeThemesModel.count) return null
+    return activeThemesModel.get(selectedIndex)
+  }
+
+  // Whether the highlighted theme is actually installed in Omarchy. When it is
+  // not, installing its wallpapers is impossible, so the detail pane swaps the
+  // Install buttons for a "Theme not installed" hint.
+  readonly property bool selectedThemePresent: {
+    var theme = selectedTheme
+    return theme ? String(theme.themePresent) !== "0" : false
+  }
+
+  // Bulk-action guards: "install all"/"random install" are pointless when every
+  // wallpaper is already present, just like "remove all" with nothing on disk.
+  readonly property bool selectedThemeFull: {
+    var theme = selectedTheme
+    return !!theme && (theme.count || 0) > 0 && (theme.installed || 0) >= (theme.count || 0)
+  }
+  readonly property bool selectedThemeEmpty: {
+    var theme = selectedTheme
+    return !theme || (theme.installed || 0) <= 0
+  }
+
+  // The theme open in the wallpaper list, looked up by name: on that view
+  // `selectedIndex` is a wallpaper index, so `selectedTheme` does not apply.
+  readonly property var currentTheme: themeByName(themeName)
+  readonly property bool currentThemeFull: {
+    var theme = currentTheme
+    return !!theme && (theme.count || 0) > 0 && (theme.installed || 0) >= (theme.count || 0)
+  }
+  readonly property bool currentThemeEmpty: {
+    var theme = currentTheme
+    return !theme || (theme.installed || 0) <= 0
+  }
+
+  // Footer progress follows the theme the running action works on (if any), so
+  // browsing another theme never hides the operation actually in progress.
+  readonly property var progressTheme: {
+    if (actionRunning && actionTheme !== "") {
+      var running = themeByName(actionTheme)
+      if (running) return running
+    }
+    return selectedTheme
+  }
+
+  // URL of the selected theme's big image ("" unless on the themes view).
+  readonly property string detailTargetUrl: {
+    if (view !== "themes") return ""
+    var theme = selectedTheme
+    if (!theme) return ""
+    return (theme.image && theme.image !== "") ? theme.image : theme.preview
+  }
+
+  // Detail pane sources. `detailImageShown` is the front frame (the cached
+  // file once resolved); `detailBackdrop` is the previous frame, kept visible
+  // underneath while the next one decodes so switching themes never flashes
+  // black. Both are plain properties (not bindings) so a new selection can wait
+  // for its cached file instead of dropping to the small remote preview.
+  property string detailImageShown: ""
+  property string detailBackdrop: ""
+
+  // URL of the fullscreen preview's image ("" when installed or off-view).
+  readonly property string previewTargetUrl: {
+    if (view !== "preview" && view !== "wallpapers") return ""
+    var item = currentItem()
+    if (!item || item.installed === "1") return ""
+    return item.url
   }
 
   // "N installed · M available" summary shown in the themes footer.
@@ -149,8 +269,13 @@ Item {
     selectedIndex = 0
     cursorActive = true
     statusText = ""
-    installingTheme = ""
+    filterText = ""
+    searching = false
+    actionTheme = ""
+    actionCancelled = false
+    actionRunning = false
     addSourceSoon = false
+    setupSoon = false
     loadThemes()
   }
 
@@ -175,11 +300,37 @@ Item {
     themesProc.running = true
   }
 
+  // ---- themes search --------------------------------------------------------
+  function startSearch() {
+    if (view !== "themes" || searching) return
+    searching = true
+  }
+
+  // Leave the search editor but keep the filter, so Tab can cycle back in/out.
+  function stopSearch() {
+    searching = false
+    Qt.callLater(function() { keys.forceActiveFocus() })
+  }
+
+  // Apply the filter and rebuild the visible list. The index resets to the top
+  // so the cursor always sits on a valid row.
+  function setThemeFilter(text) {
+    var next = String(text || "")
+    if (next === filterText) return
+    filterText = next
+    if (filterText !== "") rebuildThemeDisplay()
+    selectedIndex = 0
+    cursorActive = true
+    refreshDetailShown()
+    if (activeThemesModel.count > 0)
+      Qt.callLater(function() { themesList.positionViewAtIndex(0, ListView.Beginning) })
+  }
+
   // The dataset carries a readable `title` ("Tokyo Night"); the tiles show it
   // uppercased. Fallback for older datasets: normalize the slug. See Model.js.
   function selectTheme(index) {
-    if (index < 0 || index >= themesModel.count) return
-    var item = themesModel.get(index)
+    if (index < 0 || index >= activeThemesModel.count) return
+    var item = activeThemesModel.get(index)
     // Drop the previous theme's rows first: the wallpapers GridView delegates
     // survive the trip through the themes view, so leaving them alive while
     // `themeName` changes makes them re-resolve their local file path against
@@ -207,6 +358,7 @@ Item {
   }
 
   function refresh() {
+    if (actionRunning) return
     if (view === "themes") loadThemes()
     else if (view === "wallpapers") loadWallpapers()
   }
@@ -217,7 +369,7 @@ Item {
   // wallpapers screen a GridView (which has no `columns` in Qt 6, so the column
   // count is computed by hand — see AGENTS.md).
   function activeCount() {
-    return view === "themes" ? themesModel.count : wallpapersModel.count
+    return view === "themes" ? activeThemesModel.count : wallpapersModel.count
   }
 
   function positionActive(index) {
@@ -240,7 +392,13 @@ Item {
       return
     }
     if (view === "themes") {
-      stepCursor(dy !== 0 ? dy : dx)
+      var step = dy !== 0 ? dy : dx
+      // Up from the first row moves the focus into the search field.
+      if (step < 0 && selectedIndex === 0) {
+        startSearch()
+        return
+      }
+      stepCursor(step)
       return
     }
 
@@ -273,19 +431,62 @@ Item {
   }
 
   function dismissCursor() {
+    // While an action runs, Esc stops it instead of navigating away; a second
+    // Esc then closes/backs out.
+    if (actionRunning) {
+      cancelAction()
+      return
+    }
+    // An active theme filter swallows the first Esc (clear, stay put).
+    if (view === "themes" && filterText !== "") {
+      setThemeFilter("")
+      return
+    }
     if (view === "preview") closePreview()
     else if (view === "wallpapers") goBack()
     else close()
   }
 
+  // Stop the running manager.sh action (install/remove/set-default). The script
+  // traps TERM and kills its own downloads, so cancellation is immediate. The
+  // UI flag is cleared right away so the buttons re-enable without waiting for
+  // the process to actually die.
+  function cancelAction() {
+    if (!actionRunning) return
+    actionCancelled = true
+    actionRunning = false
+    actionProc.running = false
+  }
+
   function handleTextKey(text) {
+    if (view === "themes") {
+      var themeAction = Model.themeTextAction(text)
+      if (themeAction === "browse") {
+        selectTheme(selectedIndex)
+        return
+      }
+      // The "Add remote source" placeholder is a no-op message, so it stays
+      // available even while an operation runs.
+      if (themeAction === "add") {
+        triggerAddSource()
+        return
+      }
+      // Custom Install is always active, like its button.
+      if (themeAction === "custom") {
+        triggerSetup()
+        return
+      }
+      // Same rule as the buttons: no bulk task while one is running.
+      if (actionRunning) return
+      if (themeAction === "install") actionInstallTheme()
+      else if (themeAction === "uninstall") actionRemoveThemeAll()
+      else if (themeAction === "random") actionRandomInstall()
+      return
+    }
     var action = Model.textAction(text)
     if (action === "default") actionSetDefault()
     else if (action === "refresh") refresh()
-    else if (action === "install") {
-      if (view === "themes") actionInstallTheme()
-      else actionInstall()
-    }
+    else if (action === "install") actionInstall()
   }
 
   function takeCursor(index) {
@@ -293,7 +494,39 @@ Item {
     selectedIndex = index
   }
 
+  // "Add remote source" placeholder: a click or the `a` key flashes the COMING
+  // SOON label for 3s, then it reverts.
+  function triggerAddSource() {
+    addSourceSoon = true
+    addSourceReset.restart()
+  }
+
+  // Custom Install placeholder: same 3s COMING SOON feedback. Kept clickable
+  // even while an operation runs.
+  function triggerSetup() {
+    setupSoon = true
+    setupReset.restart()
+  }
+
+  // Footer key hint: the key in bold foreground, the action in dim, matching
+  // the kit's "click select / shift+click range" caption style.
+  function keyHint(key, label) {
+    return "<font color=\"" + root.foreground + "\"><b>" + key + "</b></font>"
+      + " <font color=\"" + root.dim + "\">" + label + "</font>"
+  }
+
   // ---- actions --------------------------------------------------------------
+  // Theme row by slug, or null. Reads `themesRevision` because ListModel.get()
+  // is not a tracked QML dependency on its own.
+  function themeByName(name) {
+    var rev = themesRevision
+    if (!name) return null
+    for (var i = 0; i < themesModel.count; i++) {
+      if (themesModel.get(i).name === name) return themesModel.get(i)
+    }
+    return null
+  }
+
   function currentItem() {
     if ((view !== "wallpapers" && view !== "preview")
         || selectedIndex < 0 || selectedIndex >= wallpapersModel.count)
@@ -350,7 +583,6 @@ Item {
   function actionInstallTheme() {
     var theme = selectedTheme
     if (!theme) return
-    installingTheme = theme.name
     busy = true
     setStatus("Installing all of " + theme.name + "…")
     runAction(["install", theme.name])
@@ -368,7 +600,6 @@ Item {
   function actionRandomInstall() {
     var theme = selectedTheme
     if (!theme) return
-    installingTheme = theme.name
     busy = true
     setStatus("Installing 5 random wallpapers of " + theme.name + "…")
     runAction(["random-install", theme.name, "5"])
@@ -380,10 +611,160 @@ Item {
     runAction(["remove", themeName])
   }
 
+  // Remove every installed wallpaper of the highlighted theme (themes screen).
+  function actionRemoveThemeAll() {
+    var theme = selectedTheme
+    if (!theme) return
+    busy = true
+    setStatus("Removing all of " + theme.name + "…")
+    runAction(["remove", theme.name])
+  }
+
   function runAction(args) {
+    // One action at a time: ignore new tasks while one runs (the UI disables
+    // them, but Enter/keys could still try). Re-enabled on exit/cancel.
+    if (actionRunning) return
+    // Every command takes the theme as its first argument, so the running theme
+    // is recorded centrally for the row badge and the footer.
+    actionTheme = args.length > 1 ? String(args[1]) : ""
+    actionRunning = true
     actionProc.command = scriptCmd(args)
     actionProc.running = true
   }
+
+  // Live progress from `manager.sh` (`PROGRESS` TSV lines): buffer the latest
+  // count and flush it on a timer, so a bulk install does not re-evaluate the
+  // whole screen on every downloaded file. `onExited` refreshes from the source
+  // of truth once the operation is over.
+  function applyProgress(name, installed) {
+    if (!name || !isFinite(installed)) return
+    pendingProgressTheme = name
+    pendingProgressInstalled = installed
+    progressTimer.restart()
+  }
+
+  function flushProgress() {
+    var name = pendingProgressTheme
+    var installed = pendingProgressInstalled
+    pendingProgressTheme = ""
+    pendingProgressInstalled = -1
+    if (name === "" || installed < 0) return
+    for (var i = 0; i < themesModel.count; i++) {
+      if (themesModel.get(i).name === name) {
+        if ((themesModel.get(i).installed || 0) !== installed) {
+          themesModel.setProperty(i, "installed", installed)
+          themesRevision++
+        }
+        return
+      }
+    }
+  }
+
+  // manager.sh picks the cache directory from this env var, so the official and
+  // developer installs never share files. `/usr/bin/env` passes it without
+  // relying on Process.environment's QVariantHash type.
+  function cachedCmd(args) {
+    return ["/usr/bin/env", "WALLPAPER_MANAGER_ID=" + pluginId, scriptPath].concat(args)
+  }
+
+  // ---- image cache resolution ----------------------------------------------
+  // Ask `manager.sh image` for a local path; a result only applies if its URL is
+  // still the wanted one, so fast navigation keeps the latest request only.
+  function resolveDetailImage() {
+    var url = detailTargetUrl
+    if (url === "" || url.indexOf("http") !== 0) {
+      pendingDetailUrl = ""
+      return
+    }
+    if (url === detailImageSource) {
+      // Already cached: drop any in-flight request for another theme so its
+      // result cannot overwrite this one.
+      pendingDetailUrl = ""
+      return
+    }
+    if (url === pendingDetailUrl) return
+    pendingDetailUrl = url
+    startDetailResolution()
+  }
+
+  // Detail pane source: the cached file once resolved, the small preview only
+  // on the very first paint, otherwise keep the previous frame. The backdrop
+  // layer holds that previous frame while the next one decodes.
+  function refreshDetailShown() {
+    var url = detailTargetUrl
+    if (url === "") return
+    if (detailImagePath !== "" && detailImageSource === url) {
+      var path = Util.fileUrl(detailImagePath)
+      if (detailImageShown !== path) detailImageShown = path
+      return
+    }
+    if (detailImageShown === "" && selectedTheme)
+      detailImageShown = selectedTheme.preview ? selectedTheme.preview : ""
+  }
+
+  function startDetailResolution() {
+    if (detailImageProc.running || pendingDetailUrl === "") return
+    detailImageProc.requestedUrl = pendingDetailUrl
+    detailImageProc.command = cachedCmd(["image", pendingDetailUrl])
+    detailImageProc.running = true
+  }
+
+  function resolvePreviewImage() {
+    var url = previewTargetUrl
+    if (url === "" || url.indexOf("http") !== 0) {
+      pendingPreviewUrl = ""
+      return
+    }
+    if (url === previewImageSource) {
+      pendingPreviewUrl = ""
+      return
+    }
+    if (url === pendingPreviewUrl) return
+    pendingPreviewUrl = url
+    startPreviewResolution()
+  }
+
+  function startPreviewResolution() {
+    if (previewImageProc.running || pendingPreviewUrl === "") return
+    previewImageProc.requestedUrl = pendingPreviewUrl
+    previewImageProc.command = cachedCmd(["image", pendingPreviewUrl])
+    previewImageProc.running = true
+  }
+
+  // Warm the cache for the neighbours of the selection so moving through the
+  // list finds the images already on disk. Fire-and-forget, debounced. Never
+  // while an install/remove runs: the extra downloads would compete with it and
+  // make the UI stutter.
+  function prefetchNeighbours() {
+    if (busy || actionRunning) return
+    var urls = []
+    var model
+    if (view === "themes") model = themesModel
+    else if (view === "wallpapers" || view === "preview") model = wallpapersModel
+    else return
+    var lo = Math.max(0, selectedIndex - 3)
+    var hi = Math.min(model.count - 1, selectedIndex + 3)
+    for (var i = lo; i <= hi; i++) {
+      var row = model.get(i)
+      if (!row) continue
+      if (view === "themes") {
+        var themeUrl = row.image ? row.image : row.preview
+        if (themeUrl && themeUrl.indexOf("http") === 0) urls.push(themeUrl)
+      } else if (row.installed !== "1" && row.url && row.url.indexOf("http") === 0) {
+        urls.push(row.url)
+      }
+    }
+    if (urls.length === 0) return
+    Quickshell.execDetached(cachedCmd(["prewarm"].concat(urls)))
+  }
+
+  onDetailTargetUrlChanged: {
+    resolveDetailImage()
+    refreshDetailShown()
+  }
+  onPreviewTargetUrlChanged: resolvePreviewImage()
+  onSelectedIndexChanged: prefetchTimer.restart()
+  onViewChanged: refreshDetailShown()
 
   // ---- theme loading --------------------------------------------------------
   Process {
@@ -396,9 +777,12 @@ Item {
         var rows = Model.parseThemes(text)
         for (var i = 0; i < rows.length; i++) themesModel.append(rows[i])
         root.themesRevision++
+        if (root.filterText !== "") root.rebuildThemeDisplay()
+        if (root.selectedIndex >= root.activeThemesModel.count)
+          root.selectedIndex = Math.max(0, root.activeThemesModel.count - 1)
         root.busy = false
         root.setStatus(Model.themesStatus(themesModel.count))
-        if (themesModel.count > 0)
+        if (root.activeThemesModel.count > 0)
           Qt.callLater(function() { themesList.positionViewAtIndex(root.selectedIndex, ListView.Contain) })
       }
     }
@@ -440,12 +824,89 @@ Item {
   // ---- action result --------------------------------------------------------
   Process {
     id: actionProc
+    stdout: SplitParser {
+      onRead: function(line) {
+        if (line.indexOf("PROGRESS\t") !== 0) return
+        var parts = line.split("\t")
+        if (parts.length < 3) return
+        root.applyProgress(parts[1], parseInt(parts[2], 10))
+      }
+    }
     onExited: {
+      var cancelled = root.actionCancelled
+      root.actionCancelled = false
       root.busy = false
-      root.installingTheme = ""
-      root.setStatus("Operation completed")
+      root.actionRunning = false
+      root.actionTheme = ""
+      root.progressTimer.stop()
+      root.pendingProgressTheme = ""
+      root.pendingProgressInstalled = -1
+      root.setStatus(cancelled ? "Operation cancelled" : "Operation completed")
       root.refresh()
     }
+  }
+
+  // ---- image cache processes ------------------------------------------------
+  // One in-flight request each for the detail pane and the fullscreen preview;
+  // the manifest id rides along so manager.sh picks the right cache directory.
+  Process {
+    id: detailImageProc
+
+    property string requestedUrl: ""
+
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var path = String(text || "").trim()
+        if (path !== "" && detailImageProc.requestedUrl === root.pendingDetailUrl) {
+          root.detailImageSource = detailImageProc.requestedUrl
+          root.detailImagePath = path
+          root.pendingDetailUrl = ""
+          root.refreshDetailShown()
+        }
+      }
+    }
+    onExited: Qt.callLater(root.startDetailResolution)
+  }
+
+  Process {
+    id: previewImageProc
+
+    property string requestedUrl: ""
+
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var path = String(text || "").trim()
+        if (path !== "" && previewImageProc.requestedUrl === root.pendingPreviewUrl) {
+          root.previewImageSource = previewImageProc.requestedUrl
+          root.previewImagePath = path
+          root.pendingPreviewUrl = ""
+        }
+      }
+    }
+    onExited: Qt.callLater(root.startPreviewResolution)
+  }
+
+  // Debounce: fast list navigation issues one prewarm for the final position.
+  Timer {
+    id: prefetchTimer
+    interval: 150
+    onTriggered: root.prefetchNeighbours()
+  }
+
+  // Coalesce bulk progress into ~8 updates/s instead of one per wallpaper.
+  Timer {
+    id: progressTimer
+    interval: 120
+    onTriggered: root.flushProgress()
+  }
+
+  // Reverts the custom "Custom Install" button's COMING SOON label.
+  Timer {
+    id: setupReset
+    interval: 3000
+    onTriggered: root.setupSoon = false
   }
 
   // ===========================================================================
@@ -488,8 +949,44 @@ Item {
 
       // Del/Backspace are not part of the canonical key set (PanelKeyCatcher
       // maps removal to x/X); PageUp/PageDown are not mapped either. Both
-      // bubble up here.
+      // bubble up here. While the themes search is active the catcher is
+      // blocked and this handler owns every key.
       Keys.onPressed: function(event) {
+        if (root.searching) {
+          if (event.key === Qt.Key_Escape) {
+            if (root.filterText !== "") root.setThemeFilter("")
+            else root.stopSearch()
+            event.accepted = true
+          } else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
+            root.stopSearch()
+            event.accepted = true
+          } else if (Util.editsFilter(event, root.filterText)) {
+            root.setThemeFilter(Util.editedFilter(event, root.filterText))
+            event.accepted = true
+          } else if (event.key === Qt.Key_Up) {
+            root.moveCursor(0, -1)
+            event.accepted = true
+          } else if (event.key === Qt.Key_Down) {
+            root.moveCursor(0, 1)
+            event.accepted = true
+          } else if (event.key === Qt.Key_PageUp) {
+            root.pageCursor(-1)
+            event.accepted = true
+          } else if (event.key === Qt.Key_PageDown) {
+            root.pageCursor(1)
+            event.accepted = true
+          } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+            root.activateCursor()
+            root.stopSearch()
+            event.accepted = true
+          } else if (event.text && event.text.length === 1
+              && event.text.charCodeAt(0) >= 32 && event.text.charCodeAt(0) !== 127
+              && (event.modifiers === Qt.NoModifier || event.modifiers === Qt.ShiftModifier)) {
+            root.setThemeFilter(root.filterText + event.text)
+            event.accepted = true
+          }
+          return
+        }
         if (event.key === Qt.Key_Delete || event.key === Qt.Key_Backspace) {
           root.actionRemove()
           event.accepted = true
@@ -498,6 +995,12 @@ Item {
           event.accepted = true
         } else if (event.key === Qt.Key_PageUp) {
           root.pageCursor(-1)
+          event.accepted = true
+        } else if (root.view === "themes" && event.text === "/") {
+          // The catcher forwards `/` as a text key without accepting it, so it
+          // reaches this handler: open the search without the slash landing in
+          // its own filter.
+          root.startSearch()
           event.accepted = true
         }
       }
@@ -511,11 +1014,15 @@ Item {
         anchors.bottomMargin: card.contentBottomInset
         anchors.leftMargin: card.contentLeftInset
 
+        // Search owns the keyboard entirely: let the card's fallback handle it.
+        blocked: root.searching
+
         onMoveRequested: function(dx, dy) { root.moveCursor(dx, dy) }
         onActivateRequested: root.activateCursor()
         onCloseRequested: root.dismissCursor()
         onDeleteRequested: root.actionRemove()
         onTextKey: function(text) { root.handleTextKey(text) }
+        onTabRequested: if (root.view === "themes" && !root.searching) root.startSearch()
 
         // ---- hero -----------------------------------------------------------
         Component {
@@ -558,6 +1065,8 @@ Item {
             }
 
             Button {
+              enabled: !actionRunning
+              opacity: enabled ? 1 : 0.4
               text: "Refresh"
               iconText: "󰑓"
               tooltipText: "r"
@@ -570,7 +1079,7 @@ Item {
 
             Button {
               text: "Close"
-              iconText: "󰩍"
+              iconText: "✕"
               tooltipText: "Esc"
               bordered: true
               foreground: root.foreground
@@ -638,11 +1147,124 @@ Item {
                 Math.floor((themesRow.width - themesRow.spacing) * 0.26))
               height: parent.height
 
-              ListView {
-                id: themesList
+              // Omarchy-style search field (a real box, no QQC TextField so
+              // arrow keys keep driving the cursor): `/` enters it, Esc clears
+              // then exits. The focused state leans on the accent (not the kit's
+              // fainter focus border) so active reads as active, not disabled.
+              BorderSurface {
+                id: searchBar
 
                 anchors.top: parent.top
                 anchors.topMargin: Style.space(12)
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.rightMargin: root.contentMargin
+                height: Math.max(searchGlyph.implicitHeight, searchQuery.implicitHeight)
+                  + contentTopInset + contentBottomInset
+                radius: Style.cornerRadius
+                color: root.searching ? Util.alpha(root.accent, 0.10) : "transparent"
+                borderSpec: root.searching
+                  ? Border.flat(root.accent, Math.max(1, Style.normalBorderWidth))
+                  : Border.flat(Util.alpha(root.foreground, 0.18),
+                    Math.max(1, Style.normalBorderWidth))
+                leftPadding: Style.spacing.controlPaddingX
+                rightPadding: Style.spacing.controlPaddingX
+                topPadding: Style.spacing.controlPaddingY
+                bottomPadding: Style.spacing.controlPaddingY
+
+                // Click anywhere on the field to take over the keyboard.
+                MouseArea {
+                  anchors.fill: parent
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.startSearch()
+                }
+
+                Text {
+                  id: searchGlyph
+
+                  anchors.left: parent.left
+                  anchors.leftMargin: searchBar.contentLeftInset
+                  anchors.verticalCenter: parent.verticalCenter
+                  textFormat: Text.PlainText
+                  text: "󰍉"
+                  color: root.searching ? root.accent : root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.icon
+                }
+
+                Text {
+                  id: searchQuery
+
+                  anchors.left: searchGlyph.right
+                  anchors.leftMargin: Style.space(8)
+                  anchors.right: searchClear.visible ? searchClear.left : parent.right
+                  anchors.rightMargin: searchClear.visible ? Style.space(6) : searchBar.contentRightInset
+                  anchors.verticalCenter: parent.verticalCenter
+                  textFormat: Text.PlainText
+                  text: root.filterText || "Search themes…"
+                  color: root.filterText ? root.foreground : root.dim
+                  opacity: root.filterText ? 1 : 0.58
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                  elide: Text.ElideRight
+                }
+
+                // Blinking caret, right after the typed text.
+                Rectangle {
+                  id: searchCaret
+
+                  visible: root.searching
+                  width: 1
+                  height: searchQuery.implicitHeight
+                  color: root.accent
+                  anchors.verticalCenter: parent.verticalCenter
+                  x: {
+                    var pos = root.filterText === ""
+                      ? searchQuery.x
+                      : Math.min(searchQuery.x + searchQuery.contentWidth + Style.space(2),
+                          searchQuery.x + searchQuery.width)
+                    if (searchClear.visible) pos = Math.min(pos, searchClear.x - Style.space(4))
+                    return pos
+                  }
+
+                  SequentialAnimation on opacity {
+                    running: searchCaret.visible
+                    loops: Animation.Infinite
+                    NumberAnimation { to: 0.0; duration: 500 }
+                    NumberAnimation { to: 1.0; duration: 500 }
+                  }
+                }
+
+                // Clear button: empties the filter but keeps the field focused.
+                Text {
+                  id: searchClear
+
+                  visible: root.searching && root.filterText !== ""
+                  anchors.right: parent.right
+                  anchors.rightMargin: searchBar.contentRightInset
+                  anchors.verticalCenter: parent.verticalCenter
+                  textFormat: Text.PlainText
+                  text: "✕"
+                  color: clearHover.hovered ? root.foreground : root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.icon
+
+                  HoverHandler {
+                    id: clearHover
+                    cursorShape: Qt.PointingHandCursor
+                  }
+
+                  TapHandler {
+                    onTapped: root.setThemeFilter("")
+                  }
+                }
+              }
+
+              ListView {
+                id: themesList
+
+                anchors.top: searchBar.bottom
+                anchors.topMargin: Style.space(10)
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.rightMargin: root.contentMargin
@@ -650,12 +1272,16 @@ Item {
                 anchors.bottomMargin: root.contentSpacing
                 clip: true
                 spacing: Style.space(4)
-                model: themesModel
+                model: root.activeThemesModel
 
                 delegate: Item {
                   id: themeRow
                   required property int index
                   required property var model
+
+                  // Mouse hover only lights the plate up; it never moves the
+                  // current theme. Clicking confirms the selection.
+                  property bool hovered: false
 
                   width: themesList.width
                   height: root.themeRowHeight
@@ -666,7 +1292,11 @@ Item {
                   Rectangle {
                     anchors.fill: parent
                     radius: Style.cornerRadius
-                    color: Util.alpha(root.foreground, 0.05)
+                    // Hover lightens the plate only; the CursorSurface still
+                    // paints the actual cursor/selected fill on top.
+                    color: themeRow.hovered
+                      ? Style.hoverFillFor(root.foreground, root.accent)
+                      : Util.alpha(root.foreground, 0.05)
                   }
 
                   CursorSurface {
@@ -731,7 +1361,7 @@ Item {
                       height: width
                       radius: width / 2
                       color: {
-                        if (root.busy && root.installingTheme === themeRow.model.name)
+                        if (root.busy && root.actionTheme === themeRow.model.name)
                           return root.statusInstalling
                         var state = Model.themeState(themeRow.model)
                         if (state === "installed") return root.statusInstalled
@@ -742,17 +1372,33 @@ Item {
 
                     HoverHandler {
                       cursorShape: Qt.PointingHandCursor
-                      onHoveredChanged: if (hovered) root.takeCursor(themeRow.index)
+                      onHoveredChanged: themeRow.hovered = hovered
                     }
 
+                    // Click confirms the current theme; hover only lights the
+                    // row up. Entering the wallpaper grid stays on Enter/Space
+                    // or the detail "Browse" button.
                     TapHandler {
-                      onTapped: {
-                        root.takeCursor(themeRow.index)
-                        root.selectTheme(themeRow.index)
-                      }
+                      onTapped: root.takeCursor(themeRow.index)
                     }
                   }
                 }
+              }
+
+              Text {
+                anchors.top: searchBar.bottom
+                anchors.topMargin: Style.space(24)
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.rightMargin: root.contentMargin
+                visible: root.filterText !== "" && root.activeThemesModel.count === 0
+                textFormat: Text.PlainText
+                text: "No matches for “" + root.filterText + "”"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                horizontalAlignment: Text.AlignHCenter
+                elide: Text.ElideRight
               }
 
               // Placeholder for multiple remote sources; wired when the script
@@ -764,7 +1410,7 @@ Item {
                 anchors.right: parent.right
                 anchors.rightMargin: root.contentMargin
                 anchors.bottom: parent.bottom
-                anchors.bottomMargin: Style.space(12)
+                anchors.bottomMargin: Style.space(24)
                 height: root.actionButtonHeight
 
                 // Dotted rounded outline (Rectangle borders cannot dash).
@@ -842,10 +1488,7 @@ Item {
 
                 HoverHandler { cursorShape: Qt.PointingHandCursor }
                 TapHandler {
-                  onTapped: {
-                    root.addSourceSoon = true
-                    addSourceReset.restart()
-                  }
+                  onTapped: root.triggerAddSource()
                 }
 
                 Timer {
@@ -874,7 +1517,21 @@ Item {
               clip: true
 
               // Full-bleed preview: no radius, no padding, the whole cell is
-              // the image (the cell edges are the section rules).
+              // the image (the cell edges are the section rules). Two layers:
+              // the backdrop keeps the previous frame visible while the front
+              // one decodes, so moving through themes never flashes black.
+              Image {
+                id: detailImageBack
+
+                anchors.fill: parent
+                fillMode: Image.PreserveAspectCrop
+                asynchronous: true
+                cache: true
+                source: root.detailBackdrop
+                sourceSize: Qt.size(Math.max(1, Math.ceil(width * 2)),
+                  Math.max(1, Math.ceil(height * 2)))
+              }
+
               Image {
                 id: detailImage
 
@@ -882,13 +1539,14 @@ Item {
                 fillMode: Image.PreserveAspectCrop
                 asynchronous: true
                 cache: true
-                // Full-res 2K image for the big pane; fall back to the card
-                // thumbnail when the dataset has no `image`.
-                source: {
-                  var theme = root.selectedTheme
-                  if (!theme) return ""
-                  return (theme.image && theme.image !== "") ? theme.image : theme.preview
-                }
+                // Cached local file once resolved (small remote `preview` only
+                // on the first paint). `sourceSize` caps the decode to ~2× the
+                // pane, so the pixmap cache is not evicted by a full 2K frame.
+                source: root.detailImageShown
+                sourceSize: Qt.size(Math.max(1, Math.ceil(width * 2)),
+                  Math.max(1, Math.ceil(height * 2)))
+                onStatusChanged: if (status === Image.Ready && source !== "")
+                  root.detailBackdrop = source
               }
 
               // Dark gradient so the palette, name and description stay legible
@@ -909,7 +1567,7 @@ Item {
                 anchors.bottom: parent.bottom
                 anchors.leftMargin: Style.space(22)
                 anchors.rightMargin: Style.space(22)
-                anchors.bottomMargin: Style.space(12)
+                anchors.bottomMargin: Style.space(24)
                 spacing: Style.space(22)
 
                 // Exact ink boxes: `TextMetrics.tightBoundingRect` gives the real
@@ -1021,7 +1679,7 @@ Item {
 
                     Button {
                       text: "Browse " + (root.selectedTheme ? root.selectedTheme.count : "")
-                      iconText: "󰉋"
+                      iconText: "󰉖"
                       height: root.actionButtonHeight
                       bordered: false
                       background: Util.alpha(root.foreground, 0.12)
@@ -1031,26 +1689,108 @@ Item {
                       onClicked: root.selectTheme(root.selectedIndex)
                     }
 
+                    // While another operation runs the bulk buttons stay
+                    // visually disabled and inert, but not `enabled: false`: a
+                    // disabled Qt item receives no hover, so its explanatory
+                    // tooltip would never show.
                     Button {
-                      text: "Install"
-                      iconText: "󰇚"
+                      visible: root.selectedThemePresent
+                      enabled: !root.selectedThemeFull
+                      opacity: (!enabled || root.actionRunning) ? 0.4 : 1
+                      tooltipText: root.actionRunning ? root.busyHint
+                        : (root.selectedThemeFull ? "All wallpapers already installed" : "")
+                      text: "Install (ALL)"
+                      iconText: "󰮏"
                       height: root.actionButtonHeight
                       bordered: true
                       foreground: root.foreground
                       accent: root.accent
                       fontFamily: root.fontFamily
-                      onClicked: root.actionInstallTheme()
+                      onClicked: if (!root.actionRunning) root.actionInstallTheme()
                     }
 
                     Button {
-                      text: "Random install (5)"
-                      iconText: "󰇚"
+                      visible: root.selectedThemePresent
+                      enabled: !root.selectedThemeFull
+                      opacity: (!enabled || root.actionRunning) ? 0.4 : 1
+                      tooltipText: root.actionRunning ? root.busyHint
+                        : (root.selectedThemeFull ? "All wallpapers already installed" : "")
+                      text: "Random (5)"
+                      iconText: "󰮏"
                       height: root.actionButtonHeight
                       bordered: true
                       foreground: root.foreground
                       accent: root.accent
                       fontFamily: root.fontFamily
-                      onClicked: root.actionRandomInstall()
+                      onClicked: if (!root.actionRunning) root.actionRandomInstall()
+                    }
+
+                    Button {
+                      visible: root.selectedThemePresent
+                      enabled: !root.selectedThemeEmpty
+                      opacity: (!enabled || root.actionRunning) ? 0.4 : 1
+                      tooltipText: root.actionRunning ? root.busyHint
+                        : (root.selectedThemeEmpty ? "Nothing installed" : "")
+                      text: "Uninstall"
+                      iconText: "󰱢"
+                      height: root.actionButtonHeight
+                      bordered: true
+                      foreground: root.foreground
+                      accent: root.accent
+                      fontFamily: root.fontFamily
+                      onClicked: if (!root.actionRunning) root.actionRemoveThemeAll()
+                    }
+
+                    // Custom Install placeholder for the current theme, always
+                    // clickable (also while an operation runs): for now it only
+                    // flashes COMING SOON.
+                    Button {
+                      text: root.setupSoon ? "COMING SOON (◕‿◕)" : "Custom Install"
+                      iconText: "󰒓"
+                      height: root.actionButtonHeight
+                      bordered: true
+                      foreground: root.setupSoon ? root.accent : root.foreground
+                      accent: root.accent
+                      fontFamily: root.fontFamily
+                      onClicked: root.triggerSetup()
+                    }
+
+                    // The Omarchy theme is not installed: installing its
+                    // wallpapers is impossible, so show a non-interactive
+                    // info badge (no hover, no tooltip, no action).
+                    BorderSurface {
+                      visible: !root.selectedThemePresent
+                      width: badgeRow.implicitWidth + leftPadding + rightPadding
+                      height: root.actionButtonHeight
+                      radius: Style.cornerRadius
+                      color: "transparent"
+                      borderSpec: Border.controlSpec("normal", root.foreground, root.accent)
+                      leftPadding: Style.spacing.controlPaddingX
+                      rightPadding: Style.spacing.controlPaddingX
+
+                      Row {
+                        id: badgeRow
+                        anchors.centerIn: parent
+                        spacing: Style.spacing.controlGap
+
+                        Text {
+                          textFormat: Text.PlainText
+                          text: "󰀪"
+                          color: root.foreground
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.icon
+                          anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        Text {
+                          textFormat: Text.PlainText
+                          text: "Theme not found"
+                          color: root.foreground
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.body
+                          anchors.verticalCenter: parent.verticalCenter
+                        }
+                      }
                     }
                   }
                 }
@@ -1242,12 +1982,17 @@ Item {
             Column {
               id: themeProgress
 
-              anchors.centerIn: parent
-              width: Math.min(Style.space(360), parent.width * 0.4)
+              // Aligned with the detail buttons above and stretched across the
+              // whole detail zone, up to the key-hints divider.
+              anchors.left: parent.left
+              anchors.leftMargin: themeListPane.width + Style.space(22)
+              anchors.right: hintsRule.left
+              anchors.rightMargin: Style.space(22)
+              anchors.verticalCenter: parent.verticalCenter
               spacing: Style.space(4)
 
               readonly property real ratio: {
-                var theme = root.selectedTheme
+                var theme = root.progressTheme
                 if (!theme || !theme.count) return 0
                 return Math.max(0, Math.min(1, (theme.installed || 0) / theme.count))
               }
@@ -1262,9 +2007,9 @@ Item {
                   anchors.left: parent.left
                   textFormat: Text.PlainText
                   text: {
-                    var theme = root.selectedTheme
+                    var theme = root.progressTheme
                     if (!theme) return ""
-                    return theme.name + " · " + (theme.installed || 0) + "/" + (theme.count || 0)
+                    return Model.themeLabel(theme) + " · " + (theme.installed || 0) + "/" + (theme.count || 0)
                   }
                   color: root.dim
                   font.family: root.fontFamily
@@ -1304,10 +2049,35 @@ Item {
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
               textFormat: Text.StyledText
-              text: "<b>enter</b> browse   <b>i</b> install   <b>esc</b> close"
+              text: actionRunning
+                ? root.keyHint("esc", "stop")
+                : root.keyHint("enter", "browse") + "   " + root.keyHint("i", "install")
+                  + "   " + root.keyHint("/", "search") + "   " + root.keyHint("esc", "close")
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
+            }
+
+            // Vertical rules, as in the original mockup: the first continues
+            // the master list's right border into the footer, the second
+            // separates the progress from the key hints.
+            Rectangle {
+              anchors.top: parent.top
+              anchors.bottom: parent.bottom
+              x: themeListPane.width - 1
+              width: 1
+              color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12)
+            }
+
+            Rectangle {
+              id: hintsRule
+
+              anchors.top: parent.top
+              anchors.bottom: parent.bottom
+              anchors.right: themesHints.left
+              anchors.rightMargin: Style.space(20)
+              width: 1
+              color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12)
             }
           }
 
@@ -1324,8 +2094,10 @@ Item {
               spacing: Style.spacing.controlGap
 
               Button {
+                enabled: !actionRunning
+                opacity: enabled ? 1 : 0.4
                 text: "Install"
-                iconText: "󰚌"
+                iconText: "󰮏"
                 tooltipText: "Enter in preview"
                 bordered: true
                 foreground: root.foreground
@@ -1335,8 +2107,10 @@ Item {
               }
 
               Button {
+                enabled: !actionRunning
+                opacity: enabled ? 1 : 0.4
                 text: "Remove"
-                iconText: "󰇸"
+                iconText: "󰩺"
                 tooltipText: "x"
                 bordered: true
                 foreground: root.foreground
@@ -1346,8 +2120,10 @@ Item {
               }
 
               Button {
+                enabled: !actionRunning
+                opacity: enabled ? 1 : 0.4
                 text: "Default"
-                iconText: "󰉁"
+                iconText: "󰋯"
                 tooltipText: "d"
                 bordered: true
                 foreground: root.foreground
@@ -1364,33 +2140,41 @@ Item {
               spacing: Style.spacing.controlGap
 
               Button {
+                enabled: !root.currentThemeFull
+                opacity: (!enabled || root.actionRunning) ? 0.4 : 1
+                tooltipText: root.actionRunning ? root.busyHint
+                  : (root.currentThemeFull ? "All wallpapers already installed" : "")
                 text: "Install all"
-                iconText: "󰑬"
+                iconText: "󰧩"
                 bordered: true
                 foreground: root.foreground
                 accent: root.accent
                 fontFamily: root.fontFamily
-                onClicked: root.actionInstallAll()
+                onClicked: if (!root.actionRunning) root.actionInstallAll()
               }
 
               Button {
+                enabled: !root.currentThemeEmpty
+                opacity: (!enabled || root.actionRunning) ? 0.4 : 1
+                tooltipText: root.actionRunning ? root.busyHint
+                  : (root.currentThemeEmpty ? "Nothing installed" : "")
                 text: "Remove all"
-                iconText: "󰇸"
+                iconText: "󰱢"
                 bordered: true
                 foreground: root.foreground
                 accent: root.accent
                 fontFamily: root.fontFamily
-                onClicked: root.actionRemoveAll()
+                onClicked: if (!root.actionRunning) root.actionRemoveAll()
               }
             }
           }
 
           Text {
             id: statusLabel
-            // On the themes view the summary/progress row already reports the
-            // state; the caption only adds value while loading or running an
-            // operation.
-            visible: text !== "" && (root.view !== "themes" || root.busy)
+            // Never on the themes view: the summary/progress row already
+            // reports the state, and this caption would grow the footer and
+            // shove the content up when an operation starts.
+            visible: text !== "" && root.view !== "themes"
             width: parent.width
             textFormat: Text.PlainText
             text: root.statusText
@@ -1417,13 +2201,17 @@ Item {
           // last source that failed to load, so the hero meta can report it
           property string failedSource: ""
 
-          // target wallpaper, preloaded in background while the current one stays up
+          // target wallpaper, preloaded in background while the current one
+          // stays up. Remote images come from the disk cache once resolved, so
+          // stepping through the preview no longer re-downloads the 2K original.
           readonly property string nextSource: {
             var item = root.currentItem()
             if (!item) return ""
-            return item.installed === "1"
-              ? Util.fileUrl(root.backgroundsDir + "/" + root.themeName + "/" + item.filename)
-              : item.url
+            if (item.installed === "1")
+              return Util.fileUrl(root.backgroundsDir + "/" + root.themeName + "/" + item.filename)
+            if (root.previewImagePath !== "" && root.previewImageSource === item.url)
+              return Util.fileUrl(root.previewImagePath)
+            return item.url
           }
 
           // true only when the visible image is the one of the selected item,

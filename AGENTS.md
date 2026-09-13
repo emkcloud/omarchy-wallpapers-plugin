@@ -112,7 +112,7 @@ before the `PanelWindow`. This is the source order and where each concern lives:
 | Source order | ids / functions | Role |
 |---|---|---|
 | paths | `pluginRoot`, `configFile`, `pluginPaths`, `scriptPath`, `logoPath` | resolve the layout from `config/config.json` `paths`, from the plugin root |
-| state | `view`, `themeName`, `themeCatalogUrl`, `selectedIndex`, `cursorActive`, `busy`, `statusText`, `themesModel`, `wallpapersModel` | single source of truth |
+| state | `view`, `themeName`, `themeCatalogUrl`, `selectedIndex`, `cursorActive`, `busy`, `statusText`, `filterText`, `searching`, `themesModel`, `wallpapersModel` | single source of truth |
 | tokens | `foreground`, `background`, `accent`, `urgent`, `scrim`, `dim`, `borderSpec`, `contentMargin`, `contentSpacing`, `minTileWidth`, `themeTileWidth`, `tileGap`, `tileInset`, `fontFamily`, `heroHeight` | `Color.menu.*` / `Style.*` aliases |
 | components | `RoundedImage`, `HeroLogo`, `Pill` | atoms in `components/`, shared by both grids and the preview |
 | startup / termination | `open()`, `close()`, `onOpenedChanged` | summon / hide |
@@ -301,16 +301,28 @@ default, Esc returns to the grid.
   the pinned ref: when `release` changes the cache is wiped and rebuilt. Once
   cached, listing needs no network; wallpapers, previews and set-default stay
   remote. A failed `datasets.json` exits non-zero (no live fallback).
+- **Image cache**: the big remote images (theme detail pane, fullscreen
+  preview) are downloaded once by `manager.sh image` into
+  `${XDG_CACHE_HOME:-$HOME/.cache}/omarchy/<pluginId>/` and then loaded from
+  disk, so switching selection never re-downloads or re-decodes a 2K frame.
+  The key is `md5(url)` and the URL already carries the release ref, so a
+  release bump invalidates the cache on its own. The QML resolves the selected
+  image through `detailImageProc` / `previewImageProc` (latest request wins,
+  `flock` on the script side) and prefetches the ±3 neighbours via `prewarm`.
+  The directory is per plugin id (`WALLPAPER_MANAGER_ID`, set from
+  `manifest.id`), so the official and developer installs never share files.
 - **`manager.sh` command surface**:
 
   | command | args | stdout (TSV) |
   |---|---|---|
-  | `themes` | — | `name  title  catalogUrl  collections  count  preview  installed  palette  description  image` (`preview` = card thumbnail, `image` = 2K for the detail pane; `palette` = comma-separated hex, read straight from the dataset — no hardcoded fallback) |
+  | `themes` | — | `name  title  catalogUrl  collections  count  preview  installed  palette  description  image  present` (`preview` = card thumbnail, `image` = 2K for the detail pane; `palette` = comma-separated hex, read straight from the dataset — no hardcoded fallback; `present` = the Omarchy theme exists locally) |
   | `catalog` | `<theme> <catalog-url>` | `filename  name  code  url  sha256  installed  isDefault  preview` (local catalog; the URL arg is only a fallback) |
-  | `install` | `<theme> [selector]` | human text; no selector = all, selector matches id/name/code/filename |
-  | `random-install` | `<theme> [count]` | human text; installs `<count>` random wallpapers (default 5) |
-  | `remove` | `<theme> [selector]` | human text; same selector matching |
+  | `install` | `<theme> [selector]` | human text; no selector = all, selector matches id/name/code/filename. Streams `PROGRESS\t<theme>\t<installed>\t<total>` lines while it runs |
+  | `random-install` | `<theme> [count]` | human text; installs `<count>` random wallpapers (default 5). Same `PROGRESS` stream |
+  | `remove` | `<theme> [selector]` | human text; same selector matching. Same `PROGRESS` stream (count decreases) |
   | `set-default` | `<theme> <filename> <url>` | human text; downloads if missing then `omarchy-theme-bg-set` |
+  | `image` | `<url>` | local cache path of the image (downloads it once); empty on failure |
+  | `prewarm` | `<url>...` | nothing; warms the image cache in the background (best-effort) |
 
   (`installed` / `isDefault` are `"0"`/`"1"`; `manager.sh` prints the default
   column as `current`, the QML model names it `isDefault`.)
@@ -323,7 +335,22 @@ default, Esc returns to the grid.
   tile is ever highlighted.
 - **Actions**: `actionInstall` / `actionRemove` / `actionSetDefault` /
   `actionInstallAll` / `actionRemoveAll` all funnel into `runAction(args)` →
-  `actionProc`; on exit the list refreshes automatically.
+  `actionProc`; on exit the list refreshes automatically. **One operation at a
+  time**: `runAction` ignores a new task while `actionProc` runs, the bulk
+  buttons are dimmed and inert (but stay `enabled`, so their explanatory tooltip
+  can show — a disabled Qt item receives no hover), and Esc cancels the running
+  process. `runAction` records the theme argument in `actionTheme`, so the row
+  badge and the footer progress (`progressTheme`) keep showing the theme being
+  worked on even when the user browses another one.
+- **Themes search**: `/` (or Tab) opens the search editor; typing filters the
+  left list by name/title through `Model.themeMatches`. The list binds to
+  `activeThemesModel` — `themesModel` when the filter is empty, else the
+  JS-rebuilt `themesDisplayModel` (Menu-style rebuild, no `QQC.TextField`, so
+  arrow keys keep driving the cursor). While `searching` the `PanelKeyCatcher`
+  is `blocked` and the card's `Keys.onPressed` fallback owns every key:
+  printable chars append, Backspace/Ctrl+Backspace/Ctrl+U use
+  `Util.editsFilter`, arrows/PageUp/PageDown navigate, Enter browses, Esc clears
+  the filter then exits. Footer counts stay global.
 - **Local components**: `components/RoundedImage.qml` (MultiEffect mask +
   `Style.cornerRadius`, `clip: true` is not enough), `components/HeroLogo.qml`
   (assets/images/logo.png with a nerd-font glyph fallback),

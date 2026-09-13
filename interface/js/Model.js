@@ -25,7 +25,8 @@ function parseThemes(raw) {
         installed: parts.length > 6 ? parseInt(parts[6], 10) : 0,
         palette: parts.length > 7 ? parts[7] : "",
         description: parts.length > 8 ? parts[8] : "",
-        image: parts.length > 9 ? parts[9] : ""
+        image: parts.length > 9 ? parts[9] : "",
+        themePresent: parts.length > 10 ? parts[10] : "1"
       })
   }
   return out
@@ -61,6 +62,18 @@ function parseCatalog(raw) {
 function themeLabel(item) {
   var label = item && item.title ? item.title : (item ? item.name : "")
   return String(label).replace(/[-_]+/g, " ").toUpperCase()
+}
+
+// Case-insensitive substring match of a search query against the theme name
+// and title. Hyphens/underscores are treated as spaces on both sides, so
+// "tokyo night" matches the `tokyo-night` slug.
+function themeMatches(item, query) {
+  var q = String(query || "").trim().toLowerCase().replace(/[-_]+/g, " ")
+  if (!q) return true
+  if (!item) return false
+  var label = themeLabel(item).toLowerCase()
+  var name = String(item.name || "").replace(/[-_]+/g, " ").toLowerCase()
+  return label.indexOf(q) !== -1 || name.indexOf(q) !== -1
 }
 
 // --- theme state -----------------------------------------------------------
@@ -111,6 +124,21 @@ function textAction(text) {
   if (text === "d" || text === "D") return "default"
   if (text === "r" || text === "R") return "refresh"
   if (text === "i" || text === "I") return "install"
+  return ""
+}
+
+// Themes-list shortcuts, alphabetical: A add remote source (placeholder),
+// B browse, C custom install (placeholder), I install, R random install,
+// U uninstall.
+function themeTextAction(text) {
+  switch (String(text).toLowerCase()) {
+    case "a": return "add"
+    case "b": return "browse"
+    case "c": return "custom"
+    case "i": return "install"
+    case "r": return "random"
+    case "u": return "uninstall"
+  }
   return ""
 }
 
