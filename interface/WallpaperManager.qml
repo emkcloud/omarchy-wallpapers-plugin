@@ -82,8 +82,6 @@ Item {
   // on cancel/exit) instead of reading `actionProc.running`, whose value can lag
   // behind cancellation and leave the buttons dimmed.
   property bool actionRunning: false
-  // Tooltip on the disabled bulk buttons while another operation is running.
-  readonly property string busyHint: "Finish or press Esc to stop"
   // Theme the running action operates on (set centrally in `runAction`), so its
   // row can flag the "installing" state and the footer keeps showing its
   // progress even while the user browses another theme.
@@ -255,6 +253,20 @@ Item {
       else available++
     }
     return { "installed": installed, "available": available }
+  }
+
+  // Global store across every theme: total wallpapers and how many are
+  // installed locally. Shown as a pill in the hero, before Refresh.
+  readonly property var globalCounts: {
+    var rev = themesRevision
+    var wallpapers = 0
+    var installed = 0
+    for (var i = 0; i < themesModel.count; i++) {
+      var theme = themesModel.get(i)
+      wallpapers += (theme.count || 0)
+      installed += (theme.installed || 0)
+    }
+    return { "wallpapers": wallpapers, "installed": installed }
   }
 
   // Stable status-dot colors: brand green/blue (assets/images/logo.png palette)
@@ -1056,7 +1068,6 @@ Item {
               visible: root.view === "wallpapers"
               text: "Back"
               iconText: "󰁍"
-              tooltipText: "Esc"
               bordered: true
               foreground: root.foreground
               accent: root.accent
@@ -1064,12 +1075,58 @@ Item {
               onClicked: root.goBack()
             }
 
+            // Global store: total wallpapers and installed count across every
+            // theme. Height matches a sibling Button's implicitHeight so the
+            // pill lines up with the kit controls (the kit has no shared
+            // "control height" applied to Button).
+            BorderSurface {
+              width: storeRow.implicitWidth + leftPadding + rightPadding
+              height: refreshButton.implicitHeight
+              radius: Style.cornerRadius
+              color: "transparent"
+              borderSpec: Border.controlSpec("normal", root.foreground, root.accent)
+              leftPadding: Style.spacing.controlPaddingX
+              rightPadding: Style.spacing.controlPaddingX
+
+              Row {
+                id: storeRow
+                anchors.centerIn: parent
+                spacing: Style.space(10)
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: root.globalCounts.wallpapers + " wallpapers"
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Rectangle {
+                  width: Math.max(1, Style.normalBorderWidth)
+                  height: storeRow.implicitHeight
+                  color: Util.alpha(root.foreground, 0.25)
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: root.globalCounts.installed + " installed"
+                  color: root.statusInstalled
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+              }
+            }
+
             Button {
+              id: refreshButton
+
               enabled: !actionRunning
               opacity: enabled ? 1 : 0.4
               text: "Refresh"
               iconText: "󰑓"
-              tooltipText: "r"
               bordered: true
               foreground: root.foreground
               accent: root.accent
@@ -1080,7 +1137,6 @@ Item {
             Button {
               text: "Close"
               iconText: "✕"
-              tooltipText: "Esc"
               bordered: true
               foreground: root.foreground
               accent: root.accent
@@ -1689,16 +1745,10 @@ Item {
                       onClicked: root.selectTheme(root.selectedIndex)
                     }
 
-                    // While another operation runs the bulk buttons stay
-                    // visually disabled and inert, but not `enabled: false`: a
-                    // disabled Qt item receives no hover, so its explanatory
-                    // tooltip would never show.
                     Button {
                       visible: root.selectedThemePresent
-                      enabled: !root.selectedThemeFull
-                      opacity: (!enabled || root.actionRunning) ? 0.4 : 1
-                      tooltipText: root.actionRunning ? root.busyHint
-                        : (root.selectedThemeFull ? "All wallpapers already installed" : "")
+                      enabled: !root.actionRunning && !root.selectedThemeFull
+                      opacity: enabled ? 1 : 0.4
                       text: "Install (ALL)"
                       iconText: "󰮏"
                       height: root.actionButtonHeight
@@ -1706,15 +1756,13 @@ Item {
                       foreground: root.foreground
                       accent: root.accent
                       fontFamily: root.fontFamily
-                      onClicked: if (!root.actionRunning) root.actionInstallTheme()
+                      onClicked: root.actionInstallTheme()
                     }
 
                     Button {
                       visible: root.selectedThemePresent
-                      enabled: !root.selectedThemeFull
-                      opacity: (!enabled || root.actionRunning) ? 0.4 : 1
-                      tooltipText: root.actionRunning ? root.busyHint
-                        : (root.selectedThemeFull ? "All wallpapers already installed" : "")
+                      enabled: !root.actionRunning && !root.selectedThemeFull
+                      opacity: enabled ? 1 : 0.4
                       text: "Random (5)"
                       iconText: "󰮏"
                       height: root.actionButtonHeight
@@ -1722,15 +1770,13 @@ Item {
                       foreground: root.foreground
                       accent: root.accent
                       fontFamily: root.fontFamily
-                      onClicked: if (!root.actionRunning) root.actionRandomInstall()
+                      onClicked: root.actionRandomInstall()
                     }
 
                     Button {
                       visible: root.selectedThemePresent
-                      enabled: !root.selectedThemeEmpty
-                      opacity: (!enabled || root.actionRunning) ? 0.4 : 1
-                      tooltipText: root.actionRunning ? root.busyHint
-                        : (root.selectedThemeEmpty ? "Nothing installed" : "")
+                      enabled: !root.actionRunning && !root.selectedThemeEmpty
+                      opacity: enabled ? 1 : 0.4
                       text: "Uninstall"
                       iconText: "󰱢"
                       height: root.actionButtonHeight
@@ -1738,7 +1784,7 @@ Item {
                       foreground: root.foreground
                       accent: root.accent
                       fontFamily: root.fontFamily
-                      onClicked: if (!root.actionRunning) root.actionRemoveThemeAll()
+                      onClicked: root.actionRemoveThemeAll()
                     }
 
                     // Custom Install placeholder for the current theme, always
@@ -2098,7 +2144,6 @@ Item {
                 opacity: enabled ? 1 : 0.4
                 text: "Install"
                 iconText: "󰮏"
-                tooltipText: "Enter in preview"
                 bordered: true
                 foreground: root.foreground
                 accent: root.accent
@@ -2111,7 +2156,6 @@ Item {
                 opacity: enabled ? 1 : 0.4
                 text: "Remove"
                 iconText: "󰩺"
-                tooltipText: "x"
                 bordered: true
                 foreground: root.foreground
                 accent: root.accent
@@ -2124,7 +2168,6 @@ Item {
                 opacity: enabled ? 1 : 0.4
                 text: "Default"
                 iconText: "󰋯"
-                tooltipText: "d"
                 bordered: true
                 foreground: root.foreground
                 accent: root.accent
@@ -2140,31 +2183,27 @@ Item {
               spacing: Style.spacing.controlGap
 
               Button {
-                enabled: !root.currentThemeFull
-                opacity: (!enabled || root.actionRunning) ? 0.4 : 1
-                tooltipText: root.actionRunning ? root.busyHint
-                  : (root.currentThemeFull ? "All wallpapers already installed" : "")
+                enabled: !root.actionRunning && !root.currentThemeFull
+                opacity: enabled ? 1 : 0.4
                 text: "Install all"
                 iconText: "󰧩"
                 bordered: true
                 foreground: root.foreground
                 accent: root.accent
                 fontFamily: root.fontFamily
-                onClicked: if (!root.actionRunning) root.actionInstallAll()
+                onClicked: root.actionInstallAll()
               }
 
               Button {
-                enabled: !root.currentThemeEmpty
-                opacity: (!enabled || root.actionRunning) ? 0.4 : 1
-                tooltipText: root.actionRunning ? root.busyHint
-                  : (root.currentThemeEmpty ? "Nothing installed" : "")
+                enabled: !root.actionRunning && !root.currentThemeEmpty
+                opacity: enabled ? 1 : 0.4
                 text: "Remove all"
                 iconText: "󰱢"
                 bordered: true
                 foreground: root.foreground
                 accent: root.accent
                 fontFamily: root.fontFamily
-                onClicked: if (!root.actionRunning) root.actionRemoveAll()
+                onClicked: root.actionRemoveAll()
               }
             }
           }
@@ -2273,7 +2312,6 @@ Item {
               Button {
                 text: "Back"
                 iconText: "󰁍"
-                tooltipText: "Esc"
                 bordered: true
                 foreground: root.foreground
                 accent: root.accent

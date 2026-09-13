@@ -337,11 +337,10 @@ default, Esc returns to the grid.
   `actionInstallAll` / `actionRemoveAll` all funnel into `runAction(args)` →
   `actionProc`; on exit the list refreshes automatically. **One operation at a
   time**: `runAction` ignores a new task while `actionProc` runs, the bulk
-  buttons are dimmed and inert (but stay `enabled`, so their explanatory tooltip
-  can show — a disabled Qt item receives no hover), and Esc cancels the running
-  process. `runAction` records the theme argument in `actionTheme`, so the row
-  badge and the footer progress (`progressTheme`) keep showing the theme being
-  worked on even when the user browses another one.
+  buttons are disabled (and dimmed) until it finishes, and Esc cancels the
+  running process. `runAction` records the theme argument in `actionTheme`, so
+  the row badge and the footer progress (`progressTheme`) keep showing the theme
+  being worked on even when the user browses another one.
 - **Themes search**: `/` (or Tab) opens the search editor; typing filters the
   left list by name/title through `Model.themeMatches`. The list binds to
   `activeThemesModel` — `themesModel` when the filter is empty, else the
