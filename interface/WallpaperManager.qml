@@ -269,10 +269,11 @@ Item {
     return { "wallpapers": wallpapers, "installed": installed }
   }
 
-  // Stable status-dot colors: brand green/blue (assets/images/logo.png palette)
-  // for installed/installing, dim for available.
-  readonly property color statusInstalled: "#05DF72"
-  readonly property color statusInstalling: "#155DFC"
+  // Status colors follow the Omarchy theme accent (Color.accent) instead of a
+  // fixed brand color, so they adapt to the active theme. Installed reads at
+  // full accent, installing/partial at a dimmer tint, available stays neutral.
+  readonly property color statusInstalled: root.accent
+  readonly property color statusInstalling: Util.alpha(root.accent, 0.55)
 
   // ---- lifecycle ------------------------------------------------------------
   function open(payload) {
