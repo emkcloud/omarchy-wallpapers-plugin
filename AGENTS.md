@@ -263,8 +263,9 @@ preview; x/X or Del removes; d sets default; r refreshes; Esc returns to themes
   lazy, page by page. This works for thousands of images.
 - Tile overlays mirror the preview, scaled with the thumbnail: the installed
   disc top-right (accent when on disk, dim otherwise; `disc = clamp(width *
-  0.075, Style.space(9), Style.space(16))`) and the `DEFAULT` `Pill` top-left on
-  the theme's default wallpaper. The shared `components/Pill.qml` exposes
+  0.075, Style.space(9), Style.space(16))`) and the `DEFAULT` `Pill` centered on
+  the theme's default wallpaper (the corners stay free for the selection
+  checkbox). The shared `components/Pill.qml` exposes
   `labelPixelSize` / `hPadding` / `vPadding` so it can shrink to thumbnail size.
 - Tile taps open the preview (same as Enter) — never toggle state, so "set
   default" by mouse lives in the preview. Do NOT put single-tap-selects back on

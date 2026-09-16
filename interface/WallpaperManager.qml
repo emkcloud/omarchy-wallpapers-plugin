@@ -2462,14 +2462,12 @@ Item {
                 }
               }
 
-              // "DEFAULT" pill, top-left of the thumbnail, on the theme's
+              // "DEFAULT" pill, centered on the thumbnail, on the theme's
               // default wallpaper (dark fill so the accent reads on any image).
+              // The corners stay free for the selection checkbox.
               Pill {
                 visible: String(tile.model.isDefault) === "1"
-                anchors.top: parent.top
-                anchors.topMargin: root.tileInset + Style.space(8)
-                anchors.left: parent.left
-                anchors.leftMargin: root.tileInset + Style.space(8)
+                anchors.centerIn: parent
                 width: implicitWidth
                 height: implicitHeight
                 label: "DEFAULT"
