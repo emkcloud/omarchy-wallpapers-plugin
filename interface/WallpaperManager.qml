@@ -616,6 +616,11 @@ Item {
       return
     }
 
+    // Up from the first row moves the focus into the search field.
+    if (dy < 0 && selectedIndex < grid.colCount) {
+      startSearch()
+      return
+    }
     stepCursor(dx !== 0 ? dx : dy * grid.colCount)
   }
 
