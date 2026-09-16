@@ -2434,11 +2434,26 @@ Item {
           }
         }
 
+        // Rule between the search row and the grid. Same `contentSpacing` above
+        // and below, so the search field sits centered between the hero rule and
+        // this one.
+        PanelSeparator {
+          id: wallpapersSearchRule
+
+          visible: root.view === "wallpapers"
+          anchors.top: wallpapersSearchRow.bottom
+          anchors.topMargin: root.contentSpacing
+          anchors.left: parent.left
+          anchors.leftMargin: -card.leftPadding
+          width: card.width - card.borderLeft - card.borderRight
+          foreground: root.foreground
+        }
+
         GridView {
           id: grid
 
           visible: root.view === "wallpapers"
-          anchors.top: wallpapersSearchRow.bottom
+          anchors.top: wallpapersSearchRule.bottom
           anchors.topMargin: root.contentSpacing
           anchors.left: parent.left
           anchors.right: parent.right
