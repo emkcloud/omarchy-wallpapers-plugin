@@ -51,7 +51,7 @@ omarchy-shell shell summon emkcloud.wallpaper-manager '{}'
 Update to the latest snapshot with:
 
 ```bash
-omarchy plugin update emkcloud.wallpaper-manager
+omarchy plugin update emkcloud.wallpaper-manager --yes
 ```
 
 ## How it works
