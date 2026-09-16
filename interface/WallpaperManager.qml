@@ -87,9 +87,20 @@ Item {
   property int lastThemeIndex: 0
   // Wallpaper cursor per theme (`themeName` -> index), so re-entering a theme
   // resumes where it was left instead of jumping back to the first tile.
-  property var wallpaperSelection: ({})
+  property var wallpaperCursorByTheme: ({})
   property int pendingWallpaperIndex: 0
   property bool pendingWallpaperSelect: false
+  // Multi-select of the wallpapers screen: filename -> true. `selectionRevision`
+  // makes the plain-object map a tracked dependency for the tile checkboxes.
+  property var checkedWallpapers: ({})
+  property int selectionRevision: 0
+  // Set while a selection-based install/remove runs: the checks are cleared when
+  // it finishes (not before, so the grid keeps showing what was acted on).
+  property bool actionClearsChecks: false
+  // PanelKeyCatcher emits `returnRequested` (Enter) just before `activateRequested`,
+  // and `activateRequested` alone for Space: the flag keeps Enter on "activate"
+  // and lets Space toggle the checkbox on the wallpapers screen.
+  property bool enterHandled: false
   // A panel appearing under a stationary pointer re-hovers the tile/grid below
   // it, which would steal the cursor just restored by goBack/closePreview. Hover
   // selection is armed again a beat after every view switch (see `hoverGate`).
@@ -433,6 +444,8 @@ Item {
     actionTheme = ""
     actionCancelled = false
     actionRunning = false
+    actionClearsChecks = false
+    clearWallpaperSelection()
     addSourceSoon = false
     setupSoon = false
     loadThemes()
@@ -537,10 +550,12 @@ Item {
     // the new theme and log a pile of "Cannot open" warnings.
     wallpapersModel.clear()
     wallpaperFilterText = ""
+    // Checks belong to the theme being left.
+    clearWallpaperSelection()
     themeName = item.name
     themeCatalogUrl = item.catalogUrl
     view = "wallpapers"
-    var remembered = wallpaperSelection[item.name]
+    var remembered = wallpaperCursorByTheme[item.name]
     pendingWallpaperIndex = (remembered === undefined || remembered === null)
       ? 0 : remembered
     pendingWallpaperSelect = true
@@ -559,7 +574,7 @@ Item {
 
   function goBack() {
     // Remember the wallpaper cursor so re-entering this theme resumes here.
-    if (themeName !== "") wallpaperSelection[themeName] = selectedIndex
+    if (themeName !== "") wallpaperCursorByTheme[themeName] = selectedIndex
     view = "themes"
     selectedIndex = Math.max(0, Math.min(activeThemesModel.count - 1, lastThemeIndex))
     cursorActive = true
@@ -652,6 +667,18 @@ Item {
     else actionInstall()
   }
 
+  // Space: on the wallpapers screen it checks/unchecks the cursor tile; on the
+  // other screens it behaves like Enter.
+  function spaceCursor() {
+    if (actionRunning) return
+    if (view === "wallpapers") {
+      var item = currentItem()
+      if (item) toggleWallpaperCheck(item.filename)
+      return
+    }
+    activateCursor()
+  }
+
   function dismissCursor() {
     // While an action runs, Esc stops it instead of navigating away; a second
     // Esc then closes/backs out.
@@ -734,9 +761,44 @@ Item {
     setupReset.restart()
   }
 
-  // Wallpaper multi-select: buttons are in place, behaviour comes next.
-  function selectAllWallpapers() {}
-  function clearWallpaperSelection() {}
+  // ---- wallpaper multi-select ----------------------------------------------
+  // The checks are keyed by filename. Reading `selectionRevision` inside the
+  // helpers is what makes the plain-object map re-evaluate the tile bindings.
+  function isWallpaperChecked(filename) {
+    var rev = selectionRevision
+    return checkedWallpapers[String(filename)] === true
+  }
+
+  function toggleWallpaperCheck(filename) {
+    var key = String(filename)
+    if (checkedWallpapers[key]) delete checkedWallpapers[key]
+    else checkedWallpapers[key] = true
+    selectionRevision++
+  }
+
+  function checkedFilenames() {
+    var rev = selectionRevision
+    var out = []
+    for (var key in checkedWallpapers) {
+      if (checkedWallpapers[key]) out.push(key)
+    }
+    return out
+  }
+
+  // Check every row the grid is currently showing (so an active filter narrows
+  // "Select all" to the visible results).
+  function selectAllWallpapers() {
+    for (var i = 0; i < activeWallpapersModel.count; i++) {
+      var row = activeWallpapersModel.get(i)
+      if (row) checkedWallpapers[String(row.filename)] = true
+    }
+    selectionRevision++
+  }
+
+  function clearWallpaperSelection() {
+    checkedWallpapers = ({})
+    selectionRevision++
+  }
 
   // "Download original": ask for a destination folder with Omarchy's own file
   // chooser (`omarchy-file-select`, portal-backed) and save the full-res file
@@ -804,21 +866,42 @@ Item {
 
   function actionInstall() {
     if (actionRunning) return
+    // Any checked wallpaper wins on the grid: install the whole selection (the
+    // checks are cleared once it completes). With none checked, install the
+    // cursor tile. The preview always acts on its own wallpaper.
+    var checks = view === "wallpapers" ? checkedFilenames() : []
+    if (checks.length > 0) {
+      busy = true
+      setStatus("Installing " + checks.length + " wallpaper(s)…")
+      actionClearsChecks = true
+      runAction(["install", themeName].concat(checks))
+      return
+    }
     var item = currentItem()
     // Already installed: nothing to do (button and `i` are no-ops).
     if (!item || String(item.installed) === "1") return
     busy = true
     setStatus("Installing " + item.name + "…")
+    actionClearsChecks = false
     runAction(["install", themeName, item.filename])
   }
 
   function actionRemove() {
     if (actionRunning) return
+    var checks = view === "wallpapers" ? checkedFilenames() : []
+    if (checks.length > 0) {
+      busy = true
+      setStatus("Uninstalling " + checks.length + " wallpaper(s)…")
+      actionClearsChecks = true
+      runAction(["remove", themeName].concat(checks))
+      return
+    }
     var item = currentItem()
     // Not installed: nothing to remove.
     if (!item || String(item.installed) !== "1") return
     busy = true
     setStatus("Removing " + item.name + "…")
+    actionClearsChecks = false
     runAction(["remove", themeName, item.filename])
   }
 
@@ -910,11 +993,13 @@ Item {
     // The in-memory catalog belongs to `themeName`: skip actions on other themes.
     if (String(args[1]) !== themeName) return
     if (cmd === "install") {
-      if (args.length > 2) setWallpaperInstalled(String(args[2]), "1")
-      else setAllWallpapersInstalled("1")
+      if (args.length > 2) {
+        for (var i = 2; i < args.length; i++) setWallpaperInstalled(String(args[i]), "1")
+      } else setAllWallpapersInstalled("1")
     } else if (cmd === "remove") {
-      if (args.length > 2) setWallpaperInstalled(String(args[2]), "0")
-      else setAllWallpapersInstalled("0")
+      if (args.length > 2) {
+        for (var j = 2; j < args.length; j++) setWallpaperInstalled(String(args[j]), "0")
+      } else setAllWallpapersInstalled("0")
     } else if (cmd === "set-default") {
       if (args.length > 2) {
         // manager.sh installs the file first when missing.
@@ -1247,6 +1332,11 @@ Item {
       root.setStatus(cancelled ? "Operation cancelled" : "Operation completed")
       // Update the in-memory catalog in place; no full reload (see AGENTS).
       if (!cancelled) root.applyActionResult()
+      // A selection-based install/remove clears the checks when it is done.
+      if (root.actionClearsChecks) {
+        root.actionClearsChecks = false
+        root.clearWallpaperSelection()
+      }
       root.actionTheme = ""
       root.lastAction = []
     }
@@ -1503,7 +1593,19 @@ Item {
         blocked: root.searching
 
         onMoveRequested: function(dx, dy) { root.moveCursor(dx, dy) }
-        onActivateRequested: root.activateCursor()
+        // Enter also fires `activateRequested`, so the flag drops that second
+        // call and Space keeps its own meaning (see `enterHandled`).
+        onReturnRequested: {
+          root.enterHandled = true
+          root.activateCursor()
+        }
+        onActivateRequested: {
+          if (root.enterHandled) {
+            root.enterHandled = false
+            return
+          }
+          root.spaceCursor()
+        }
         onCloseRequested: root.dismissCursor()
         onDeleteRequested: root.actionRemove()
         onTextKey: function(text) { root.handleTextKey(text) }
@@ -2462,6 +2564,48 @@ Item {
                 }
               }
 
+              // Selection checkbox, top-left of the thumbnail (the installed
+              // disc is top-right, the DEFAULT pill centered). Shown on the
+              // cursor tile so the mouse can reach it, and kept visible while
+              // checked. Clicking it toggles the check (see the tile TapHandler);
+              // Space does the same from the keyboard.
+              Item {
+                id: checkbox
+
+                readonly property bool checked: root.isWallpaperChecked(tile.model.filename)
+
+                visible: checked || tileCard.hasCursor
+                anchors.top: parent.top
+                anchors.topMargin: root.tileInset + Style.space(8)
+                anchors.left: parent.left
+                anchors.leftMargin: root.tileInset + Style.space(8)
+                width: Math.round(Math.max(Style.space(18),
+                  Math.min(Style.space(26), preview.width * 0.09)))
+                height: width
+
+                Rectangle {
+                  anchors.fill: parent
+                  radius: Math.max(2, Style.space(5))
+                  color: checkbox.checked
+                    ? root.accent
+                    : Util.alpha("#000000", 0.55)
+                  border.width: Math.max(1, Style.normalBorderWidth)
+                  border.color: checkbox.checked
+                    ? root.accent
+                    : Util.alpha(root.foreground, 0.75)
+
+                  Text {
+                    anchors.centerIn: parent
+                    visible: checkbox.checked
+                    text: "✓"
+                    color: root.background
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: true
+                  }
+                }
+              }
+
               // "DEFAULT" pill, centered on the thumbnail, on the theme's
               // default wallpaper (dark fill so the accent reads on any image).
               // The corners stay free for the selection checkbox.
@@ -2501,8 +2645,16 @@ Item {
               // tile is a doorway, not a toggle. "Set default" therefore lives
               // in the preview (double click on the image), because a single
               // click here already switches view and no second tap can land.
+              // A click that lands on the checkbox toggles the check instead.
               TapHandler {
-                onTapped: {
+                onTapped: function(eventPoint) {
+                  var p = eventPoint.position
+                  if (checkbox.visible
+                      && p.x >= checkbox.x && p.x <= checkbox.x + checkbox.width
+                      && p.y >= checkbox.y && p.y <= checkbox.y + checkbox.height) {
+                    root.toggleWallpaperCheck(tile.model.filename)
+                    return
+                  }
                   root.takeCursor(tile.index)
                   root.showPreview()
                 }
@@ -2756,6 +2908,7 @@ Item {
               text: root.actionRunning
                 ? root.keyHint("esc", "stop")
                 : root.keyHint("enter", "browse")
+                  + "&nbsp;&nbsp;" + root.keyHint("space", "select")
                   + "&nbsp;&nbsp;" + root.keyHint("i", "install")
                   + "&nbsp;&nbsp;" + root.keyHint("/", "search")
                   + "&nbsp;&nbsp;" + root.keyHint("esc", "back")

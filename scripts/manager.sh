@@ -84,9 +84,9 @@ Usage: $0 <command> [args...]
 Commands:
   themes                            List themes as TSV (name,title,url,collections,count,preview,installed,palette,description,image,present)
   catalog <theme> <catalog-url>     Wallpapers of a theme as TSV
-  install <theme> [filename]        Install all wallpapers, or one by filename/name/code
+  install <theme> [selector...]     Install all wallpapers, or every one matching a selector
   random-install <theme> [count]    Install <count> (default 5) random wallpapers
-  remove <theme> [filename]         Remove all wallpapers, or one by filename/name/code
+  remove <theme> [selector...]      Remove all wallpapers, or every one matching a selector
   set-default <theme> <filename> <url>  Download if needed + set as current background
   unset-default <theme> <filename>  Clear it as background, back to the theme default
   random-default <theme>            Set a random wallpaper of the theme as current background
@@ -289,6 +289,19 @@ wallpaper_matches() {
   return 1
 }
 
+# Selectors of the current install/remove call, set from the extra arguments
+# (the QML passes one exact filename per checked wallpaper). An empty array
+# means "the whole theme".
+SELECTORS=()
+matches_any_selector() {
+  local id="$1" name="$2" code="$3" filename="$4" s
+  if (( ${#SELECTORS[@]} == 0 )); then return 0; fi
+  for s in "${SELECTORS[@]}"; do
+    wallpaper_matches "$s" "$id" "$name" "$code" "$filename" && return 0
+  done
+  return 1
+}
+
 # Cached wallpaper switcher thumbnails are stale after install/remove.
 refresh_bg_cache() {
   command -v omarchy-theme-bg-cache >/dev/null 2>&1 || return 0
@@ -422,7 +435,9 @@ cmd_catalog() {
 }
 
 cmd_install() {
-  local theme="$1" selector="${2:-}"
+  local theme="$1"
+  shift
+  SELECTORS=("$@")
   local catalog
   ensure_datasets || {
     echo "Failed to fetch datasets." >&2
@@ -445,7 +460,7 @@ cmd_install() {
   local -a sel_url=() sel_dest=() sel_sha=()
   local filename id name code url sha
   while IFS=$'\t' read -r filename id name code url sha; do
-    if [[ -z $selector ]] || wallpaper_matches "$selector" "$id" "$name" "$code" "$filename"; then
+    if matches_any_selector "$id" "$name" "$code" "$filename"; then
       if ! is_allowed_image "$filename"; then
         echo "Skipping '$filename': not an allowed image (webp/jpg/jpeg/png)." >&2
         continue
@@ -457,7 +472,7 @@ cmd_install() {
   done < <(jq -r '.wallpapers[] | [.filename, .id, .name, .code, .url, .sha256] | @tsv' <<<"$catalog")
 
   if (( ${#sel_url[@]} == 0 )); then
-    echo "No wallpaper matching '$selector' in theme '$theme'." >&2
+    echo "No wallpaper matching the selection in theme '$theme'." >&2
     return 1
   fi
 
@@ -488,7 +503,9 @@ cmd_install() {
 }
 
 cmd_remove() {
-  local theme="$1" selector="${2:-}"
+  local theme="$1"
+  shift
+  SELECTORS=("$@")
   local dest="$DEST_BASE/$theme"
   if [[ ! -d $dest ]]; then
     echo "No wallpapers installed for theme '$theme'." >&2
@@ -507,7 +524,7 @@ cmd_remove() {
   local -A to_remove=()
   local filename id name code
   while IFS=$'\t' read -r filename id name code; do
-    if [[ -z $selector ]] || wallpaper_matches "$selector" "$id" "$name" "$code" "$filename"; then
+    if matches_any_selector "$id" "$name" "$code" "$filename"; then
       to_remove["$filename"]=1
     fi
   done < <(jq -r '.wallpapers[] | [.filename, .id, .name, .code] | @tsv' <<<"$catalog")

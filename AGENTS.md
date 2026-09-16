@@ -123,7 +123,7 @@ before the `PanelWindow`. This is the source order and where each concern lives:
 | Source order | ids / functions | Role |
 |---|---|---|
 | paths | `pluginRoot`, `configFile`, `pluginPaths`, `scriptPath`, `logoPath` | resolve the layout from `config/config.json` `paths`, from the plugin root |
-| state | `view`, `themeName`, `themeCatalogUrl`, `selectedIndex`, `lastThemeIndex`, `wallpaperSelection`, `pendingWallpaperIndex`, `pendingWallpaperSelect`, `hoverArmed`, `cursorActive`, `busy`, `statusText`, `filterText`, `wallpaperFilterText`, `searching`, `themesModel`, `themesDisplayModel`, `wallpapersModel`, `wallpapersDisplayModel` | single source of truth |
+| state | `view`, `themeName`, `themeCatalogUrl`, `selectedIndex`, `lastThemeIndex`, `wallpaperCursorByTheme`, `pendingWallpaperIndex`, `pendingWallpaperSelect`, `checkedWallpapers`, `selectionRevision`, `hoverArmed`, `cursorActive`, `busy`, `statusText`, `filterText`, `wallpaperFilterText`, `searching`, `themesModel`, `themesDisplayModel`, `wallpapersModel`, `wallpapersDisplayModel` | single source of truth |
 | tokens | `foreground`, `background`, `accent`, `urgent`, `scrim`, `dim`, `borderSpec`, `contentMargin`, `contentSpacing`, `minTileWidth`, `themeTileWidth`, `tileGap`, `tileInset`, `fontFamily`, `heroHeight` | `Color.menu.*` / `Style.*` aliases |
 | components | `RoundedImage`, `HeroLogo`, `Pill`, `ThemeProgress`, `SearchField` | atoms in `components/`, shared by both grids and the preview |
 | startup / termination | `open()`, `close()`, `onOpenedChanged` | summon / hide |
@@ -247,8 +247,20 @@ at its bottom (no extra row). Header
 has Back / Refresh / Close buttons and shows the theme name + count. Footer has
 three sections on one row — Install / Uninstall on the left, the theme's progress
 in the middle, and the key hints on the right. Enter or click opens the
-preview; x/X or Del removes; d sets default; r refreshes; Esc returns to themes
-(Esc again closes).
+preview; Space checks the cursor tile; `Select all` / `Clear` (search row) fill
+and empty the selection; x/X or Del removes; d sets default; r refreshes; Esc
+returns to themes (Esc again closes).
+
+**Multi-select.** Each tile carries a checkbox top-left (the installed disc is
+top-right, the `DEFAULT` pill centered), keyed by filename in the
+`checkedWallpapers` map. Clicking the checkbox toggles it without opening the
+preview (the tile `TapHandler` compares the tap point against the checkbox
+rect); Space toggles the cursor tile. `Select all` checks every row the grid is
+showing (so an active filter narrows it); `Clear` empties the map. Install /
+Uninstall act on the checks when any is set — one `manager.sh install/remove
+<theme> <selector...>` call, which now accepts multiple selectors — and the
+checks are cleared when the action completes; with none checked they act on the
+cursor tile as before. Checks are reset on theme change and on `open()`.
 
 **Technical.**
 - Header: `PanelHero` (`hero`) — title `"Theme / " +
@@ -263,22 +275,23 @@ preview; x/X or Del removes; d sets default; r refreshes; Esc returns to themes
   lazy, page by page. This works for thousands of images.
 - Tile overlays mirror the preview, scaled with the thumbnail: the installed
   disc top-right (accent when on disk, dim otherwise; `disc = clamp(width *
-  0.075, Style.space(9), Style.space(16))`) and the `DEFAULT` `Pill` centered on
-  the theme's default wallpaper (the corners stay free for the selection
-  checkbox). The shared `components/Pill.qml` exposes
+  0.075, Style.space(9), Style.space(16))`), the `DEFAULT` `Pill` centered on
+  the theme's default wallpaper and the selection checkbox top-left (visible on
+  the cursor tile or when checked, so the corners stay readable). The shared
+  `components/Pill.qml` exposes
   `labelPixelSize` / `hPadding` / `vPadding` so it can shrink to thumbnail size.
 - Tile taps open the preview (same as Enter) — never toggle state, so "set
   default" by mouse lives in the preview. Do NOT put single-tap-selects back on
-  the tile.
+  the tile (the checkbox click is routed by point, not by a nested handler).
 - Footer: `Column` (`footer`) — `PanelSeparator`, then the `actionRow` (only
   visible on this view) with three sections on one row: primary Install/Uninstall
   on the left, `ThemeProgress` (`wallpapersProgress`, the open theme's install
   bar) in the middle, the key hints on the right (bulk install/uninstall is gone;
-  it will return selection-based). No status
+  the selection covers it). No status
   caption and no footer bar, so the footer keeps the same height as the themes
   one. The middle section is fenced by two vertical rules: one at
   `themeListPane.width - 1` (continuing the sidebar border, so Install/Uninstall
-  spans the sidebar's width) and one before the bulk buttons. "Set default"
+  spans the sidebar's width) and one before the key hints. "Set default"
   stays on the preview (double click / `d`), so it is not in the footer.
 - Data: `loadWallpapers()` sets `catalogProc.command` **before**
   `catalogProc.running = true` (bug #2), then parses the TSV columns in step 6
@@ -375,9 +388,9 @@ shows a `DEFAULT` pill before the dot; Esc returns to the grid.
   |---|---|---|
   | `themes` | — | `name  title  catalogUrl  collections  count  preview  installed  palette  description  image  present` (`preview` = card thumbnail, `image` = 2K for the detail pane; `palette` = comma-separated hex, read straight from the dataset — no hardcoded fallback; `present` = the Omarchy theme exists locally) |
   | `catalog` | `<theme> <catalog-url>` | `filename  name  code  url  sha256  installed  isDefault  preview  sizeBytes  collection  resolution  width  height` (local catalog; the URL arg is only a fallback) |
-  | `install` | `<theme> [selector]` | human text; no selector = all, selector matches id/name/code/filename. Streams `PROGRESS\t<theme>\t<installed>\t<total>` lines while it runs |
+  | `install` | `<theme> [selector...]` | human text; no selector = all, each selector matches id/name/code/filename (the QML passes one filename per checked wallpaper). Streams `PROGRESS\t<theme>\t<installed>\t<total>` lines while it runs |
   | `random-install` | `<theme> [count]` | human text; installs `<count>` random wallpapers (default 5). Same `PROGRESS` stream |
-  | `remove` | `<theme> [selector]` | human text; same selector matching. Same `PROGRESS` stream (count decreases) |
+  | `remove` | `<theme> [selector...]` | human text; same selector matching (any of them). Same `PROGRESS` stream (count decreases) |
   | `set-default` | `<theme> <filename> <url>` | human text; downloads if missing then `omarchy-theme-bg-set` |
   | `unset-default` | `<theme> <filename>` | human text; if it is the background, falls back to the theme's own default background |
   | `image` | `<url>` | local cache path of the image (downloads it once); empty on failure |
@@ -505,7 +518,8 @@ Rules that follow from that:
   the same accent ring for its current cell.
 - **Keyboard** = `Ui/PanelKeyCatcher` wrapping the content; the panel keeps the
   state machine (`moveCursor(dx,dy)` / `activateCursor()` / `dismissCursor()`).
-  Canonical keys: arrows + h/j/k/l, Enter/Space activate, Esc back/close,
+  Canonical keys: arrows + h/j/k/l, Enter/Space activate (on the wallpapers
+  screen Space toggles the checkbox while Enter opens the preview), Esc back/close,
   **x/X remove** (`deleteRequested`), `d` default, `r` refresh and `u` uninstall
   via `textKey`. Del/Backspace and **PageUp/PageDown** (jump a whole visible page
   of tiles — visible rows × columns — via `pageCursor(dir)`) work through a
