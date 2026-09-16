@@ -290,7 +290,7 @@ preview; x/X or Del removes; d sets default; r refreshes; Esc returns to themes
 **Functional.** The wallpaper full-res, full-bleed (no padding, no rounding),
 with a header (`<Theme> / <code> - <name>` as the title, `<file> · <size MB>` or
 failed feedback in the meta line, an info pill (`<resolution> | <WxH>`) then a
-`Download` button, before Refresh/Back/Close) and a footer on one row — Install
+`Download` button, before Back/Close) and a footer on one row — Install
 and Uninstall on the left,
 the open theme's progress in the middle, the `<enter> install` hint on the
 right. `Download` saves the full-res file to a folder picked with Omarchy's own

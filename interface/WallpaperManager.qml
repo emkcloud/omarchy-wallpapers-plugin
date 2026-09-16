@@ -1546,7 +1546,6 @@ Item {
             Button {
               id: refreshButton
 
-              visible: root.view === "wallpapers"
               enabled: !actionRunning
               opacity: enabled ? 1 : 0.4
               text: "Refresh"
@@ -2962,18 +2961,6 @@ Item {
                 accent: root.accent
                 fontFamily: root.fontFamily
                 onClicked: root.actionDownloadOriginal()
-              }
-
-              Button {
-                enabled: !actionRunning
-                opacity: enabled ? 1 : 0.4
-                text: "Refresh"
-                iconText: "󰑓"
-                bordered: true
-                foreground: root.foreground
-                accent: root.accent
-                fontFamily: root.fontFamily
-                onClicked: root.refresh()
               }
 
               Button {
