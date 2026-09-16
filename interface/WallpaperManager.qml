@@ -770,7 +770,11 @@ Item {
 
   function closePreview() {
     view = "wallpapers"
-    grid.positionViewAtIndex(selectedIndex, GridView.Contain)
+    cursorActive = true
+    selectedIndex = Math.max(0, Math.min(activeWallpapersModel.count - 1, selectedIndex))
+    // Deferred: the GridView only becomes visible on the view change, so
+    // scrolling in the same frame reads stale geometry and lands nowhere.
+    Qt.callLater(function() { grid.positionViewAtIndex(root.selectedIndex, GridView.Contain) })
   }
 
   function previewNext(delta) {
