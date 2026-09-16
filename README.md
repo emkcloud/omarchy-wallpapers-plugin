@@ -78,7 +78,7 @@ your wallpapers or the runtime caches, so cleanup is opt-in:
   missing file.
 
 The plugin never modifies your configuration without an explicit action, and
-removal needs no `sudo`.
+removal requires no elevated privileges.
 
 ## How it works
 
