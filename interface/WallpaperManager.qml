@@ -85,6 +85,10 @@ Item {
   // Themes-screen cursor to restore when leaving a theme (goBack): browsing a
   // theme must not lose which row was open.
   property int lastThemeIndex: 0
+  // A panel appearing under a stationary pointer re-hovers the tile/grid below
+  // it, which would steal the cursor just restored by goBack/closePreview. Hover
+  // selection is armed again a beat after every view switch (see `hoverGate`).
+  property bool hoverArmed: true
   property bool busy: false
   property string statusText: ""
   // Search: one filter per list. `filterText` narrows the themes list,
@@ -1119,7 +1123,11 @@ Item {
   }
   onPreviewTargetUrlChanged: resolvePreviewImage()
   onSelectedIndexChanged: prefetchTimer.restart()
-  onViewChanged: refreshDetailShown()
+  onViewChanged: {
+    refreshDetailShown()
+    hoverArmed = false
+    hoverGate.restart()
+  }
   // A prewarmed neighbour may make the full image available: upgrade the detail
   // pane from the small preview without waiting for the next selection.
   onImageCacheRevisionChanged: refreshDetailShown()
@@ -1330,6 +1338,13 @@ Item {
     id: prefetchTimer
     interval: 150
     onTriggered: root.prefetchNeighbours()
+  }
+
+  // Re-arms hover selection after a view switch (see `hoverArmed`).
+  Timer {
+    id: hoverGate
+    interval: 250
+    onTriggered: root.hoverArmed = true
   }
 
   // Coalesce bulk progress into ~8 updates/s instead of one per wallpaper.
@@ -2452,7 +2467,7 @@ Item {
 
               HoverHandler {
                 cursorShape: Qt.PointingHandCursor
-                onHoveredChanged: if (hovered) root.takeCursor(tile.index)
+                onHoveredChanged: if (hovered && root.hoverArmed) root.takeCursor(tile.index)
               }
 
               // A click opens the fullscreen preview, exactly like Enter: the
