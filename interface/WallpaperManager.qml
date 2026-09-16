@@ -2666,13 +2666,13 @@ Item {
 
           // Wallpapers footer mirrors the themes one: three sections on a single
           // row — Install/Uninstall on the left, the open theme's progress in the
-          // middle, Install all/Uninstall all on the right.
+          // middle, the key hints on the right.
           Item {
             id: actionRow
             visible: root.view === "wallpapers"
             width: parent.width
             height: Math.max(primaryActions.implicitHeight,
-              wallpapersProgress.implicitHeight, bulkActions.implicitHeight)
+              wallpapersProgress.implicitHeight, wallpapersHints.implicitHeight)
 
             Row {
               id: primaryActions
@@ -2734,49 +2734,36 @@ Item {
               fontFamily: root.fontFamily
             }
 
-            // Second rule, between the progress and the bulk actions.
+            // Second rule, between the progress and the key hints.
             Rectangle {
               id: wallpapersBulkRule
 
               z: 2
               anchors.top: parent.top
               anchors.bottom: parent.bottom
-              anchors.right: bulkActions.left
+              anchors.right: wallpapersHints.left
               anchors.rightMargin: Style.space(20)
               width: 1
               color: Qt.rgba(root.foreground.r, root.foreground.g,
                 root.foreground.b, 0.12)
             }
 
-            Row {
-              id: bulkActions
+            Text {
+              id: wallpapersHints
+
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.spacing.controlGap
-
-              Button {
-                enabled: !root.actionRunning && !root.currentThemeFull
-                opacity: enabled ? 1 : 0.4
-                text: "Install all"
-                iconText: "󰧩"
-                bordered: true
-                foreground: root.foreground
-                accent: root.accent
-                fontFamily: root.fontFamily
-                onClicked: root.actionInstallAll()
-              }
-
-              Button {
-                enabled: !root.actionRunning && !root.currentThemeEmpty
-                opacity: enabled ? 1 : 0.4
-                text: "Uninstall all"
-                iconText: "󰱢"
-                bordered: true
-                foreground: root.foreground
-                accent: root.accent
-                fontFamily: root.fontFamily
-                onClicked: root.actionRemoveAll()
-              }
+              textFormat: Text.StyledText
+              // `&nbsp;` (not plain spaces: StyledText collapses runs of them).
+              text: root.actionRunning
+                ? root.keyHint("esc", "stop")
+                : root.keyHint("enter", "browse")
+                  + "&nbsp;&nbsp;" + root.keyHint("i", "install")
+                  + "&nbsp;&nbsp;" + root.keyHint("/", "search")
+                  + "&nbsp;&nbsp;" + root.keyHint("esc", "back")
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
             }
           }
 

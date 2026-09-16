@@ -246,7 +246,7 @@ thumbnail with the accent-colored code + name overlaid on a translucent band
 at its bottom (no extra row). Header
 has Back / Refresh / Close buttons and shows the theme name + count. Footer has
 three sections on one row — Install / Uninstall on the left, the theme's progress
-in the middle, Install all / Uninstall all on the right. Enter or click opens the
+in the middle, and the key hints on the right. Enter or click opens the
 preview; x/X or Del removes; d sets default; r refreshes; Esc returns to themes
 (Esc again closes).
 
@@ -272,7 +272,8 @@ preview; x/X or Del removes; d sets default; r refreshes; Esc returns to themes
 - Footer: `Column` (`footer`) — `PanelSeparator`, then the `actionRow` (only
   visible on this view) with three sections on one row: primary Install/Uninstall
   on the left, `ThemeProgress` (`wallpapersProgress`, the open theme's install
-  bar) in the middle, bulk Install all/Uninstall all on the right. No status
+  bar) in the middle, the key hints on the right (bulk install/uninstall is gone;
+  it will return selection-based). No status
   caption and no footer bar, so the footer keeps the same height as the themes
   one. The middle section is fenced by two vertical rules: one at
   `themeListPane.width - 1` (continuing the sidebar border, so Install/Uninstall
