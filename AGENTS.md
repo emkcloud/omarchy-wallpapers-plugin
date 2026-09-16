@@ -62,6 +62,10 @@ set-default), theme by theme.
   upstream wallpaper repo.
 - `assets/images/banner.png` — the README banner (2000×1125), shown under the
   title. Repo-only: not referenced by the plugin at runtime.
+- `preview.png` — repo-root marketplace preview (a copy of the banner). The
+  Omarchy plugin marketplace reads at most one root `preview.*` and generates
+  the optimized card/detail images itself. Repo-only: not referenced by the
+  plugin at runtime.
 - `assets/images/logo.png` — emkcloud brand mark (the org GitHub avatar), used
   as the hero icon. The original near-black backdrop (`#010409`, rounded
   square) has been made **transparent** so the mark sits on

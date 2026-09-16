@@ -56,6 +56,30 @@ Update to the latest snapshot with:
 omarchy plugin update emkcloud.wallpaper-manager --yes
 ```
 
+## Removal
+
+Remove the plugin the same way as any other Omarchy plugin:
+
+```bash
+omarchy plugin remove emkcloud.wallpaper-manager
+```
+
+This disables the plugin and deletes its git checkout. It does **not** touch
+your wallpapers or the runtime caches, so cleanup is opt-in:
+
+- **Installed wallpapers** live in `~/.config/omarchy/backgrounds/<theme>/`.
+  Remove only the ones you installed, or the whole folder of a theme you no
+  longer want.
+- **Runtime caches** (catalogue and images) live in
+  `~/.cache/omarchy/emkcloud.wallpaper-manager/`. Deleting the folder is safe;
+  it is rebuilt on the next run.
+- If one of the wallpapers is your **current background**, reset it to the
+  theme default before deleting it, otherwise the desktop keeps pointing at a
+  missing file.
+
+The plugin never modifies your configuration without an explicit action, and
+removal needs no `sudo`.
+
 ## How it works
 
 The QML overlay is a thin controller; all the heavy lifting is done by
