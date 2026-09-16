@@ -123,7 +123,7 @@ before the `PanelWindow`. This is the source order and where each concern lives:
 | Source order | ids / functions | Role |
 |---|---|---|
 | paths | `pluginRoot`, `configFile`, `pluginPaths`, `scriptPath`, `logoPath` | resolve the layout from `config/config.json` `paths`, from the plugin root |
-| state | `view`, `themeName`, `themeCatalogUrl`, `selectedIndex`, `lastThemeIndex`, `cursorActive`, `busy`, `statusText`, `filterText`, `wallpaperFilterText`, `searching`, `themesModel`, `themesDisplayModel`, `wallpapersModel`, `wallpapersDisplayModel` | single source of truth |
+| state | `view`, `themeName`, `themeCatalogUrl`, `selectedIndex`, `lastThemeIndex`, `wallpaperSelection`, `pendingWallpaperIndex`, `pendingWallpaperSelect`, `hoverArmed`, `cursorActive`, `busy`, `statusText`, `filterText`, `wallpaperFilterText`, `searching`, `themesModel`, `themesDisplayModel`, `wallpapersModel`, `wallpapersDisplayModel` | single source of truth |
 | tokens | `foreground`, `background`, `accent`, `urgent`, `scrim`, `dim`, `borderSpec`, `contentMargin`, `contentSpacing`, `minTileWidth`, `themeTileWidth`, `tileGap`, `tileInset`, `fontFamily`, `heroHeight` | `Color.menu.*` / `Style.*` aliases |
 | components | `RoundedImage`, `HeroLogo`, `Pill`, `ThemeProgress`, `SearchField` | atoms in `components/`, shared by both grids and the preview |
 | startup / termination | `open()`, `close()`, `onOpenedChanged` | summon / hide |

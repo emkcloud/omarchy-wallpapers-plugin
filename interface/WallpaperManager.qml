@@ -85,6 +85,11 @@ Item {
   // Themes-screen cursor to restore when leaving a theme (goBack): browsing a
   // theme must not lose which row was open.
   property int lastThemeIndex: 0
+  // Wallpaper cursor per theme (`themeName` -> index), so re-entering a theme
+  // resumes where it was left instead of jumping back to the first tile.
+  property var wallpaperSelection: ({})
+  property int pendingWallpaperIndex: 0
+  property bool pendingWallpaperSelect: false
   // A panel appearing under a stationary pointer re-hovers the tile/grid below
   // it, which would steal the cursor just restored by goBack/closePreview. Hover
   // selection is armed again a beat after every view switch (see `hoverGate`).
@@ -535,7 +540,11 @@ Item {
     themeName = item.name
     themeCatalogUrl = item.catalogUrl
     view = "wallpapers"
-    selectedIndex = 0
+    var remembered = wallpaperSelection[item.name]
+    pendingWallpaperIndex = (remembered === undefined || remembered === null)
+      ? 0 : remembered
+    pendingWallpaperSelect = true
+    selectedIndex = pendingWallpaperIndex
     loadWallpapers()
   }
 
@@ -549,6 +558,8 @@ Item {
   }
 
   function goBack() {
+    // Remember the wallpaper cursor so re-entering this theme resumes here.
+    if (themeName !== "") wallpaperSelection[themeName] = selectedIndex
     view = "themes"
     selectedIndex = Math.max(0, Math.min(activeThemesModel.count - 1, lastThemeIndex))
     cursorActive = true
@@ -1178,6 +1189,19 @@ Item {
         for (var i = 0; i < rows.length; i++) wallpapersModel.append(rows[i])
         if (root.wallpaperFilterText !== "") root.rebuildWallpaperDisplay()
         root.wallpapersRevision++
+        // Land the cursor on the entry target (first tile, or the remembered
+        // one). Applied here, after the model is populated, so a hover event
+        // fired while the grid was being built cannot override it; the hover
+        // gate is re-armed for the same reason.
+        if (root.pendingWallpaperSelect) {
+          root.pendingWallpaperSelect = false
+          root.selectedIndex = Math.max(0,
+            Math.min(root.activeWallpapersModel.count - 1, root.pendingWallpaperIndex))
+        } else if (root.selectedIndex >= root.activeWallpapersModel.count) {
+          root.selectedIndex = Math.max(0, root.activeWallpapersModel.count - 1)
+        }
+        root.hoverArmed = false
+        hoverGate.restart()
         root.busy = false
         root.setStatus(Model.catalogStatus(wallpapersModel.count, root.themeName))
         if (root.activeWallpapersModel.count > 0)
