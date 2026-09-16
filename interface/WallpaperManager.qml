@@ -1546,6 +1546,7 @@ Item {
             Button {
               id: refreshButton
 
+              visible: root.view === "wallpapers"
               enabled: !actionRunning
               opacity: enabled ? 1 : 0.4
               text: "Refresh"
