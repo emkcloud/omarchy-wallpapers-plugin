@@ -1,0 +1,10 @@
+{
+  "repo": "emkcloud/omarchy-wallpapers",
+  "release": "0.2.2",
+  "paths": {
+    "scripts": "scripts",
+    "assets": "assets",
+    "logo": "assets/images/logo.png",
+    "datasets": "datasets"
+  }
+}
