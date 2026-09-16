@@ -2660,8 +2660,8 @@ Item {
           }
 
           // Wallpapers footer mirrors the themes one: three sections on a single
-          // row — Install/Remove on the left, the open theme's progress in the
-          // middle, Install all/Remove all on the right.
+          // row — Install/Uninstall on the left, the open theme's progress in the
+          // middle, Install all/Uninstall all on the right.
           Item {
             id: actionRow
             visible: root.view === "wallpapers"
@@ -2690,7 +2690,7 @@ Item {
               Button {
                 enabled: !actionRunning
                 opacity: enabled ? 1 : 0.4
-                text: "Remove"
+                text: "Uninstall"
                 iconText: "󰩺"
                 bordered: true
                 foreground: root.foreground
@@ -2701,7 +2701,7 @@ Item {
             }
 
             // First rule: same x as the themes screen's master/detail divider,
-            // so the Install/Remove section spans the sidebar's width.
+            // so the Install/Uninstall section spans the sidebar's width.
             Rectangle {
               id: wallpapersSidebarRule
 
@@ -2764,7 +2764,7 @@ Item {
               Button {
                 enabled: !root.actionRunning && !root.currentThemeEmpty
                 opacity: enabled ? 1 : 0.4
-                text: "Remove all"
+                text: "Uninstall all"
                 iconText: "󰱢"
                 bordered: true
                 foreground: root.foreground

@@ -245,8 +245,8 @@ status caption. Enter/Space or click opens the theme; Esc closes the plugin.
 thumbnail with the accent-colored code + name overlaid on a translucent band
 at its bottom (no extra row). Header
 has Back / Refresh / Close buttons and shows the theme name + count. Footer has
-three sections on one row — Install / Remove on the left, the theme's progress
-in the middle, Install all / Remove all on the right. Enter or click opens the
+three sections on one row — Install / Uninstall on the left, the theme's progress
+in the middle, Install all / Uninstall all on the right. Enter or click opens the
 preview; x/X or Del removes; d sets default; r refreshes; Esc returns to themes
 (Esc again closes).
 
@@ -270,12 +270,12 @@ preview; x/X or Del removes; d sets default; r refreshes; Esc returns to themes
   default" by mouse lives in the preview. Do NOT put single-tap-selects back on
   the tile.
 - Footer: `Column` (`footer`) — `PanelSeparator`, then the `actionRow` (only
-  visible on this view) with three sections on one row: primary Install/Remove
+  visible on this view) with three sections on one row: primary Install/Uninstall
   on the left, `ThemeProgress` (`wallpapersProgress`, the open theme's install
-  bar) in the middle, bulk Install all/Remove all on the right. No status
+  bar) in the middle, bulk Install all/Uninstall all on the right. No status
   caption and no footer bar, so the footer keeps the same height as the themes
   one. The middle section is fenced by two vertical rules: one at
-  `themeListPane.width - 1` (continuing the sidebar border, so Install/Remove
+  `themeListPane.width - 1` (continuing the sidebar border, so Install/Uninstall
   spans the sidebar's width) and one before the bulk buttons. "Set default"
   stays on the preview (double click / `d`), so it is not in the footer.
 - Data: `loadWallpapers()` sets `catalogProc.command` **before**
