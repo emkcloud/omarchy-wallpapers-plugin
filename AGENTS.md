@@ -56,9 +56,12 @@ set-default), theme by theme.
 - `scripts/developer.sh` — dev-only helper (`link` / `unlink`): installs this
   checkout as `emkcloud.wallpaper-manager-developer` via symlinks. See *Local
   development*.
-- `assets/` — local plugin assets. Scalable by kind; today only
-  `assets/images/logo.png` exists, but future icons/fonts belong here too. This
-  is **not** the upstream wallpaper repo.
+- `assets/` — local plugin assets. Scalable by kind; today
+  `assets/images/logo.png` (hero icon) and `assets/images/banner.png` (README
+  banner) exist, but future icons/fonts belong here too. This is **not** the
+  upstream wallpaper repo.
+- `assets/images/banner.png` — the README banner (2000×1125), shown under the
+  title. Repo-only: not referenced by the plugin at runtime.
 - `assets/images/logo.png` — emkcloud brand mark (the org GitHub avatar), used
   as the hero icon. The original near-black backdrop (`#010409`, rounded
   square) has been made **transparent** so the mark sits on
@@ -480,7 +483,8 @@ Rules that follow from that:
   org avatar) via the local `components/HeroLogo.qml`: a `RoundedImage`
   `Style.font.displayLarge` wide, same in every view, with the old nerd-font
   glyphs (`󰸌` themes, `` wallpapers) as fallback if the file cannot be
-  resolved. It is the only image allowed in this repo.
+  resolved. It is the only image allowed in the **runtime UI** (the README
+  banner is repo-only and never loaded by the plugin).
 - **Header height** is pinned: `root.heroHeight =
   Math.max(hero.implicitHeight, previewHero.implicitHeight)` is applied as
   `height` to both heroes, so switching view — or a title growing a resolution
