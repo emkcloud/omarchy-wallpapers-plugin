@@ -82,6 +82,9 @@ Item {
   property string themeName: ""
   property string themeCatalogUrl: ""
   property int selectedIndex: 0
+  // Themes-screen cursor to restore when leaving a theme (goBack): browsing a
+  // theme must not lose which row was open.
+  property int lastThemeIndex: 0
   property bool busy: false
   property string statusText: ""
   // Search: one filter per list. `filterText` narrows the themes list,
@@ -518,6 +521,7 @@ Item {
   function selectTheme(index) {
     if (index < 0 || index >= activeThemesModel.count) return
     var item = activeThemesModel.get(index)
+    lastThemeIndex = index
     // Drop the previous theme's rows first: the wallpapers GridView delegates
     // survive the trip through the themes view, so leaving them alive while
     // `themeName` changes makes them re-resolve their local file path against
@@ -542,8 +546,11 @@ Item {
 
   function goBack() {
     view = "themes"
-    selectedIndex = 0
+    selectedIndex = Math.max(0, Math.min(activeThemesModel.count - 1, lastThemeIndex))
+    cursorActive = true
     setStatus("")
+    if (activeThemesModel.count > 0)
+      Qt.callLater(function() { themesList.positionViewAtIndex(root.selectedIndex, ListView.Contain) })
   }
 
   function refresh() {
