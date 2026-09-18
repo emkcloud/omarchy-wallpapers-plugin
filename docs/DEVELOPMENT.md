@@ -1,6 +1,6 @@
-# AGENTS.md
+# Development guide
 
-Guidelines for AI agents working on this repository. Read this file before making any changes.
+Guidelines for contributors working on this repository. Read this file before making any changes.
 
 ## Project overview
 
@@ -88,7 +88,13 @@ set-default), theme by theme.
   `emkcloud/omarchy-wallpapers`.
 - `README.md` — user-facing docs (install, usage, requirements).
 - `LICENSE` — project license.
-- `AGENTS.md` — this file.
+- `docs/DEVELOPMENT.md` — this file (contributor/architecture guide). The
+  published plugin must not ship an agent instruction file (the marketplace
+  security review flags a root `AGENTS.md` as a prompt-injection surface), so
+  this guide is tracked here as ordinary documentation and the local `AGENTS.md`
+  is a **gitignored symlink** to it. Anything written through `AGENTS.md` lands
+  in this file, so the two never drift. If the symlink is lost, recreate it with
+  `ln -sf docs/DEVELOPMENT.md AGENTS.md`.
 
 ## Plugin contract (Omarchy)
 

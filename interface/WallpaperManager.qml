@@ -593,7 +593,7 @@ Item {
   // Ui/PanelKeyCatcher.qml turns raw keys into semantic signals; the panel
   // keeps the state machine. The themes screen is a vertical ListView, the
   // wallpapers screen a GridView (which has no `columns` in Qt 6, so the column
-  // count is computed by hand — see AGENTS.md).
+  // count is computed by hand — see docs/DEVELOPMENT.md).
   function activeCount() {
     return view === "themes" ? activeThemesModel.count : activeWallpapersModel.count
   }
@@ -1330,7 +1330,7 @@ Item {
       root.flushProgress()
       progressTimer.stop()
       root.setStatus(cancelled ? "Operation cancelled" : "Operation completed")
-      // Update the in-memory catalog in place; no full reload (see AGENTS).
+      // Update the in-memory catalog in place; no full reload (see docs/DEVELOPMENT.md).
       if (!cancelled) root.applyActionResult()
       // A selection-based install/remove clears the checks when it is done.
       if (root.actionClearsChecks) {
