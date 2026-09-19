@@ -108,7 +108,7 @@ touching it by hand. Everything is configured in **Setup → Automatic rotation*
 - **Interval time** — how long each wallpaper stays up before the next one (1,
   5, 15, 30, 60 or 120 minutes).
 - **Include theme wallpapers** — off rotates only the wallpapers you installed
-  from the collection; on adds the backgrounds bundled with the Omarchy theme.
+  from the collection.
 - **Random order** — sequential by name, or pick at random (never the one already
   on screen).
 - **Rotate now** — change the background immediately with the settings above,
