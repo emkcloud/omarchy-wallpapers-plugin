@@ -44,15 +44,28 @@ Item {
   property var roadmap: Model.parseRoadmap("")
   property var blocks: []
   property int selectedFlat: 0
+  // Topic currently rendered in the centre. It lags behind `selectedFlat` when
+  // the cursor sits on a resource, so the prev/next cards below keep steering
+  // the content even while a reference is highlighted.
+  property int contentTopic: 0
   property string selectedFile: ""
 
   readonly property var flatItems: Model.helpFlatItems(index)
   readonly property var sidebarEntries: Model.helpSidebarEntries(index)
 
+  // The keyboard cursor walks the topics first and then the reference links, so
+  // keyboard-only users can select a resource and open it with Enter.
+  readonly property int topicCount: flatItems.length
+  readonly property int resourceCount: index.resources ? index.resources.length : 0
+  readonly property int navTotal: topicCount + resourceCount
+
   function selectFlat(target) {
-    if (target < 0 || target >= flatItems.length) return
-    var item = flatItems[target]
+    if (target < 0 || target >= navTotal) return
     selectedFlat = target
+    // A resource keeps the last topic on screen; only topics load content.
+    if (target >= topicCount) return
+    contentTopic = target
+    var item = flatItems[target]
     if (selectedFile !== item.file) {
       blocks = []
       selectedFile = item.file
@@ -61,10 +74,14 @@ Item {
   }
 
   function moveSelection(delta) {
-    selectFlat(Math.max(0, Math.min(flatItems.length - 1, selectedFlat + delta)))
+    selectFlat(Math.max(0, Math.min(navTotal - 1, selectedFlat + delta)))
   }
 
   function activateSelection() {
+    if (selectedFlat >= topicCount) {
+      openUrl(linkFor(index.resources[selectedFlat - topicCount]))
+      return
+    }
     selectFlat(selectedFlat)
   }
 
@@ -74,6 +91,7 @@ Item {
   }
 
   function positionNav() {
+    if (selectedFlat >= topicCount) return
     var viewIndex = navViewIndex(selectedFlat)
     if (viewIndex >= 0) navList.positionViewAtIndex(viewIndex, ListView.Contain)
   }
@@ -316,6 +334,11 @@ Item {
             required property var modelData
             required property int index
 
+            // The keyboard cursor continues past the topics into the resources.
+            // A resource is compact like before: no surface, no border, only the
+            // label and the arrow turn accent when selected or hovered.
+            readonly property bool selected: help.selectedFlat === help.topicCount + index
+
             width: sidebarFooter.width
             height: resourceLabel.implicitHeight
 
@@ -323,14 +346,17 @@ Item {
               id: resourceLabel
 
               anchors.left: parent.left
+              anchors.leftMargin: Style.space(10)
               anchors.right: resourceArrow.left
               anchors.rightMargin: Style.space(8)
               anchors.verticalCenter: parent.verticalCenter
               textFormat: Text.PlainText
               text: resourceRow.modelData.title
-              color: resourceHover.hovered ? help.accent : help.foreground
+              color: (resourceHover.hovered || resourceRow.selected)
+                ? help.accent : help.foreground
               font.family: help.fontFamily
               font.pixelSize: Style.font.body
+              font.capitalization: Font.AllUppercase
               elide: Text.ElideRight
             }
 
@@ -341,7 +367,8 @@ Item {
               anchors.verticalCenter: parent.verticalCenter
               textFormat: Text.PlainText
               text: "↗"
-              color: resourceHover.hovered ? help.accent : help.dim
+              color: (resourceHover.hovered || resourceRow.selected)
+                ? help.accent : help.dim
               font.family: help.fontFamily
               font.pixelSize: Style.font.bodySmall
             }
@@ -373,8 +400,12 @@ Item {
     anchors.bottom: parent.bottom
     anchors.bottomMargin: help.bodyPadY
 
-    readonly property bool hasPrev: help.selectedFlat > 0
-    readonly property bool hasNext: help.selectedFlat < help.flatItems.length - 1
+    // The prev/next cards steer the topic in the centre, not the cursor: while a
+    // resource is highlighted the cards keep pointing at the displayed topic.
+    readonly property int prevIndex: help.contentTopic - 1
+    readonly property int nextIndex: help.contentTopic + 1
+    readonly property bool hasPrev: prevIndex >= 0
+    readonly property bool hasNext: nextIndex < help.topicCount
     readonly property real navHalf: (width - Style.space(14)) / 2
 
     MarkdownView {
@@ -446,7 +477,7 @@ Item {
             anchors.verticalCenter: parent.verticalCenter
             textFormat: Text.PlainText
             text: contentPane.hasPrev
-              ? help.flatItems[help.selectedFlat - 1].title : ""
+              ? help.flatItems[contentPane.prevIndex].title : ""
             color: help.foreground
             font.family: help.fontFamily
             font.pixelSize: Style.font.subtitle
@@ -456,7 +487,7 @@ Item {
 
         HoverHandler { id: prevHover; cursorShape: Qt.PointingHandCursor }
         TapHandler {
-          onTapped: if (contentPane.hasPrev) help.selectFlat(help.selectedFlat - 1)
+          onTapped: if (contentPane.hasPrev) help.selectFlat(contentPane.prevIndex)
         }
       }
 
@@ -505,7 +536,7 @@ Item {
             anchors.verticalCenter: parent.verticalCenter
             textFormat: Text.PlainText
             text: contentPane.hasNext
-              ? help.flatItems[help.selectedFlat + 1].title : ""
+              ? help.flatItems[contentPane.nextIndex].title : ""
             color: help.foreground
             font.family: help.fontFamily
             font.pixelSize: Style.font.subtitle
@@ -516,7 +547,7 @@ Item {
 
         HoverHandler { id: nextHover; cursorShape: Qt.PointingHandCursor }
         TapHandler {
-          onTapped: if (contentPane.hasNext) help.selectFlat(help.selectedFlat + 1)
+          onTapped: if (contentPane.hasNext) help.selectFlat(contentPane.nextIndex)
         }
       }
     }
