@@ -14,7 +14,10 @@ Item {
   // Injected by omarchy-shell.
   property var manifest: null
   // True for the `-developer` install, so every screen can flag itself.
-  readonly property bool dev: manifest !== null
+  // Temporarily forced off while the layout is refined: set `showDevBadge` to
+  // true (or drop the `showDevBadge &&` guard) to show it again.
+  readonly property bool showDevBadge: false
+  readonly property bool dev: showDevBadge && manifest !== null
     && String(manifest.id || "").indexOf("-developer") !== -1
   // The shell strips `__sourceDir` from third-party manifests before injecting
   // them, so the plugin root is resolved relative to this file's own location
@@ -34,7 +37,19 @@ Item {
   property var pluginPaths: ({
     scripts: "scripts",
     assets: "assets",
-    logo: "assets/images/logo.png"
+    logo: "assets/images/logo.png",
+    help: "help"
+  })
+
+  // Project links, resolved from `config/config.json` `links` so the Help
+  // resources and the GitHub button can be repointed without a code change.
+  // The defaults match the shipped config so nothing flickers while it loads.
+  property var pluginLinks: ({
+    repo: "https://github.com/emkcloud/omarchy-wallpapers-plugin",
+    donation: "https://github.com/sponsors/emkcloud",
+    issues: "https://github.com/emkcloud/omarchy-wallpapers-plugin/issues",
+    releases: "https://github.com/emkcloud/omarchy-wallpapers-plugin/releases",
+    database: "https://github.com/emkcloud/omarchy-wallpapers/tree/main/images"
   })
 
   FileView {
@@ -42,7 +57,45 @@ Item {
     path: root.pluginRoot ? root.pluginRoot + "/config/config.json" : ""
     watchChanges: false
     printErrors: false
-    onLoaded: root.pluginPaths = Model.parsePaths(text(), root.pluginPaths)
+    onLoaded: {
+      root.pluginPaths = Model.parsePaths(text(), root.pluginPaths)
+      root.pluginLinks = Model.parseLinks(text(), root.pluginLinks)
+    }
+  }
+
+  // Roadmap data, loaded once and shared by Help and Setup (both render it
+  // through `components/RoadmapPane.qml`).
+  property var roadmapData: Model.parseRoadmap("")
+
+  FileView {
+    id: roadmapFile
+    path: root.helpRoot ? root.helpRoot + "/roadmap.json" : ""
+    watchChanges: false
+    printErrors: false
+    onLoaded: root.roadmapData = Model.parseRoadmap(text())
+    onLoadFailed: root.roadmapData = Model.parseRoadmap("")
+  }
+
+  // Help index, loaded once and shared by Help (sections/resources/feature) and
+  // Setup (the "Propose a feature" action).
+  property var helpIndex: Model.emptyHelpIndex()
+
+  FileView {
+    id: helpIndexFile
+    path: root.helpRoot ? root.helpRoot + "/index.json" : ""
+    watchChanges: false
+    printErrors: false
+    onLoaded: root.helpIndex = Model.parseHelpIndex(text())
+    onLoadFailed: root.helpIndex = Model.emptyHelpIndex()
+  }
+
+  // Resolve the "Propose a feature" target (config link or literal URL) once,
+  // so both Help and Setup use the same destination.
+  readonly property string helpFeatureUrl: {
+    var f = helpIndex ? helpIndex.feature : null
+    if (!f) return ""
+    if (f.link && pluginLinks[f.link]) return String(pluginLinks[f.link])
+    return String(f.url || "")
   }
 
   // Active Omarchy theme: `theme.name` (e.g. "osaka-jade"). Used to land the
@@ -69,8 +122,26 @@ Item {
     return p ? Util.fileUrl(p.replace(/\/$/, "") + "/" + pluginPaths.logo) : ""
   }
 
+  // Help screen data root: index.json, roadmap.json and the topic Markdown
+  // files live here (see docs/DEVELOPMENT.md).
+  readonly property string helpRoot: {
+    var p = pluginRoot
+    var h = pluginPaths.help || "help"
+    return p ? p.replace(/\/$/, "") + "/" + h : h
+  }
+
   // Plugin repository, opened by the GitHub button in the hero actions.
-  readonly property string pluginRepoUrl: "https://github.com/emkcloud/omarchy-wallpapers-plugin"
+  readonly property string pluginRepoUrl: pluginLinks.repo
+    ? String(pluginLinks.repo) : "https://github.com/emkcloud/omarchy-wallpapers-plugin"
+
+  // Setup screen settings: persisted per plugin id under the user config, so
+  // the official and developer installs never share them.
+  readonly property string settingsDir: Quickshell.env("HOME") + "/.config/omarchy/" + pluginId
+  // Empty until the manifest is injected: the fallback id would point at the
+  // official settings file and its (failed) load would lock the Setup defaults
+  // before the real developer path is known.
+  readonly property string settingsPath: manifest && manifest.id
+    ? settingsDir + "/settings.json" : ""
 
   // ---- view state -----------------------------------------------------------
   readonly property string stateHome: Quickshell.env("HOME") + "/.local/state"
@@ -78,7 +149,7 @@ Item {
   readonly property string backgroundsDir: Quickshell.env("HOME") + "/.config/omarchy/backgrounds"
 
   property bool opened: false
-  property string view: "themes"          // "themes" | "wallpapers" | "preview"
+  property string view: "themes"          // "themes" | "wallpapers" | "preview" | "help" | "setup"
   property string themeName: ""
   property string themeCatalogUrl: ""
   property int selectedIndex: 0
@@ -94,6 +165,13 @@ Item {
   // makes the plain-object map a tracked dependency for the tile checkboxes.
   property var checkedWallpapers: ({})
   property int selectionRevision: 0
+  // Number of checked wallpapers, reactive on `selectionRevision`.
+  readonly property int checkedCount: {
+    var rev = selectionRevision
+    var n = 0
+    for (var key in checkedWallpapers) if (checkedWallpapers[key]) n++
+    return n
+  }
   // Set while a selection-based install/remove runs: the checks are cleared when
   // it finishes (not before, so the grid keeps showing what was acted on).
   property bool actionClearsChecks: false
@@ -139,6 +217,29 @@ Item {
   // Same for `wallpapersModel`: `currentInstalled` depends on it so the preview
   // Install/Uninstall state refreshes after a catalog reload.
   property int wallpapersRevision: 0
+  // Storage caps: current local usage, refreshed on open and after every
+  // action. When a cap is reached, bulk installs (Install all / Shuffle) are
+  // disabled and the themes screen flags it.
+  property int localFileCount: 0
+  property real localBytes: 0
+  readonly property real maxDiskBytes: setupSettings.maxDiskGb * 1073741824
+  // A small headroom: the bulk installer stops when the remaining budget is
+  // below the smallest wallpaper, so the used size can sit just under the cap
+  // while nothing else fits.
+  readonly property real diskLimitSlack: 8 * 1024 * 1024
+  readonly property bool storageLimitReached: localFileCount >= setupSettings.maxLocalFiles
+    || localBytes + diskLimitSlack >= maxDiskBytes
+  // Which cap triggered it, with its value, so the banner is self-explanatory
+  // ("Storage limit 1000" vs "Storage limit 3 GB").
+  readonly property string storageLimitReason: {
+    var fileHit = localFileCount >= setupSettings.maxLocalFiles
+    var diskHit = localBytes + diskLimitSlack >= maxDiskBytes
+    if (fileHit && diskHit)
+      return "Storage limit " + setupSettings.maxLocalFiles + " · " + setupSettings.maxDiskGb + " GB"
+    if (fileHit) return "Storage limit " + setupSettings.maxLocalFiles
+    if (diskHit) return "Storage limit " + setupSettings.maxDiskGb + " GB"
+    return ""
+  }
 
   // ---- image cache ----------------------------------------------------------
   // Big remote images are downloaded once by `manager.sh image` into
@@ -148,6 +249,13 @@ Item {
   // separate caches.
   readonly property string pluginId: manifest && manifest.id
     ? String(manifest.id) : "emkcloud.wallpaper-manager"
+  // Version from the injected manifest and the "name + version" label shown in
+  // the themes and Setup hero metas.
+  readonly property string pluginVersion: manifest && manifest.version
+    ? String(manifest.version) : ""
+  readonly property string versionedName: pluginVersion !== ""
+    ? "Wallpaper manager " + pluginVersion
+    : "Wallpaper manager"
   property string detailImagePath: ""      // resolved local path
   property string detailImageSource: ""    // URL that path corresponds to
   property string pendingDetailUrl: ""     // latest URL queued for resolution
@@ -329,7 +437,8 @@ Item {
       var size = Model.formatSize(item.sizeBytes)
       return size !== "" ? "Downloading " + size + "…" : "Downloading…"
     }
-    if (cmd === "random-install") return "Downloading 5 random…"
+    if (cmd === "random-install")
+      return "Shuffling in " + setupSettings.shuffleCount + " wallpapers…"
     var theme = actionTheme !== "" ? themeByName(actionTheme) : selectedTheme
     var count = theme ? (theme.count || 0) : 0
     return count > 0 ? "Downloading " + count + " wallpapers…" : "Downloading…"
@@ -455,13 +564,27 @@ Item {
     opened = false
   }
 
+  // Global close from any screen (`q` and `x`/`X`). Ignored while an action
+  // runs, matching the hero Close button: Esc is what cancels a running task.
+  function requestClose() {
+    if (actionRunning) return
+    close()
+  }
+
   onOpenedChanged: if (opened) Qt.callLater(function() { keys.forceActiveFocus() })
 
-  // manager.sh keys its caches (datasets + images) from this env var, so the
-  // official and developer installs never share files. `/usr/bin/env` passes it
-  // without relying on Process.environment's QVariantHash type.
+  // manager.sh keys its caches (datasets + images) from WALLPAPER_MANAGER_ID, so
+  // the official and developer installs never share files, and reads the
+  // install parallelism (WALLPAPER_MANAGER_PARALLEL) and the bulk-install file
+  // cap (WALLPAPER_MANAGER_MAX_FILES) from Setup → Download. `/usr/bin/env`
+  // passes them without relying on Process.environment's QVariantHash type.
   function scriptCmd(args) {
-    return ["/usr/bin/env", "WALLPAPER_MANAGER_ID=" + pluginId, scriptPath].concat(args)
+    return ["/usr/bin/env",
+      "WALLPAPER_MANAGER_ID=" + pluginId,
+      "WALLPAPER_MANAGER_PARALLEL=" + setupSettings.parallelDownloads,
+      "WALLPAPER_MANAGER_MAX_FILES=" + setupSettings.maxLocalFiles,
+      "WALLPAPER_MANAGER_MAX_DISK_GB=" + setupSettings.maxDiskGb,
+      scriptPath].concat(args)
   }
 
   function setStatus(text) {
@@ -472,6 +595,12 @@ Item {
     busy = true
     setStatus("Loading themes…")
     themesProc.running = true
+    loadLimits()
+  }
+
+  // Refresh the local usage used by `storageLimitReached`.
+  function loadLimits() {
+    limitsProc.running = true
   }
 
   // Row of the active Omarchy theme, or the first row when it is not part of
@@ -583,6 +712,78 @@ Item {
       Qt.callLater(function() { themesList.positionViewAtIndex(root.selectedIndex, ListView.Contain) })
   }
 
+  // Help screen: opened from the hero Help button on any screen (or `?` on the
+  // themes list). Esc / Back returns to where it was opened from; the topic
+  // cursor lives in HelpView.
+  property string helpReturnView: "themes"
+  // Setup screen: opened with `s` on any screen (or the hero Setup / footer
+  // buttons). It is a leaf like Help, so Esc / Back retraces the origin.
+  property string setupReturnView: "themes"
+
+  function openHelp() {
+    helpReturnView = (view === "wallpapers" || view === "preview") ? view : "themes"
+    view = "help"
+    cursorActive = true
+    setStatus("")
+  }
+
+  function closeHelp() {
+    if (helpReturnView === "preview" || helpReturnView === "wallpapers") {
+      view = helpReturnView
+      cursorActive = true
+      setStatus("")
+      if (helpReturnView === "wallpapers")
+        Qt.callLater(function() { grid.positionViewAtIndex(root.selectedIndex, GridView.Contain) })
+      return
+    }
+    // Coming back from the themes list: keep the cursor exactly where it was
+    // (not `lastThemeIndex`, which is the last theme that was *opened*).
+    view = "themes"
+    cursorActive = true
+    selectedIndex = Math.max(0, Math.min(activeThemesModel.count - 1, selectedIndex))
+    setStatus("")
+    if (activeThemesModel.count > 0)
+      Qt.callLater(function() { themesList.positionViewAtIndex(root.selectedIndex, ListView.Contain) })
+  }
+
+  // Setup screen: a placeholder screen like Help but empty. Reached with `s`
+  // on any screen or from the setup buttons; Esc / Back returns to the origin.
+  function openSetup() {
+    if (view === "setup") return
+    setupReturnView = (view === "wallpapers" || view === "preview" || view === "help")
+      ? view : "themes"
+    view = "setup"
+    cursorActive = true
+    setStatus("")
+  }
+
+  function closeSetup() {
+    setupSettings.commitEdit()
+    view = setupReturnView
+    cursorActive = true
+    setStatus("")
+    if (setupReturnView === "wallpapers")
+      Qt.callLater(function() { grid.positionViewAtIndex(root.selectedIndex, GridView.Contain) })
+  }
+
+  // Open Setup on the Download section: the storage-limit banner links here.
+  function openSetupDownload() {
+    if (view !== "setup") openSetup()
+    setupSettings.selectSection("download")
+  }
+
+  // Hero "Wallpaper manager" button on Help: jump straight to the theme list
+  // from anywhere in the guide (unlike closeHelp, which retraces the origin).
+  function showThemes() {
+    view = "themes"
+    cursorActive = true
+    selectedIndex = Math.max(0, Math.min(activeThemesModel.count - 1,
+      helpReturnView === "themes" ? selectedIndex : lastThemeIndex))
+    setStatus("")
+    if (activeThemesModel.count > 0)
+      Qt.callLater(function() { themesList.positionViewAtIndex(root.selectedIndex, ListView.Contain) })
+  }
+
   function refresh() {
     if (actionRunning) return
     if (view === "themes") loadThemes()
@@ -616,6 +817,14 @@ Item {
     // While an action runs the UI is frozen: only Esc is accepted (it cancels),
     // so arrows/h/j/k must not move the cursor on any screen.
     if (actionRunning) return
+    if (view === "setup") {
+      setupSettings.moveCursor(dx, dy)
+      return
+    }
+    if (view === "help") {
+      helpView.moveSelection(dy !== 0 ? dy : dx)
+      return
+    }
     if (view === "preview") {
       previewNext(dx !== 0 ? dx : dy)
       return
@@ -644,6 +853,16 @@ Item {
   // keys, so they bubble up to the card's Keys.onPressed fallback.
   function pageCursor(dir) {
     if (actionRunning) return
+    // Setup: page between sections (clamped at the ends).
+    if (view === "setup") {
+      setupSettings.pageSection(dir)
+      return
+    }
+    // Help: page through the central topic content.
+    if (view === "help") {
+      helpView.scrollPage(dir)
+      return
+    }
     if (view === "preview") {
       previewNext(dir)
       return
@@ -662,7 +881,12 @@ Item {
   function activateCursor() {
     // While an action runs Esc is the only command (it stops the process).
     if (actionRunning) return
-    if (view === "themes") selectTheme(selectedIndex)
+    if (view === "setup") {
+      setupSettings.activateCursor()
+      return
+    }
+    if (view === "help") helpView.activateSelection()
+    else if (view === "themes") selectTheme(selectedIndex)
     else if (view === "wallpapers") showPreview()
     else actionInstall()
   }
@@ -684,6 +908,20 @@ Item {
     // Esc then closes/backs out.
     if (actionRunning) {
       cancelAction()
+      return
+    }
+    // Setup and Help are leaf screens: Esc / Back retraces the origin. While a
+    // row is in edit mode Esc cancels it instead (reverts the value).
+    if (view === "setup") {
+      if (setupSettings.editing) {
+        setupSettings.cancelEdit()
+        return
+      }
+      closeSetup()
+      return
+    }
+    if (view === "help") {
+      closeHelp()
       return
     }
     // An active filter swallows the first Esc (clear, stay put).
@@ -708,6 +946,37 @@ Item {
   }
 
   function handleTextKey(text) {
+    // Global close, on every screen. While a search field is active the
+    // catcher is blocked and `q` types into the filter instead, so it never
+    // reaches here in that case.
+    if (text === "q" || text === "Q") {
+      requestClose()
+      return
+    }
+    // Global Setup, on every screen. Ignored while an action runs, like the
+    // rest of the navigation.
+    if (text === "s" || text === "S") {
+      if (!actionRunning) openSetup()
+      return
+    }
+    // Global Help (`?`), on every screen. Ignored while an action runs, like
+    // the Help button.
+    if (text === "?") {
+      if (!actionRunning) openHelp()
+      return
+    }
+    // The setup screen: `d` restores the defaults; everything else is ignored.
+    if (view === "setup") {
+      if (text === "d" || text === "D") setupSettings.restoreDefaults()
+      return
+    }
+    // The help screen: `p` proposes a feature, `d` opens the raw database;
+    // Enter/Space pick a topic, Esc goes back, everything else is ignored.
+    if (view === "help") {
+      if (text === "p" || text === "P") helpView.openFeature()
+      else if (text === "d" || text === "D") helpView.openDatabase()
+      return
+    }
     if (view === "themes") {
       var themeAction = Model.themeTextAction(text)
       if (themeAction === "browse") {
@@ -725,11 +994,16 @@ Item {
         triggerSetup()
         return
       }
+      if (themeAction === "help") {
+        openHelp()
+        return
+      }
       // Same rule as the buttons: no bulk task while one is running.
       if (actionRunning) return
       if (themeAction === "install") actionInstallTheme()
       else if (themeAction === "uninstall") actionRemoveThemeAll()
-      else if (themeAction === "random") actionRandomInstall()
+      else if (themeAction === "shuffle") actionRandomInstall()
+      else if (themeAction === "refresh") refresh()
       return
     }
     // Wallpapers/preview: while an action runs only Esc is accepted (it stops
@@ -871,6 +1145,10 @@ Item {
     // cursor tile. The preview always acts on its own wallpaper.
     var checks = view === "wallpapers" ? checkedFilenames() : []
     if (checks.length > 0) {
+      // More than one checked wallpaper is a bulk install: blocked once a
+      // storage cap is reached, exactly like Install all / Shuffle. A single
+      // checked/cursor wallpaper stays allowed.
+      if (storageLimitReached && checks.length > 1) return
       busy = true
       setStatus("Installing " + checks.length + " wallpaper(s)…")
       actionClearsChecks = true
@@ -929,9 +1207,10 @@ Item {
   }
 
   // Bulk install straight from the themes screen: no need to open the theme.
+  // Blocked while a storage cap is reached (the banner flags it).
   function actionInstallTheme() {
     var theme = selectedTheme
-    if (!theme) return
+    if (!theme || storageLimitReached) return
     busy = true
     setStatus("Installing all of " + theme.name + "…")
     runAction(["install", theme.name])
@@ -945,13 +1224,15 @@ Item {
     runAction(["random-default", theme.name])
   }
 
-  // Install a small random sample (5) of the selected theme's wallpapers.
+  // Install a shuffled sample of the selected theme's wallpapers. The count
+  // comes from Setup (default 5, range 1-50).
   function actionRandomInstall() {
     var theme = selectedTheme
-    if (!theme) return
+    if (!theme || storageLimitReached) return
+    var count = Math.max(1, Math.min(50, setupSettings.shuffleCount))
     busy = true
-    setStatus("Installing 5 random wallpapers of " + theme.name + "…")
-    runAction(["random-install", theme.name, "5"])
+    setStatus("Shuffling in " + count + " wallpapers of " + theme.name + "…")
+    runAction(["random-install", theme.name, String(count)])
   }
 
   function actionRemoveAll() {
@@ -1233,6 +1514,25 @@ Item {
   // pane from the small preview without waiting for the next selection.
   onImageCacheRevisionChanged: refreshDetailShown()
 
+  // ---- local usage ----------------------------------------------------------
+  // `manager.sh limits` -> `LIMITS\t<files>\t<bytes>`, feeding the storage-cap
+  // flag. Best effort: a failure leaves the previous values in place.
+  Process {
+    id: limitsProc
+    command: root.scriptCmd(["limits"])
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var line = String(text || "").trim()
+        if (line.indexOf("LIMITS\t") !== 0) return
+        var parts = line.split("\t")
+        if (parts.length < 3) return
+        root.localFileCount = parseInt(parts[1], 10) || 0
+        root.localBytes = parseFloat(parts[2]) || 0
+      }
+    }
+  }
+
   // ---- theme loading --------------------------------------------------------
   Process {
     id: themesProc
@@ -1332,6 +1632,8 @@ Item {
       root.setStatus(cancelled ? "Operation cancelled" : "Operation completed")
       // Update the in-memory catalog in place; no full reload (see docs/DEVELOPMENT.md).
       if (!cancelled) root.applyActionResult()
+      // Refresh the storage-cap flag after the on-disk state changed.
+      root.loadLimits()
       // A selection-based install/remove clears the checks when it is done.
       if (root.actionClearsChecks) {
         root.actionClearsChecks = false
@@ -1518,10 +1820,11 @@ Item {
 
       MouseArea { anchors.fill: parent; onClicked: {} }
 
-      // Del/Backspace are not part of the canonical key set (PanelKeyCatcher
-      // maps removal to x/X); PageUp/PageDown are not mapped either. Both
-      // bubble up here. While the themes search is active the catcher is
-      // blocked and this handler owns every key.
+      // Delete is not part of the canonical key set (PanelKeyCatcher maps x/X
+      // to `deleteRequested`, the global close); PageUp/PageDown are not mapped
+      // either. Both bubble up here. Backspace is handled only inside a search
+      // (filter editing); outside one it does nothing. While a search is active
+      // the catcher is blocked and this handler owns every key.
       Keys.onPressed: function(event) {
         if (root.searching) {
           if (event.key === Qt.Key_Escape) {
@@ -1561,7 +1864,7 @@ Item {
           }
           return
         }
-        if (event.key === Qt.Key_Delete || event.key === Qt.Key_Backspace) {
+        if (event.key === Qt.Key_Delete) {
           root.actionRemove()
           event.accepted = true
         } else if (event.key === Qt.Key_PageDown) {
@@ -1590,7 +1893,9 @@ Item {
         anchors.leftMargin: card.contentLeftInset
 
         // Search owns the keyboard entirely: let the card's fallback handle it.
-        blocked: root.searching
+        // Same while the Setup interval dropdown's popup is open, so its list
+        // gets the arrows / Enter / Esc.
+        blocked: root.searching || setupSettings.dropdownOpen
 
         onMoveRequested: function(dx, dy) { root.moveCursor(dx, dy) }
         // Enter also fires `activateRequested`, so the flag drops that second
@@ -1607,17 +1912,24 @@ Item {
           root.spaceCursor()
         }
         onCloseRequested: root.dismissCursor()
-        onDeleteRequested: root.actionRemove()
+        // `x`/`X`: a second global close shortcut (PanelKeyCatcher emits
+        // `deleteRequested` for both).
+        onDeleteRequested: root.requestClose()
         onTextKey: function(text) { root.handleTextKey(text) }
-        onTabRequested: if ((root.view === "themes" || root.view === "wallpapers")
-          && !root.searching) root.startSearch()
+        onTabRequested: function(direction) {
+          if (root.view === "setup") setupSettings.cycleArea(direction)
+          else if ((root.view === "themes" || root.view === "wallpapers")
+            && !root.searching) root.startSearch()
+        }
 
         // ---- hero -----------------------------------------------------------
         Component {
           id: heroIcon
 
           HeroLogo {
-            glyph: root.view === "themes" ? "󰸌" : ""
+            glyph: root.view === "themes" ? "󰸌"
+              : (root.view === "help" ? "󰘥"
+                : (root.view === "setup" ? "󰒓" : ""))
             source: root.logoPath
             foreground: root.foreground
             fontFamily: root.fontFamily
@@ -1640,11 +1952,33 @@ Item {
               fontFamily: root.fontFamily
             }
 
+            // Auto-save feedback: first in the row so showing/hiding it never
+            // shifts the pill and the buttons that follow.
+            Rectangle {
+              visible: root.view === "setup" && setupSettings.saved
+              width: savedHeroText.implicitWidth + Style.space(24)
+              height: refreshButton.implicitHeight
+              radius: Style.cornerRadius
+              color: Util.alpha(root.accent, 0.16)
+
+              Text {
+                id: savedHeroText
+
+                anchors.centerIn: parent
+                textFormat: Text.PlainText
+                text: "Saved"
+                color: root.accent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+            }
+
             // Global store: total wallpapers and installed count across every
             // theme. Height matches a sibling Button's implicitHeight so the
             // pill lines up with the kit controls (the kit has no shared
             // "control height" applied to Button).
             BorderSurface {
+              visible: root.view !== "help"
               width: storeRow.implicitWidth + leftPadding + rightPadding
               height: refreshButton.implicitHeight
               radius: Style.cornerRadius
@@ -1660,7 +1994,7 @@ Item {
 
                 Text {
                   textFormat: Text.PlainText
-                  text: root.globalCounts.wallpapers + " wallpapers"
+                  text: root.globalCounts.wallpapers + " available"
                   color: root.foreground
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.bodySmall
@@ -1677,16 +2011,71 @@ Item {
                 Text {
                   textFormat: Text.PlainText
                   text: root.globalCounts.installed + " installed"
-                  color: root.statusInstalled
+                  color: root.foreground
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.bodySmall
                   anchors.verticalCenter: parent.verticalCenter
+                }
+
+                // Third segment, only while a storage cap is reached outside
+                // Setup (which handles the caps its own way): bulk installs are
+                // disabled there, so flag it next to the counts.
+                Rectangle {
+                  visible: root.storageLimitReached && root.view !== "setup"
+                  width: Math.max(1, Style.normalBorderWidth)
+                  height: storeRow.implicitHeight
+                  color: Util.alpha(root.foreground, 0.25)
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Text {
+                  visible: root.storageLimitReason !== "" && root.view !== "setup"
+                  textFormat: Text.PlainText
+                  text: root.storageLimitReason
+                  color: root.accent
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  font.capitalization: Font.AllUppercase
+                  anchors.verticalCenter: parent.verticalCenter
+
+                  // Jump straight to the caps in Setup → Download.
+                  HoverHandler { cursorShape: Qt.PointingHandCursor }
+                  TapHandler { onTapped: root.openSetupDownload() }
                 }
               }
             }
 
             Button {
-              visible: root.view === "themes"
+              visible: root.view === "themes" || root.view === "wallpapers"
+              // Frozen while an action runs, like the preview's actions.
+              enabled: !actionRunning
+              opacity: enabled ? 1 : 0.4
+              text: "Help"
+              iconText: "󰘥"
+              bordered: true
+              foreground: root.foreground
+              accent: root.accent
+              fontFamily: root.fontFamily
+              onClicked: root.openHelp()
+            }
+
+            // On Help: jump straight back to the theme list, before GitHub.
+            Button {
+              visible: root.view === "help"
+              enabled: !actionRunning
+              opacity: enabled ? 1 : 0.4
+              text: "Wallpaper manager"
+              iconText: "󰸌"
+              bordered: true
+              foreground: root.foreground
+              accent: root.accent
+              fontFamily: root.fontFamily
+              onClicked: root.showThemes()
+            }
+
+            Button {
+              visible: root.view === "themes" || root.view === "help"
+                || root.view === "setup"
               // Frozen while an action runs, like the preview's actions.
               enabled: !actionRunning
               opacity: enabled ? 1 : 0.4
@@ -1700,9 +2089,25 @@ Item {
               onClicked: { Qt.openUrlExternally(root.pluginRepoUrl); root.close() }
             }
 
+            // Releases: same target as the Help "Changelog" resource
+            // (config.links.releases). Help screen only.
+            Button {
+              visible: root.view === "help"
+              enabled: !actionRunning
+              opacity: enabled ? 1 : 0.4
+              text: "Releases"
+              iconText: "󰓹"
+              bordered: true
+              foreground: root.foreground
+              accent: root.accent
+              fontFamily: root.fontFamily
+              onClicked: { Qt.openUrlExternally(root.pluginLinks.releases); root.close() }
+            }
+
             Button {
               id: refreshButton
 
+              visible: root.view !== "help" && root.view !== "setup"
               enabled: !actionRunning
               opacity: enabled ? 1 : 0.4
               text: "Refresh"
@@ -1715,7 +2120,8 @@ Item {
             }
 
             Button {
-              visible: root.view === "wallpapers"
+              visible: root.view === "wallpapers" || root.view === "help"
+                || root.view === "setup"
               // Frozen while an action runs, like the preview's actions.
               enabled: !actionRunning
               opacity: enabled ? 1 : 0.4
@@ -1725,7 +2131,9 @@ Item {
               foreground: root.foreground
               accent: root.accent
               fontFamily: root.fontFamily
-              onClicked: root.goBack()
+              onClicked: root.view === "help"
+                ? root.closeHelp()
+                : (root.view === "setup" ? root.closeSetup() : root.goBack())
             }
 
             Button {
@@ -1755,14 +2163,21 @@ Item {
           fontFamily: root.fontFamily
           iconComponent: heroIcon
           trailingControl: heroActions
-          title: root.view === "themes"
-            ? "Wallpaper manager"
-            : ("Theme / " + Model.ucfirst(root.themeName))
+          title: root.view === "help"
+            ? "Guide & support"
+            : (root.view === "setup"
+              ? "Setup & options"
+              : (root.view === "themes"
+                ? "Theme selection"
+                : ("Theme / " + Model.ucfirst(root.themeName))))
           detail: ""
-          meta: root.view === "themes"
-            ? ("remote collections · " + themesModel.count
-              + (themesModel.count === 1 ? " theme" : " themes"))
-            : "browse and manage wallpapers"
+          meta: root.view === "help"
+            ? "Wallpaper manager documentation"
+            : (root.view === "setup"
+              ? root.versionedName
+              : (root.view === "themes"
+                ? root.versionedName
+                : "browse and manage wallpapers"))
         }
 
         PanelSeparator {
@@ -1934,6 +2349,17 @@ Item {
                         if (state === "partial") return root.statusInstalling
                         return Util.alpha(root.foreground, 0.25)
                       }
+                    }
+
+                    // Accent ring on the selected row: same treatment as the
+                    // wallpaper tiles (the kit's cursor border reads faint).
+                    BorderSurface {
+                      anchors.fill: parent
+                      color: "transparent"
+                      radius: Style.cornerRadius
+                      borderSpec: themeRowCard.hasCursor
+                        ? Border.flat(root.accent, Style.space(2))
+                        : Border.none()
                     }
 
                     HoverHandler {
@@ -2268,6 +2694,7 @@ Item {
                     Button {
                       visible: root.selectedThemePresent
                       enabled: !root.actionRunning && !root.selectedThemeFull
+                        && !root.storageLimitReached
                       opacity: enabled ? 1 : 0.4
                       text: "Install (ALL)"
                       iconText: "󰮏"
@@ -2282,8 +2709,9 @@ Item {
                     Button {
                       visible: root.selectedThemePresent
                       enabled: !root.actionRunning && !root.selectedThemeFull
+                        && !root.storageLimitReached
                       opacity: enabled ? 1 : 0.4
-                      text: "Random (5)"
+                      text: "Shuffle (" + setupSettings.shuffleCount + ")"
                       iconText: "󰮏"
                       height: root.actionButtonHeight
                       bordered: true
@@ -2375,6 +2803,73 @@ Item {
             background: root.background
             accent: root.accent
             fontFamily: root.fontFamily
+          }
+        }
+
+        // ---- help view ------------------------------------------------------
+        // Index + resources on the left, the selected topic in the centre and
+        // the roadmap on the right. Data lives under `help/` (index.json,
+        // roadmap.json, one Markdown file per topic). Esc / Back go back to the
+        // themes list.
+        HelpView {
+          id: helpView
+
+          visible: root.view === "help"
+          anchors.top: heroRule.bottom
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.bottom: footer.top
+          helpRoot: root.helpRoot
+          links: root.pluginLinks
+          roadmap: root.roadmapData
+          index: root.helpIndex
+          // Same master-pane width as the themes screen, so the two sidebars
+          // line up exactly.
+          sidebarWidth: themeListPane.width
+          foreground: root.foreground
+          background: root.background
+          accent: root.accent
+          fontFamily: root.fontFamily
+          // A link opens a normal browser window under the overlay: hide the
+          // panel so the page is visible.
+          onLinkOpened: root.close()
+        }
+
+        // ---- setup view -----------------------------------------------------
+        // Settings screen, reachable with `s` on any screen or from the setup
+        // buttons: sections sidebar on the left (same width as the Help/themes
+        // sidebars), the selected section on the right.
+        Item {
+          id: setupView
+
+          visible: root.view === "setup"
+          anchors.top: heroRule.bottom
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.bottom: footer.top
+
+          SetupView {
+            id: setupSettings
+
+            anchors.fill: parent
+            settingsPath: root.settingsPath
+            settingsDir: root.settingsDir
+            localFileCount: root.localFileCount
+            localBytes: root.localBytes
+            roadmap: root.roadmapData
+            featureLabel: root.helpIndex && root.helpIndex.feature
+              ? root.helpIndex.feature.title : ""
+            sidebarWidth: themeListPane.width
+            foreground: root.foreground
+            background: root.background
+            accent: root.accent
+            fontFamily: root.fontFamily
+            onFeatureClicked: {
+              if (root.helpFeatureUrl !== "") {
+                Qt.openUrlExternally(root.helpFeatureUrl)
+                root.close()
+              }
+            }
           }
         }
 
@@ -2727,7 +3222,7 @@ Item {
               anchors.left: parent.left
               anchors.verticalCenter: parent.verticalCenter
               // Frozen (and dimmed) while an action runs, like the rest of the
-              // footer controls; it is only a placeholder today.
+              // footer controls.
               enabled: !actionRunning
               opacity: enabled ? 1 : 0.4
               text: "Setup"
@@ -2736,7 +3231,7 @@ Item {
               foreground: root.foreground
               accent: root.accent
               fontFamily: root.fontFamily
-              tooltipText: "Setup"
+              onClicked: root.openSetup()
             }
 
             // Installed/available summary, right-aligned against the sidebar
@@ -2846,7 +3341,9 @@ Item {
               spacing: Style.spacing.controlGap
 
               Button {
-                enabled: !actionRunning
+                // A batch install is bulk: disabled while a storage cap is
+                // reached (one wallpaper at a time stays available).
+                enabled: !actionRunning && !(root.storageLimitReached && root.checkedCount > 1)
                 opacity: enabled ? 1 : 0.4
                 text: "Install"
                 iconText: "󰮏"
@@ -3039,6 +3536,201 @@ Item {
             }
           }
 
+          // Help footer: Setup placeholder plus a direct link to the raw
+          // wallpaper database, then the same master/detail divider as the
+          // other screens.
+          Item {
+            id: helpFooterRow
+
+            visible: root.view === "help"
+            width: parent.width
+            height: Math.max(helpFooterActions.implicitHeight,
+              helpHints.implicitHeight)
+
+            Row {
+              id: helpFooterActions
+
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.spacing.controlGap
+
+              // Same placeholder button as the themes footer, so the help footer
+              // keeps the same height as the other screens.
+              Button {
+                id: helpFooterButton
+
+                enabled: !actionRunning
+                opacity: enabled ? 1 : 0.4
+                text: "Setup"
+                iconText: "󰒓"
+                bordered: true
+                foreground: root.foreground
+                accent: root.accent
+                fontFamily: root.fontFamily
+                onClicked: root.openSetup()
+              }
+
+              // Direct link to the upstream image repository (URL in config).
+              Button {
+                enabled: !actionRunning
+                opacity: enabled ? 1 : 0.4
+                text: "Archive RAW"
+                iconText: "󰆼"
+                bordered: true
+                foreground: root.foreground
+                accent: root.accent
+                fontFamily: root.fontFamily
+                onClicked: helpView.openDatabase()
+              }
+
+              // Star the project on GitHub. There is no direct "star" URL, so
+              // this opens the repo (URL from config.links).
+              Button {
+                enabled: !actionRunning
+                opacity: enabled ? 1 : 0.4
+                text: "Star"
+                iconText: "󰓎"
+                bordered: true
+                foreground: root.foreground
+                accent: root.accent
+                fontFamily: root.fontFamily
+                onClicked: {
+                  Qt.openUrlExternally(root.pluginRepoUrl)
+                  root.close()
+                }
+              }
+            }
+
+            // The master/detail divider used by every other footer, continuing
+            // the Help sidebar border.
+            Rectangle {
+              id: helpSidebarRule
+
+              z: 2
+              anchors.top: parent.top
+              anchors.bottom: parent.bottom
+              x: themeListPane.width - 1
+              width: 1
+              color: Qt.rgba(root.foreground.r, root.foreground.g,
+                root.foreground.b, 0.12)
+            }
+
+            Text {
+              id: helpHints
+
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              textFormat: Text.StyledText
+              text: root.keyHint("enter", "open")
+                + "&nbsp;&nbsp;" + root.keyHint("arrows", "move")
+                + "&nbsp;&nbsp;" + root.keyHint("pgup/pgdn", "scroll")
+                + "&nbsp;&nbsp;" + root.keyHint("p", "propose")
+                + "&nbsp;&nbsp;" + root.keyHint("d", "database")
+                + "&nbsp;&nbsp;" + root.keyHint("esc", "back")
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+
+          // Setup footer: the Help/links group on the left and the keyboard
+          // hints on the right, mirroring the Help footer. "Restore defaults"
+          // lives in the right (SECTIONS) sidebar and the auto-save flash in the
+          // section content.
+          Item {
+            id: setupFooterRow
+
+            visible: root.view === "setup"
+            width: parent.width
+            height: Math.max(setupFooterLeft.implicitHeight,
+              setupHints.implicitHeight)
+
+            // Same left group as the Help footer, with Help in place of Setup.
+            Row {
+              id: setupFooterLeft
+
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.spacing.controlGap
+
+              Button {
+                enabled: !actionRunning
+                opacity: enabled ? 1 : 0.4
+                text: "Help "
+                iconText: "󰘥"
+                bordered: true
+                foreground: root.foreground
+                accent: root.accent
+                fontFamily: root.fontFamily
+                onClicked: root.openHelp()
+              }
+
+              Button {
+                enabled: !actionRunning
+                opacity: enabled ? 1 : 0.4
+                text: "Archive RAW"
+                iconText: "󰆼"
+                bordered: true
+                foreground: root.foreground
+                accent: root.accent
+                fontFamily: root.fontFamily
+                onClicked: helpView.openDatabase()
+              }
+
+              Button {
+                enabled: !actionRunning
+                opacity: enabled ? 1 : 0.4
+                text: "Star"
+                iconText: "󰓎"
+                bordered: true
+                foreground: root.foreground
+                accent: root.accent
+                fontFamily: root.fontFamily
+                onClicked: {
+                  Qt.openUrlExternally(root.pluginRepoUrl)
+                  root.close()
+                }
+              }
+            }
+
+            // The master/detail divider used by every other footer, continuing
+            // the sidebar border.
+            Rectangle {
+              z: 2
+              anchors.top: parent.top
+              anchors.bottom: parent.bottom
+              x: themeListPane.width - 1
+              width: 1
+              color: Qt.rgba(root.foreground.r, root.foreground.g,
+                root.foreground.b, 0.12)
+            }
+
+            Text {
+              id: setupHints
+
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              textFormat: Text.StyledText
+              text: setupSettings.dropdownOpen
+                ? root.keyHint("arrows", "move")
+                  + "&nbsp;&nbsp;" + root.keyHint("enter", "select")
+                  + "&nbsp;&nbsp;" + root.keyHint("esc", "close")
+                : setupSettings.editing
+                  ? root.keyHint("arrows", "change")
+                    + "&nbsp;&nbsp;" + root.keyHint("enter", "confirm")
+                    + "&nbsp;&nbsp;" + root.keyHint("esc", "cancel")
+                  : root.keyHint("enter", "open")
+                  + "&nbsp;&nbsp;" + root.keyHint("arrows", "move")
+                  + "&nbsp;&nbsp;" + root.keyHint("d", "defaults")
+                  + "&nbsp;&nbsp;" + root.keyHint("?", "help")
+                  + "&nbsp;&nbsp;" + root.keyHint("q", "close")
+                  + "&nbsp;&nbsp;" + root.keyHint("esc", "back")
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+
         }
 
         // ---- fullscreen preview ---------------------------------------------
@@ -3158,6 +3850,18 @@ Item {
               }
 
               Button {
+                enabled: !actionRunning
+                opacity: enabled ? 1 : 0.4
+                text: "Help"
+                iconText: "󰘥"
+                bordered: true
+                foreground: root.foreground
+                accent: root.accent
+                fontFamily: root.fontFamily
+                onClicked: root.openHelp()
+              }
+
+              Button {
                 id: previewDownloadButton
 
                 enabled: !actionRunning
@@ -3208,16 +3912,9 @@ Item {
             fontFamily: root.fontFamily
             iconComponent: previewIcon
             trailingControl: previewActions
-            // "Catppuccin / Countries / Andorra": theme, collection, name.
-            title: {
-              var item = root.currentItem()
-              if (!item) return ""
-              var parts = [Model.ucfirst(root.themeName)]
-              var collection = Model.ucfirst(item.collection)
-              if (collection !== "") parts.push(collection)
-              parts.push(item.name)
-              return parts.join(" / ")
-            }
+            // "Theme / Catppuccin / Preview": the file name and size below
+            // already identify the wallpaper, so the title stays short.
+            title: "Theme / " + Model.ucfirst(root.themeName) + " / Preview"
             // Second line: file name, then its size in MB.
             meta: {
               var item = root.currentItem()

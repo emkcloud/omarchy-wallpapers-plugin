@@ -1,0 +1,30 @@
+{
+  "title": "Roadmap",
+  "subtitle": "What is coming in the next releases.",
+  "items": [
+    {
+      "title": "Add new theme",
+      "description": "Add a new theme to the collections that already exist."
+    },
+    {
+      "title": "Add new collection",
+      "description": "Add a new collection across all the existing themes."
+    },
+    {
+      "title": "Create version 4K",
+      "description": "Generate 4K versions of the existing wallpapers with AI upscaling."
+    },
+    {
+      "title": "Create version 8K",
+      "description": "Generate 8K versions of the existing wallpapers with AI upscaling."
+    },
+    {
+      "title": "Automatic rotation",
+      "description": "Change the wallpaper on an interval, per theme or per collection."
+    },
+    {
+      "title": "Multi-monitor preview",
+      "description": "Assign a different wallpaper to each Hyprland output."
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "sections": [
+    {
+      "title": "GETTING STARTED",
+      "items": [
+        { "id": "theme-selection", "title": "Themes", "file": "theme-selection.md" },
+        { "id": "wallpaper-selection", "title": "Wallpapers", "file": "wallpaper-selection.md" },
+        { "id": "previews", "title": "Previews", "file": "previews.md" }
+      ]
+    },
+    {
+      "title": "CONFIGURATION",
+      "items": [
+        { "id": "setup", "title": "Setup", "file": "setup.md" },
+        { "id": "default-wallpaper", "title": "Default wallpaper", "file": "default-wallpaper.md" },
+        { "id": "automatic-rotation", "title": "Automatic rotation", "file": "automatic-rotation.md" },
+        { "id": "multi-monitor", "title": "Multi Monitor", "file": "multi-monitor.md" }
+      ]
+    }
+  ],
+  "resources": [
+    { "title": "Full guide", "link": "repo" },
+    { "title": "Donation", "link": "donation" },
+    { "title": "Issue tracker", "link": "issues" },
+    { "title": "Changelog", "link": "releases" }
+  ],
+  "feature": {
+    "title": "+ Propose feature",
+    "link": "issues"
+  }
+}

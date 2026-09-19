@@ -175,17 +175,20 @@ function textAction(text) {
   return ""
 }
 
-// Themes-list shortcuts, alphabetical: A add remote source (placeholder),
-// B browse, C custom install (placeholder), I install, R random install,
-// U uninstall.
+// Themes-list shortcuts: A add remote source (placeholder), B browse,
+// C custom install (placeholder), F shuffle in 5 random wallpapers, I install
+// all, R refresh, U uninstall all, ? help. (Setup is a global shortcut handled
+// by the panel, so it is not mapped here.)
 function themeTextAction(text) {
   switch (String(text).toLowerCase()) {
     case "a": return "add"
     case "b": return "browse"
     case "c": return "custom"
+    case "f": return "shuffle"
     case "i": return "install"
-    case "r": return "random"
+    case "r": return "refresh"
     case "u": return "uninstall"
+    case "?": return "help"
   }
   return ""
 }
@@ -200,7 +203,286 @@ function catalogStatus(count, theme) {
   return count + (count === 1 ? " wallpaper in " : " wallpapers in ") + theme
 }
 
+// --- help ------------------------------------------------------------------
+// The Help screen is data-driven: `help/index.json` describes the sidebar and
+// the external resources, `help/roadmap.json` the right column, and one
+// Markdown file per topic is rendered by HelpView/MarkdownView. These helpers
+// validate that data (a malformed file degrades to an empty screen, never a
+// crash) and split a Markdown subset into typed blocks.
+
+function emptyHelpIndex() {
+  return { sections: [], resources: [], feature: null }
+}
+
+function parseHelpIndex(raw) {
+  var empty = emptyHelpIndex()
+  try {
+    var cfg = JSON.parse(String(raw || "{}"))
+    if (!cfg || !cfg.sections) return empty
+    var sections = []
+    for (var i = 0; i < cfg.sections.length; i++) {
+      var src = cfg.sections[i]
+      if (!src) continue
+      var items = []
+      var rawItems = src.items || []
+      for (var j = 0; j < rawItems.length; j++) {
+        var it = rawItems[j]
+        if (!it || !it.file) continue
+        items.push({
+          id: String(it.id || it.file),
+          title: String(it.title || it.id || it.file),
+          file: String(it.file)
+        })
+      }
+      sections.push({ title: String(src.title || ""), items: items })
+    }
+    var resources = []
+    var rawResources = cfg.resources || []
+    for (var k = 0; k < rawResources.length; k++) {
+      var res = rawResources[k]
+      if (!res) continue
+      // `link` is a key into config.links (resolved by the view); `url` is an
+      // optional literal fallback.
+      if (!res.link && !res.url) continue
+      resources.push({
+        title: String(res.title || res.link || res.url),
+        link: String(res.link || ""),
+        url: String(res.url || "")
+      })
+    }
+    var feature = null
+    if (cfg.feature && (cfg.feature.link || cfg.feature.url)) {
+      feature = {
+        title: String(cfg.feature.title || "+ Propose feature"),
+        link: String(cfg.feature.link || ""),
+        url: String(cfg.feature.url || "")
+      }
+    }
+    return { sections: sections, resources: resources, feature: feature }
+  } catch (e) {
+    return empty
+  }
+}
+
+// Flat list of the index items, in sidebar order: the keyboard cursor and the
+// "N topics" caption both count these.
+function helpFlatItems(index) {
+  var out = []
+  var sections = index && index.sections ? index.sections : []
+  for (var i = 0; i < sections.length; i++) {
+    var items = sections[i].items || []
+    for (var j = 0; j < items.length; j++) out.push(items[j])
+  }
+  return out
+}
+
+// Sidebar rows: section captions interleaved with items, each item carrying its
+// flat cursor index so the view can highlight it without a second lookup.
+function helpSidebarEntries(index) {
+  var out = []
+  var flat = 0
+  var sections = index && index.sections ? index.sections : []
+  for (var i = 0; i < sections.length; i++) {
+    var section = sections[i]
+    if (section.title) out.push({ type: "section", title: section.title })
+    var items = section.items || []
+    for (var j = 0; j < items.length; j++) {
+      out.push({
+        type: "item",
+        id: items[j].id,
+        title: items[j].title,
+        file: items[j].file,
+        flat: flat
+      })
+      flat++
+    }
+  }
+  return out
+}
+
+function parseRoadmap(raw) {
+  var empty = { title: "Roadmap", subtitle: "", items: [] }
+  try {
+    var cfg = JSON.parse(String(raw || "{}"))
+    if (!cfg || !cfg.items) return empty
+    var items = []
+    for (var i = 0; i < cfg.items.length; i++) {
+      var it = cfg.items[i]
+      if (!it) continue
+      // Deliberately minimal: the roadmap is a plain list of upcoming changes,
+      // each one just a title and a description.
+      items.push({
+        title: String(it.title || ""),
+        description: String(it.description || "")
+      })
+    }
+    return {
+      title: String(cfg.title || "Roadmap"),
+      subtitle: String(cfg.subtitle || ""),
+      items: items
+    }
+  } catch (e) {
+    return empty
+  }
+}
+
+// Inline subset of Markdown for Text.StyledText: bold, italic, inline code
+// (tinted with `codeColor`) and links. Input is escaped first, so the markup we
+// emit is the only markup that survives.
+function inlineMarkdown(text, codeColor) {
+  var s = String(text || "")
+  s = s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  var codes = []
+  s = s.replace(/`([^`]+)`/g, function(match, code) {
+    codes.push(code)
+    return "\u0000" + (codes.length - 1) + "\u0000"
+  })
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+  s = s.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+  s = s.replace(/(^|[^*])\*([^*]+)\*/g, "$1<i>$2</i>")
+  s = s.replace(/\u0000(\d+)\u0000/g, function(match, index) {
+    return '<font color="' + String(codeColor || "#e5c07b") + '">'
+      + codes[parseInt(index, 10)] + "</font>"
+  })
+  return s
+}
+
+function splitTableRow(line) {
+  var s = String(line)
+  if (s.charAt(0) === "|") s = s.slice(1)
+  if (s.charAt(s.length - 1) === "|") s = s.slice(0, -1)
+  return s.split("|").map(function(cell) {
+    return cell.trim()
+  })
+}
+
+function isTableSeparator(line) {
+  return /^\s*\|?\s*:?-{2,}/.test(String(line))
+}
+
+// Markdown subset → array of blocks for MarkdownView:
+//   { type: "heading", level, text }
+//   { type: "paragraph", text }
+//   { type: "code", lang, text }
+//   { type: "table", headers, rows }
+//   { type: "note", text }
+//   { type: "list", ordered, items }
+//   { type: "rule" }
+function parseMarkdown(raw) {
+  var lines = String(raw || "").replace(/\r\n?/g, "\n").split("\n")
+  var blocks = []
+  var i = 0
+
+  function blank(line) { return String(line).trim() === "" }
+  function startsBlock(line, next) {
+    if (blank(line)) return true
+    if (/^\s*```/.test(line)) return true
+    if (/^(#{1,6})\s+/.test(line)) return true
+    if (/^\s*[-*_](\s*[-*_]){2,}\s*$/.test(line)) return true
+    if (/^\s*>\s?/.test(line)) return true
+    if (/^\s*([-*+]|\d+\.)\s+/.test(line)) return true
+    if (line.indexOf("|") !== -1 && next !== undefined && isTableSeparator(next)) return true
+    return false
+  }
+
+  while (i < lines.length) {
+    var line = lines[i]
+    if (blank(line)) {
+      i++
+      continue
+    }
+
+    var fence = line.match(/^\s*```(\w*)\s*$/)
+    if (fence) {
+      var code = []
+      i++
+      while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) {
+        code.push(lines[i])
+        i++
+      }
+      if (i < lines.length) i++
+      blocks.push({ type: "code", lang: fence[1] || "", text: code.join("\n") })
+      continue
+    }
+
+    var heading = line.match(/^(#{1,6})\s+(.*)$/)
+    if (heading) {
+      blocks.push({ type: "heading", level: heading[1].length, text: heading[2].trim() })
+      i++
+      continue
+    }
+
+    if (/^\s*[-*_](\s*[-*_]){2,}\s*$/.test(line)) {
+      blocks.push({ type: "rule" })
+      i++
+      continue
+    }
+
+    if (line.indexOf("|") !== -1 && isTableSeparator(lines[i + 1])) {
+      var headers = splitTableRow(line)
+      i += 2
+      var rows = []
+      while (i < lines.length && lines[i].indexOf("|") !== -1 && !blank(lines[i])) {
+        rows.push(splitTableRow(lines[i]))
+        i++
+      }
+      blocks.push({ type: "table", headers: headers, rows: rows })
+      continue
+    }
+
+    if (/^\s*>\s?/.test(line)) {
+      var note = []
+      while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
+        note.push(lines[i].replace(/^\s*>\s?/, ""))
+        i++
+      }
+      blocks.push({ type: "note", text: note.join(" ").trim() })
+      continue
+    }
+
+    if (/^\s*([-*+]|\d+\.)\s+/.test(line)) {
+      var ordered = /^\s*\d+\./.test(line)
+      var items = []
+      while (i < lines.length && /^\s*([-*+]|\d+\.)\s+/.test(lines[i])) {
+        items.push(lines[i].replace(/^\s*([-*+]|\d+\.)\s+/, "").trim())
+        i++
+      }
+      blocks.push({ type: "list", ordered: ordered, items: items })
+      continue
+    }
+
+    var paragraph = []
+    while (i < lines.length
+        && !startsBlock(lines[i], lines[i + 1])) {
+      paragraph.push(lines[i].trim())
+      i++
+    }
+    blocks.push({ type: "paragraph", text: paragraph.join(" ") })
+  }
+  return blocks
+}
+
 // --- config ----------------------------------------------------------------
+
+// Merge the `links` block of config.json over the shipped defaults. Links are
+// data so the Help screen and the GitHub button can be repointed without a code
+// change.
+function parseLinks(raw, fallback) {
+  var base = fallback || {}
+  try {
+    var cfg = JSON.parse(String(raw || "{}"))
+    if (!cfg || !cfg.links) return base
+    return {
+      repo: cfg.links.repo || base.repo,
+      donation: cfg.links.donation || base.donation,
+      issues: cfg.links.issues || base.issues,
+      releases: cfg.links.releases || base.releases,
+      database: cfg.links.database || base.database
+    }
+  } catch (e) {
+    return base
+  }
+}
 
 // Merge the `paths` block of config.json over the shipped defaults.
 function parsePaths(raw, fallback) {
@@ -211,7 +493,8 @@ function parsePaths(raw, fallback) {
     return {
       scripts: cfg.paths.scripts || base.scripts,
       assets: cfg.paths.assets || base.assets,
-      logo: cfg.paths.logo || base.logo
+      logo: cfg.paths.logo || base.logo,
+      help: cfg.paths.help || base.help
     }
   } catch (e) {
     return base

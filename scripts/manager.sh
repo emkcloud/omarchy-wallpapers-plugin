@@ -74,6 +74,27 @@ fi
 DATASETS_JSON="$DATASETS_DIR/datasets.json"
 DATASETS_REF_FILE="$DATASETS_DIR/.release"
 
+# Concurrent downloads for install / random-install, set by the UI
+# (Setup → Download → Parallel downloads). Clamped to 1-12, default 8.
+PARALLEL_DOWNLOADS="${WALLPAPER_MANAGER_PARALLEL:-8}"
+[[ $PARALLEL_DOWNLOADS =~ ^[0-9]+$ ]] || PARALLEL_DOWNLOADS=8
+PARALLEL_DOWNLOADS=$(( PARALLEL_DOWNLOADS < 1 ? 1 : PARALLEL_DOWNLOADS > 12 ? 12 : PARALLEL_DOWNLOADS ))
+
+# Cap on locally installed wallpaper files, enforced only by the bulk "install
+# all" (no selectors). Set by the UI (Setup → Download → Max local files).
+# Clamped to 1000-5000, default 2500.
+MAX_LOCAL_FILES="${WALLPAPER_MANAGER_MAX_FILES:-2500}"
+[[ $MAX_LOCAL_FILES =~ ^[0-9]+$ ]] || MAX_LOCAL_FILES=2500
+MAX_LOCAL_FILES=$(( MAX_LOCAL_FILES < 1000 ? 1000 : MAX_LOCAL_FILES > 5000 ? 5000 : MAX_LOCAL_FILES ))
+
+# Cap on the disk space used by installed wallpapers (Setup → Download → Max
+# disk size). Counts only the local wallpaper files, not the disposable image
+# cache. Clamped to 1-50 GB, default 3.
+MAX_DISK_GB="${WALLPAPER_MANAGER_MAX_DISK_GB:-3}"
+[[ $MAX_DISK_GB =~ ^[0-9]+$ ]] || MAX_DISK_GB=3
+MAX_DISK_GB=$(( MAX_DISK_GB < 1 ? 1 : MAX_DISK_GB > 50 ? 50 : MAX_DISK_GB ))
+MAX_DISK_BYTES=$(( MAX_DISK_GB * 1024 * 1024 * 1024 ))
+
 DEST_BASE="$HOME/.config/omarchy/backgrounds"
 STATE_BG="$HOME/.local/state/omarchy/current/background"
 CONFIG_BG="$HOME/.config/omarchy/current/background"
@@ -83,6 +104,7 @@ usage() {
 Usage: $0 <command> [args...]
 Commands:
   themes                            List themes as TSV (name,title,url,collections,count,preview,installed,palette,description,image,present)
+  limits                            Current local usage as TSV (files, bytes)
   catalog <theme> <catalog-url>     Wallpapers of a theme as TSV
   install <theme> [selector...]     Install all wallpapers, or every one matching a selector
   random-install <theme> [count]    Install <count> (default 5) random wallpapers
@@ -169,7 +191,7 @@ cmd_prewarm() {
       path="$(cmd_image "$url" 2>/dev/null)" || exit 0
       [[ -n $path ]] && printf '%s\t%s\n' "$url" "$path"
     ) &
-    while (( $(jobs -rp | wc -l) >= 8 )); do
+    while (( $(jobs -rp | wc -l) >= PARALLEL_DOWNLOADS )); do
       wait -n || true
     done
   done
@@ -434,6 +456,23 @@ cmd_catalog() {
     "$DATASETS_DIR/$theme/catalog.json")
 }
 
+# Total wallpaper files currently installed across every theme.
+count_local_files() {
+  find "$DEST_BASE" -mindepth 2 -maxdepth 2 -type f ! -name '*.tmp' 2>/dev/null | wc -l | tr -d ' '
+}
+
+# Total bytes used by the installed wallpaper files (excluding in-flight .tmp).
+count_local_bytes() {
+  find "$DEST_BASE" -mindepth 2 -maxdepth 2 -type f ! -name '*.tmp' -printf '%s\n' 2>/dev/null \
+    | awk '{s+=$1} END {print s+0}'
+}
+
+# Current local usage, so the UI can flag that the caps are reached. The caps
+# themselves travel back through the env, so this only reports what is on disk.
+cmd_limits() {
+  printf 'LIMITS\t%s\t%s\n' "$(count_local_files)" "$(count_local_bytes)"
+}
+
 cmd_install() {
   local theme="$1"
   shift
@@ -458,20 +497,47 @@ cmd_install() {
   catalog="$(cat -- "$DATASETS_DIR/$theme/catalog.json")"
 
   local -a sel_url=() sel_dest=() sel_sha=()
-  local filename id name code url sha
-  while IFS=$'\t' read -r filename id name code url sha; do
+  local filename id name code url sha size
+  # The caps apply only to the bulk "install all" (no selectors): manual
+  # single/multi selections are always honoured, since the user is choosing
+  # them explicitly. Already-installed files do not consume budget.
+  local cap_active=0 remaining=0 bytes_remaining=0 skipped=0
+  if (( ${#SELECTORS[@]} == 0 )); then
+    cap_active=1
+    remaining=$(( MAX_LOCAL_FILES - $(count_local_files) ))
+    (( remaining < 0 )) && remaining=0
+    bytes_remaining=$(( MAX_DISK_BYTES - $(count_local_bytes) ))
+    (( bytes_remaining < 0 )) && bytes_remaining=0
+  fi
+  while IFS=$'\t' read -r filename id name code url sha size; do
     if matches_any_selector "$id" "$name" "$code" "$filename"; then
       if ! is_allowed_image "$filename"; then
         echo "Skipping '$filename': not an allowed image (webp/jpg/jpeg/png)." >&2
         continue
       fi
+      if (( cap_active )) && [[ ! -f "$DEST_BASE/$theme/$filename" ]]; then
+        if (( remaining <= 0 || size > bytes_remaining )); then
+          skipped=$((skipped + 1))
+          continue
+        fi
+        remaining=$((remaining - 1))
+        bytes_remaining=$((bytes_remaining - size))
+      fi
       sel_url+=("$(rebase_url "$url")")
       sel_dest+=("$DEST_BASE/$theme/$filename")
       sel_sha+=("$sha")
     fi
-  done < <(jq -r '.wallpapers[] | [.filename, .id, .name, .code, .url, .sha256] | @tsv' <<<"$catalog")
+  done < <(jq -r '.wallpapers[] | [.filename, .id, .name, .code, .url, .sha256, (.size_bytes // 0)] | @tsv' <<<"$catalog")
+
+  if (( skipped > 0 )); then
+    echo "Local file limit reached ($MAX_LOCAL_FILES): skipped $skipped wallpaper(s)." >&2
+  fi
 
   if (( ${#sel_url[@]} == 0 )); then
+    if (( cap_active )); then
+      echo "Local file limit reached ($MAX_LOCAL_FILES): nothing new to install." >&2
+      return 0
+    fi
     echo "No wallpaper matching the selection in theme '$theme'." >&2
     return 1
   fi
@@ -482,7 +548,7 @@ cmd_install() {
   emit_progress "$theme" "$total"
   for i in "${!sel_url[@]}"; do
     download_one "${sel_url[$i]}" "${sel_dest[$i]}" "${sel_sha[$i]}" 2>>"$fail_file" &
-    while (( $(jobs -rp | wc -l) >= 8 )); do
+    while (( $(jobs -rp | wc -l) >= PARALLEL_DOWNLOADS )); do
       wait -n || true
       emit_progress "$theme" "$total"
     done
@@ -636,16 +702,35 @@ cmd_random_install() {
   if (( count > total )); then count=$total; fi
   if (( count < 1 )); then count=1; fi
 
+  # Shuffle is a bulk action, so it honours both caps too (only the manual
+  # install via `cmd_install` selectors stays free).
+  local remaining=$(( MAX_LOCAL_FILES - $(count_local_files) ))
+  (( remaining < 0 )) && remaining=0
+  local bytes_remaining=$(( MAX_DISK_BYTES - $(count_local_bytes) ))
+  (( bytes_remaining < 0 )) && bytes_remaining=0
+  if (( remaining == 0 || bytes_remaining == 0 )); then
+    echo "Local limits reached: nothing new to install." >&2
+    return 0
+  fi
+  if (( count > remaining )); then count=$remaining; fi
+
   local -a sel_url=() sel_dest=() sel_sha=()
-  local filename url sha
-  while IFS= read -r filename; do
-    IFS=$'\t' read -r url sha < <(
-      jq -r --arg f "$filename" '.wallpapers[] | select(.filename == $f) | [.url, .sha256] | @tsv' "$catalog"
-    )
+  local filename url sha size dest accepted=0
+  while IFS=$'\t' read -r filename url sha size; do
+    if (( accepted >= count )); then break; fi
+    dest="$DEST_BASE/$theme/$filename"
+    if [[ -f $dest ]]; then
+      : # already installed: no budget cost
+    elif (( size > bytes_remaining )); then
+      continue
+    else
+      bytes_remaining=$((bytes_remaining - size))
+    fi
     sel_url+=("$(rebase_url "$url")")
-    sel_dest+=("$DEST_BASE/$theme/$filename")
+    sel_dest+=("$dest")
     sel_sha+=("$sha")
-  done < <(jq -r '.wallpapers[].filename' "$catalog" | shuf -n "$count")
+    accepted=$((accepted + 1))
+  done < <(jq -r '.wallpapers[] | [.filename, .url, .sha256, (.size_bytes // 0)] | @tsv' "$catalog" | shuf)
 
   mkdir -p "$DEST_BASE/$theme"
   local fail_file i total=${#sel_url[@]}
@@ -653,7 +738,7 @@ cmd_random_install() {
   emit_progress "$theme" "$total"
   for i in "${!sel_url[@]}"; do
     download_one "${sel_url[$i]}" "${sel_dest[$i]}" "${sel_sha[$i]}" 2>>"$fail_file" &
-    while (( $(jobs -rp | wc -l) >= 8 )); do
+    while (( $(jobs -rp | wc -l) >= PARALLEL_DOWNLOADS )); do
       wait -n || true
       emit_progress "$theme" "$total"
     done
@@ -683,6 +768,7 @@ shift
 
 case "$command" in
   themes) cmd_themes ;;
+  limits) cmd_limits ;;
   catalog) cmd_catalog "$@" ;;
   install) cmd_install "$@" ;;
   random-install) cmd_random_install "$@" ;;

@@ -18,7 +18,7 @@ set-default), theme by theme.
 - `interface/` — the QML UI. Kept in a subdirectory so root holds only plugin
   metadata and config; the entry points are exactly one level deep.
 - `interface/WallpaperManager.qml` — the UI view + thin controller: state,
-  `Process`/`FileView` and the three screens. Imports `"components"` and
+  `Process`/`FileView` and the four screens. Imports `"components"` and
   `"js/Model.js" as Model`.
 - `interface/BarLauncher.qml` — bar launcher: one click toggles this plugin's own
   overlay via the scoped shell facade (`bar.shell.toggle(pluginId, …)`). The
@@ -26,14 +26,17 @@ set-default), theme by theme.
   `-developer` moduleName.
 - `interface/js/` — JavaScript logic modules, kept out of the QML files.
 - `interface/js/Model.js` — pure logic, no QML ids/state: TSV parsing,
-  `themeLabel`, cursor arithmetic, key mapping, status text, `parsePaths`.
+  `themeLabel`, cursor arithmetic, key mapping, status text, `parsePaths`, and
+  the Help data helpers (`parseHelpIndex`, `parseRoadmap`, `parseMarkdown`).
 - `interface/components/` — local QML atoms shared by the screens:
   `RoundedImage.qml` (rounded image via MultiEffect mask), `HeroLogo.qml`
   (brand mark + glyph fallback), `Pill.qml` (state pill), `ThemeProgress.qml`
   (install progress of one theme: caption + percentage + accent bar),
   `SearchField.qml` (shared search box with caret and clear X),
   `RunningOverlay.qml` (opaque scrim + accent spinner + pulsing caption while
-  an install/remove runs, shared by the themes detail pane and the preview).
+  an install/remove runs, shared by the themes detail pane and the preview),
+  `DashedButton.qml` (dotted-outline action button), `MarkdownView.qml`
+  (renders the Help blocks) and `HelpView.qml` (the whole Help screen).
 - `config/` — plugin config, kept out of the repo root.
 - `config/config.json` — plugin config, read by both `manager.sh` and the QML.
   - `repo` / `release` — pin the upstream snapshot. `manager.sh` reads the
@@ -42,12 +45,22 @@ set-default), theme by theme.
     frozen on a tested snapshot while `main` keeps moving. Missing or invalid
     falls back to `main`. Bump `release` and push to roll a new release: clients
     pick it up with `omarchy plugin update`.
-  - `paths` — `scripts`, `assets`, `logo`, `datasets`. The first three are
-    relative to the plugin root; `datasets` is now relative to the **app cache**
-    (`~/.cache/omarchy/<pluginId>`), so the layout is data-driven. The QML
-    resolves `scriptPath` / `logoPath` from these (silent fallback to the
-    shipped layout if the file is missing/invalid); `manager.sh` reads
-    `paths.datasets` for its cache dir (an absolute path is honoured as-is).
+  - `paths` — `scripts`, `assets`, `logo`, `datasets`, `help`. The first three
+    and `help` are relative to the plugin root; `datasets` is now relative to
+    the **app cache** (`~/.cache/omarchy/<pluginId>`), so the layout is
+    data-driven. The QML resolves `scriptPath` / `logoPath` / `helpRoot` from
+    these (silent fallback to the shipped layout if the file is missing/invalid);
+    `manager.sh` reads `paths.datasets` for its cache dir (an absolute path is
+    honoured as-is).
+  - `links` — `repo`, `donation`, `issues`, `releases`, `database`: the project
+    URLs, opened by the hero GitHub / Releases buttons, the Help footer
+    "Archive RAW" / "Star" buttons and the Help resources / "propose a feature"
+    (whose `index.json` entries name a key here). Data, so they can be
+    repointed without a code change.
+- `help/` — the Help screen data. `index.json` describes the sidebar sections,
+  the external resources and the "propose a feature" target; `roadmap.json`
+  drives the right column; one Markdown file per topic is the centre content.
+  The QML reads them at runtime through `paths.help` (see *Help screen*).
 - `scripts/` — helper scripts, kept out of the repo root.
 - `scripts/manager.sh` — bash helper: builds the dataset cache (see `datasets/`
   below), computes local install state, and runs install/remove/set-default
@@ -140,7 +153,7 @@ before the `PanelWindow`. This is the source order and where each concern lives:
 | cursor state machine | `activeGrid`, `activeCount`, `stepCursor`, `moveCursor`, `pageCursor`, `activateCursor`, `dismissCursor`, `handleTextKey`, `takeCursor` | one `selectedIndex` driven by mouse *and* keyboard |
 | actions | `currentItem`, `showPreview`, `closePreview`, `previewNext`, `actionInstall`, `actionRemove`, `actionSetDefault`, `actionInstallAll`, `actionRemoveAll`, `runAction` | user operations |
 | processes | `themesProc`, `catalogProc`, `actionProc` | run `manager.sh`, parse TSV |
-| overlay UI | `panel`, `card`, `keys`, `hero`, `heroRule`, `themesGrid`, `grid`, `footer`, `previewView` | the chrome and the three screens |
+| overlay UI | `panel`, `card`, `keys`, `hero`, `heroRule`, `themesGrid`, `grid`, `footer`, `previewView`, `helpView`, `setupView` | the chrome and the five screens |
 
 Pure helpers live in `interface/js/Model.js` (imported as `Model`): `parseThemes`,
 `parseCatalog`, `themeLabel`, `ucfirst`, `formatSize`, `themeMatches`,
@@ -156,7 +169,7 @@ The plugin ships two entry points: the overlay described below, and
 `interface/BarLauncher.qml` (a `WidgetButton` that toggles that overlay from the
 bar). Both share the same code; the bar icon is just a launcher.
 
-The overlay shows **three screens**, switched by the single `view` property on
+The overlay shows **five screens**, switched by the single `view` property on
 `root`:
 
 | `view` | screen | content |
@@ -164,6 +177,8 @@ The overlay shows **three screens**, switched by the single `view` property on
 | `"themes"` | theme list | all remote themes (`kind=="theme"`) |
 | `"wallpapers"` | wallpaper list | the wallpapers of the selected theme |
 | `"preview"` | single wallpaper | fullscreen preview + actions |
+| `"help"` | guide | data-driven documentation (HelpView) |
+| `"setup"` | setup | placeholder screen, "Work in progress" |
 
 Every screen is the same skeleton inside the container: **hero header** (icon,
 title, meta caption, optional pills/buttons) + `PanelSeparator` + **body** +
@@ -210,8 +225,9 @@ centered; clicking outside the card closes the overlay.
   keys to semantic signals handled by `root`'s state machine (`moveCursor`,
   `activateCursor`, `dismissCursor`, `deleteRequested`, `textKey`).
 - Fallback `Keys.onPressed` on the card (the catcher does not accept these, so
-  they bubble up): Del/Backspace = remove, PageUp/PageDown = jump a whole
-  visible page of tiles (`pageCursor`).
+  they bubble up): Del = remove, PageUp/PageDown = jump a whole visible page of
+  tiles (`pageCursor`). Backspace only edits the search filter (elsewhere it is
+  a no-op), and `x`/`X` (`deleteRequested`) is a second global close.
 - The two heroes (grid screens and preview) share a pinned height
   `root.heroHeight = Math.max(hero.implicitHeight, previewHero.implicitHeight)`,
   so switching view never shifts the separator and the content below it.
@@ -258,8 +274,8 @@ has Back / Refresh / Close buttons and shows the theme name + count. Footer has
 three sections on one row — Install / Uninstall on the left, the theme's progress
 in the middle, and the key hints on the right. Enter or click opens the
 preview; Space checks the cursor tile; `Select all` / `Clear` (search row) fill
-and empty the selection; x/X or Del removes; d sets default; r refreshes; Esc
-returns to themes (Esc again closes).
+and empty the selection; `u` or Del removes; d sets default; r
+refreshes; Esc returns to themes (Esc again closes).
 
 **Multi-select.** Each tile carries a checkbox top-left (the installed disc is
 top-right, the `DEFAULT` pill centered), keyed by filename in the
@@ -471,6 +487,63 @@ list.
   through the cursor state machine (`dismissCursor()` → `close()` on the themes
   view, a step back on the others).
 
+### 8. Help screen (`view = "help"`)
+
+**Functional.** Opened from the hero Help button on any screen (or `?` on the
+themes list). It is a three-column reference inside the card: the roadmap on the
+left with the "Propose a feature" action pinned at the bottom, the selected
+topic in the centre, the topic index with the external resources on the right.
+Esc / the hero Back button return to the screen it was opened from, while the
+hero "Wallpaper manager" button jumps straight to the theme list; the footer
+holds a Setup placeholder, an "Archive RAW" link and a "Star" link. Shortcuts:
+`enter`/`space`
+open the highlighted topic, arrows/h/j/k/l move the index cursor,
+`pageup`/`pagedown` scroll the topic, `p` proposes a feature, `d` opens the raw
+database, `q`/`x` close the plugin.
+
+**Technical.**
+- The view lives in `components/HelpView.qml` (rendering) and
+  `components/MarkdownView.qml` (block rendering); `WallpaperManager.qml` only
+  wires the state (`openHelp()` / `closeHelp()` remembering `helpReturnView`,
+  the `moveCursor` / `activateCursor` delegation and the footer chrome). The
+  sidebar takes its width from the themes master pane (`sidebarWidth`), so the
+  two line up.
+- Data is read at runtime from `helpRoot` (`pluginRoot + paths.help`):
+  `index.json` (sections, resources, feature target), `roadmap.json` and one
+  Markdown file per topic; the project links come from `config.links`, with
+  `HelpView.linkFor` resolving a resource's `link` key. `Model.parseHelpIndex` /
+  `parseRoadmap` validate the JSON and degrade to an empty screen;
+  `Model.parseMarkdown` splits the Markdown subset (headings, paragraphs, fenced
+  code, tables, notes, lists, rules) into typed blocks that `MarkdownView`
+  renders one delegate per type. There is no search box yet (deliberate).
+- The index is a `ListView` of section captions and topics; Enter/Space or a
+  click loads the topic, arrows/j/k move the cursor (`HelpView.moveSelection`),
+  `HelpView.scrollPage` pages the centre. Keyboard focus stays with the panel,
+  so the `PanelKeyCatcher` keeps routing keys exactly as on the other screens;
+  `p` and `d` are handled in `handleTextKey`.
+
+### 9. Setup screen (`view = "setup"`)
+
+**Functional.** Opened with `s` on every screen, or from the Setup buttons in
+the themes and Help footers. It is a placeholder: an empty body with just the
+word "Setup" (no sidebar, no roadmap) and a footer with "Work in progress".
+Esc / the hero Back button return to where it was opened from (Help included);
+the hero also keeps Help / GitHub / "Wallpaper manager" so you can jump away.
+
+**Technical.**
+- The view is an inline `Item` (`setupView`) in `WallpaperManager.qml`: no
+  component yet, because the content is a single centred `Text`.
+- `openSetup()` / `closeSetup()` mirror the Help pair; `setupReturnView` records
+  the origin (`themes` / `wallpapers` / `preview` / `help`) so Esc retraces it.
+  `openSetup()` is a no-op when the view is already up.
+- `s` is handled globally in `handleTextKey`, before the per-view branches, and
+  ignored while `actionRunning`; Shuffle moved to `f` in
+  `Model.themeTextAction` to free the key. `moveCursor` / `pageCursor` /
+  `activateCursor` return early on this view, and the hero Refresh button is
+  hidden.
+- The footer `setupFooterRow` carries the note and an `esc back` hint, keeping
+  the same height as the other footers.
+
 ## Design canon (decision 2026-09-03)
 
 There is **no written design guide** in Omarchy. The standard is implicit and
@@ -530,14 +603,17 @@ Rules that follow from that:
   state machine (`moveCursor(dx,dy)` / `activateCursor()` / `dismissCursor()`).
   Canonical keys: arrows + h/j/k/l, Enter/Space activate (on the wallpapers
   screen Space toggles the checkbox while Enter opens the preview), Esc back/close,
-  **x/X remove** (`deleteRequested`), `d` default, `r` refresh and `u` uninstall
-  via `textKey`. Del/Backspace and **PageUp/PageDown** (jump a whole visible page
-  of tiles — visible rows × columns — via `pageCursor(dir)`) work through a
-  fallback `Keys.onPressed` on the card (the catcher does not accept them, so
-  they bubble up).
+  `d` default, `r` refresh, `f` shuffle (5 random wallpapers, themes screen),
+  `s` setup (any screen) and `u` uninstall via `textKey`. `q` and `x`/`X`
+  (`deleteRequested`) close the plugin from any screen (ignored while typing in a
+  search field, and while an action runs) — removal stays on `u` and `Del`. `Del` and **PageUp/PageDown**
+  (jump a whole visible page of tiles — visible rows × columns — via
+  `pageCursor(dir)`; on the Help screen they scroll the topic content) work
+  through a fallback `Keys.onPressed` on the card (the catcher does not accept
+  them, so they bubble up); Backspace is filter-only.
 - **Buttons** = `Ui/Button` with `bordered: true`. Never pin `hasCursor: true`
-  — the component derives `hot` from its own hover. Key hints go in
-  `tooltipText`, which is the canonical hint channel.
+  — the component derives `hot` from its own hover. No tooltips: key hints live
+  in the footer hint row (`keyHint`).
 - **Pills** (installed / default) follow the `detail` pill of `PanelHero`:
   transparent fill, `Border.flat(tint, …)`, caption text in the tint. No
   colored blobs.

@@ -5,6 +5,14 @@
     "scripts": "scripts",
     "assets": "assets",
     "logo": "assets/images/logo.png",
-    "datasets": "datasets"
+    "datasets": "datasets",
+    "help": "help"
+  },
+  "links": {
+    "repo": "https://github.com/emkcloud/omarchy-wallpapers-plugin",
+    "donation": "https://github.com/sponsors/emkcloud",
+    "issues": "https://github.com/emkcloud/omarchy-wallpapers-plugin/issues",
+    "releases": "https://github.com/emkcloud/omarchy-wallpapers-plugin/releases",
+    "database": "https://github.com/emkcloud/omarchy-wallpapers/tree/main/images"
   }
 }

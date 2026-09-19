@@ -23,7 +23,7 @@ PLUGINS_DIR="$HOME/.config/omarchy/plugins"
 DEV_ID="emkcloud.wallpaper-manager-developer"
 DEV_DIR="$PLUGINS_DIR/$DEV_ID"
 MARKER="$DEV_DIR/.dev-wrapper"
-LINKS=(interface scripts config assets)
+LINKS=(interface scripts config assets help)
 # Datasets live in the app cache, outside the watched plugin dir (see manager.sh).
 DEV_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy/$DEV_ID"
 
