@@ -28,6 +28,8 @@ Item {
   property string featureLabel: ""
 
   signal featureClicked()
+  // "Rotate now": the panel runs `manager.sh rotate` immediately.
+  signal rotateRequested()
 
   readonly property color dim: Qt.darker(foreground, 1.4)
   readonly property int gutter: Style.space(28)
@@ -57,6 +59,8 @@ Item {
   // selected theme.
   property bool rotationAllTheme: false
   property bool rotationRandom: false
+  // Injected by the panel: a rotate is in flight, so "Rotate now" is disabled.
+  property bool rotateBusy: false
 
   property bool settingsLoaded: false
   // Flashes the "Saved" caption after a write.
@@ -343,7 +347,7 @@ Item {
 
   readonly property var navRows: section === "download"
     ? ["resolution", "shuffle", "parallel", "maxFiles", "maxDisk"]
-    : ["enabled", "allTheme", "random", "interval"]
+    : ["enabled", "allTheme", "random", "interval", "rotateNow"]
 
   // Rows that open in edit mode instead of toggling on Enter.
   readonly property var adjustableRows: ["shuffle", "parallel", "maxFiles", "maxDisk"]
@@ -470,6 +474,8 @@ Item {
     case "allTheme": rotationAllTheme = !rotationAllTheme; break
     case "random": rotationRandom = !rotationRandom; break
     case "interval": cycleInterval(1); break
+    case "rotateNow":
+      if (!rotateBusy) rotateRequested(); break
     case "shuffle":
       shuffleCount = clampInt(shuffleCount + 1, 1, 50, shuffleCount); break
     case "parallel":
@@ -1127,7 +1133,7 @@ Item {
         Text {
           width: parent.width
           textFormat: Text.PlainText
-          text: "Change the wallpaper automatically on a schedule, using the files already installed locally on your system."
+          text: "Change the wallpaper automatically on a schedule, using the image files that are already installed locally on your system."
           color: setup.foreground
           font.family: setup.fontFamily
           font.pixelSize: Style.font.body
@@ -1341,6 +1347,57 @@ Item {
             accent: setup.accent
             fontFamily: setup.fontFamily
             onChanged: function(v) { setup.rotationInterval = parseInt(v) }
+          }
+        }
+
+        // Manual trigger: run one rotation now, with the pool and order above.
+        // Independent of the switch, so the feature can be tried out.
+        Item {
+          width: parent.width
+          height: Math.max(rotateNowText.height, rotateNowButton.height)
+
+          Column {
+            id: rotateNowText
+
+            anchors.left: parent.left
+            anchors.right: rotateNowButton.left
+            anchors.rightMargin: Style.space(16)
+            anchors.top: parent.top
+            spacing: Style.space(7)
+
+            Text {
+              width: parent.width
+              textFormat: Text.PlainText
+              text: "Rotate now"
+              color: setup.isRowFocused("rotation", 4) ? setup.accent : setup.foreground
+              Behavior on color { ColorAnimation { duration: 140; easing.type: Easing.OutCubic } }
+              font.family: setup.fontFamily
+              font.pixelSize: Style.font.subtitle
+              font.capitalization: Font.AllUppercase
+            }
+
+            FieldHint {
+              text: "Change the background immediately, using the pool and order above. It picks the next file just like a scheduled change. Works even when automatic rotation is off, so you can try it out."
+            }
+          }
+
+          Button {
+            id: rotateNowButton
+
+            anchors.right: parent.right
+            anchors.top: parent.top
+            // Same width as the interval dropdown above, pinned so the label
+            // swap ("Rotate now" / "Rotating…") never resizes it.
+            width: Style.space(120)
+            enabled: !setup.rotateBusy
+            opacity: enabled ? 1 : 0.4
+            text: setup.rotateBusy ? "Rotating…" : "Rotate now"
+            iconText: "󰑓"
+            bordered: true
+            foreground: setup.foreground
+            accent: setup.accent
+            fontFamily: setup.fontFamily
+            onClicked: setup.rotateRequested()
           }
         }
       }

@@ -112,6 +112,7 @@ Commands:
   set-default <theme> <filename> <url>  Download if needed + set as current background
   unset-default <theme> <filename>  Clear it as background, back to the theme default
   random-default <theme>            Set a random wallpaper of the theme as current background
+  rotate [--all] [--random]         Set the next wallpaper of the current theme (--all: include theme backgrounds)
   image <url>                       Print the local cache path of an image, downloading it if missing
   prewarm <url>...                  Warm the image cache in the background (best-effort)
   download <url> <dest-dir>         Copy the original wallpaper into a folder, print the saved path
@@ -758,6 +759,116 @@ cmd_random_install() {
   echo "Installed ${#sel_url[@]} random wallpaper(s) in $DEST_BASE/$theme."
 }
 
+# Automatic rotation: pick the next wallpaper of the CURRENT Omarchy theme and
+# set it as the background. Only files already on disk are used, so no network
+# is needed once the pool is installed.
+#   default   the plugin's installs for the theme (narrowed to the collection's
+#             catalog when it is available)
+#   --all     every background of the theme (plugin + theme-bundled)
+#   --random  pick at random instead of the next in name order
+# Prints `ROTATE<TAB><path>` on success.
+cmd_rotate() {
+  local pool="plugin" random=0 arg
+  for arg in "$@"; do
+    case "$arg" in
+      --all) pool="all" ;;
+      --random) random=1 ;;
+    esac
+  done
+
+  local theme
+  theme="$(cat "$HOME/.local/state/omarchy/current/theme.name" 2>/dev/null || true)"
+  if [[ -z $theme ]]; then
+    echo "No current Omarchy theme." >&2
+    return 1
+  fi
+
+  local f base
+  local -a plugin_files=()
+  if [[ -d "$DEST_BASE/$theme" ]]; then
+    while IFS= read -r -d '' f; do
+      base="$(basename -- "$f")"
+      [[ $base == *.tmp ]] && continue
+      is_allowed_image "$f" && plugin_files+=("$f")
+    done < <(find -L "$DEST_BASE/$theme" -maxdepth 1 -type f -print0 2>/dev/null)
+  fi
+
+  # "Plugin wallpapers only" means the collection's files this plugin installed:
+  # narrow the install dir to the catalog's filenames when the catalog is cached
+  # (or can be fetched). Personal files dropped in the folder stay out of the
+  # pool; if the catalog is unavailable the whole folder is used.
+  if (( ${#plugin_files[@]} > 0 )); then
+    local catalog="$DATASETS_DIR/$theme/catalog.json"
+    ensure_catalog "$theme" >/dev/null 2>&1 || true
+    if [[ -s $catalog ]]; then
+      local -A known=()
+      while IFS= read -r f; do
+        [[ -n $f ]] && known["$DEST_BASE/$theme/$f"]=1
+      done < <(jq -r '.wallpapers[].filename' "$catalog" 2>/dev/null || true)
+      if (( ${#known[@]} > 0 )); then
+        local -a narrowed=() cand
+        for cand in "${plugin_files[@]}"; do
+          [[ ${known["$cand"]+set} ]] && narrowed+=("$cand")
+        done
+        if (( ${#narrowed[@]} > 0 )); then plugin_files=("${narrowed[@]}"); fi
+      fi
+    fi
+  fi
+
+  local -a candidates=("${plugin_files[@]}")
+  if [[ $pool == "all" ]]; then
+    local dir
+    for dir in \
+      "$HOME/.local/state/omarchy/current/theme/backgrounds" \
+      "$HOME/.config/omarchy/current/theme/backgrounds"; do
+      [[ -d $dir ]] || continue
+      while IFS= read -r -d '' f; do
+        base="$(basename -- "$f")"
+        [[ $base == *.tmp ]] && continue
+        is_allowed_image "$f" && candidates+=("$f")
+      done < <(find -L "$dir" -maxdepth 1 -type f -print0 2>/dev/null)
+    done
+  fi
+
+  # Stable, locale-independent order (same as omarchy-theme-bg-next).
+  local -a sorted=()
+  while IFS= read -r f; do
+    [[ -n $f ]] && sorted+=("$f")
+  done < <(printf '%s\n' "${candidates[@]}" 2>/dev/null | LC_ALL=C sort)
+  local total=${#sorted[@]}
+  if (( total == 0 )); then
+    echo "No local wallpaper to rotate through for theme '$theme'." >&2
+    return 0
+  fi
+
+  local current choice=""
+  current="$(readlink -f "$STATE_BG" 2>/dev/null || true)"
+  if (( random )); then
+    if (( total > 1 )) && [[ -n $current ]]; then
+      local -a no_current=()
+      for f in "${sorted[@]}"; do [[ $f == "$current" ]] || no_current+=("$f"); done
+      if (( ${#no_current[@]} > 0 )); then sorted=("${no_current[@]}"); total=${#sorted[@]}; fi
+    fi
+    choice="${sorted[$(( RANDOM % total ))]}"
+  else
+    local index=-1 i
+    for i in "${!sorted[@]}"; do
+      if [[ ${sorted[$i]} == "$current" ]]; then index=$i; break; fi
+    done
+    if (( index < 0 )); then
+      choice="${sorted[0]}"
+    else
+      choice="${sorted[$(( (index + 1) % total ))]}"
+    fi
+  fi
+
+  printf 'ROTATE\t%s\n' "$choice"
+  omarchy-theme-bg-set "$choice" >/dev/null 2>&1 || {
+    echo "Failed to set background: $choice" >&2
+    return 1
+  }
+}
+
 if [[ $# -eq 0 ]]; then
   usage
   exit 1
@@ -776,6 +887,7 @@ case "$command" in
   set-default) cmd_set_default "$@" ;;
   unset-default) cmd_unset_default "$@" ;;
   random-default) cmd_random_default "$@" ;;
+  rotate) cmd_rotate "$@" ;;
   image) cmd_image "$@" ;;
   prewarm) cmd_prewarm "$@" ;;
   download) cmd_download "$@" ;;

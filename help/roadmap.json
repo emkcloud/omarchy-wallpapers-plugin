@@ -19,10 +19,6 @@
       "description": "Generate 8K versions of the existing wallpapers with AI upscaling."
     },
     {
-      "title": "Automatic rotation",
-      "description": "Change the wallpaper on an interval, per theme or per collection."
-    },
-    {
       "title": "Multi-monitor preview",
       "description": "Assign a different wallpaper to each Hyprland output."
     }

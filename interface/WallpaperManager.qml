@@ -1278,6 +1278,20 @@ Item {
     actionProc.running = true
   }
 
+  // ---- automatic rotation ---------------------------------------------------
+  // Ask `manager.sh rotate` for the next wallpaper of the CURRENT Omarchy theme
+  // and set it as the background. Only files already on disk are used, so this
+  // never downloads. Driven by the Setup settings; the "Rotate now" action calls
+  // it directly too, so it works even with rotation switched off.
+  function rotateWallpaper() {
+    if (rotationProc.running) return
+    var args = ["rotate"]
+    if (setupSettings.rotationAllTheme) args.push("--all")
+    if (setupSettings.rotationRandom) args.push("--random")
+    rotationProc.command = scriptCmd(args)
+    rotationProc.running = true
+  }
+
   // Apply the finished action to the in-memory catalog instead of reloading it:
   // a full reload resets the grid/strip scroll and lags the whole UI. Only the
   // rows that changed (and the bindings that read them) are touched; the theme
@@ -1554,6 +1568,26 @@ Item {
     }
   }
 
+  // Automatic rotation: print the picked file as `ROTATE<TAB><path>`; keep the
+  // open grid's DEFAULT pill in sync when the rotated wallpaper belongs to the
+  // theme currently being browsed (rotation follows the Omarchy theme, which may
+  // differ from the theme open in the plugin).
+  Process {
+    id: rotationProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var line = String(text || "").trim()
+        if (line.indexOf("ROTATE\t") !== 0) return
+        var path = line.substring(7)
+        var base = path.substring(path.lastIndexOf("/") + 1)
+        if ((root.view === "wallpapers" || root.view === "preview")
+            && Model.normalizeSlug(root.themeName) === Model.normalizeSlug(root.activeThemeSlug))
+          root.setWallpaperDefault(base)
+      }
+    }
+  }
+
   // ---- theme loading --------------------------------------------------------
   Process {
     id: themesProc
@@ -1790,6 +1824,19 @@ Item {
     id: hoverGate
     interval: 250
     onTriggered: root.hoverArmed = true
+  }
+
+  // Automatic rotation tick. `keepLoaded` keeps this overlay mounted from shell
+  // start, so the timer runs even with the overlay closed; it follows the Setup
+  // settings live. The first change lands one full interval after enabling
+  // (`triggeredOnStart` stays false), and `rotateWallpaper()` skips a tick when
+  // the previous one is still running.
+  Timer {
+    id: rotationTimer
+    interval: Math.max(1, setupSettings.rotationInterval) * 60000
+    running: setupSettings.rotationEnabled
+    repeat: true
+    onTriggered: root.rotateWallpaper()
   }
 
   // Coalesce bulk progress into ~8 updates/s instead of one per wallpaper.
@@ -2880,6 +2927,7 @@ Item {
             settingsDir: root.settingsDir
             localFileCount: root.localFileCount
             localBytes: root.localBytes
+            rotateBusy: rotationProc.running
             roadmap: root.roadmapData
             featureLabel: root.helpIndex && root.helpIndex.feature
               ? root.helpIndex.feature.title : ""
@@ -2894,6 +2942,7 @@ Item {
                 root.close()
               }
             }
+            onRotateRequested: root.rotateWallpaper()
           }
         }
 

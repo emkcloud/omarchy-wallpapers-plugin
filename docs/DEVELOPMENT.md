@@ -424,6 +424,7 @@ shows a `DEFAULT` pill before the dot; Esc returns to the grid.
   | `remove` | `<theme> [selector...]` | human text; same selector matching (any of them). Same `PROGRESS` stream (count decreases) |
   | `set-default` | `<theme> <filename> <url>` | human text; downloads if missing then `omarchy-theme-bg-set` |
   | `unset-default` | `<theme> <filename>` | human text; if it is the background, falls back to the theme's own default background |
+  | `rotate` | `[--all] [--random]` | `ROTATE\t<path>`; sets the next background of the **current Omarchy theme** (local files only). Default pool = the plugin's installs, narrowed to the collection catalog when available; `--all` adds the theme's bundled backgrounds; `--random` picks at random (never the current one). Drives automatic rotation and the Setup "Rotate now" action |
   | `image` | `<url>` | local cache path of the image (downloads it once); empty on failure |
   | `prewarm` | `<url>...` | `url<TAB>path` per warmed image; warms the image cache (best-effort) |
   | `download` | `<url> <dest-dir>` | copies the original into the folder (numeric suffix on collision), prints the saved path |
@@ -530,17 +531,35 @@ database, `q`/`x` close the plugin.
 ### 9. Setup screen (`view = "setup"`)
 
 **Functional.** Opened with `s` on every screen, or from the Setup buttons in
-the themes and Help footers. It is a placeholder: an empty body with just the
-word "Setup" (no sidebar, no roadmap) and a footer with "Work in progress".
-Esc / the hero Back button return to where it was opened from (Help included);
-the hero also keeps Help / GitHub / "Wallpaper manager" so you can jump away.
+the themes and Help footers. Three columns like Help: the shared roadmap on the
+left, the selected section's settings in the centre, the section index + usage +
+actions on the right. Two sections: **Download** and **Automatic rotation**. Esc
+/ the hero Back button return to where it was opened from (Help included); the
+hero also keeps Help / GitHub / "Wallpaper manager".
 
 **Technical.**
-- The view is an inline `Item` (`setupView`) in `WallpaperManager.qml`: no
-  component yet, because the content is a single centred `Text`.
-- `openSetup()` / `closeSetup()` mirror the Help pair; `setupReturnView` records
-  the origin (`themes` / `wallpapers` / `preview` / `help`) so Esc retraces it.
-  `openSetup()` is a no-op when the view is already up.
+- The view lives in `components/SetupView.qml`; `WallpaperManager.qml` wires the
+  state (`openSetup()` / `closeSetup()` remembering `setupReturnView`, the
+  `moveCursor` / `activateCursor` / `pageCursor` delegation and the footer
+  chrome) and owns the `rotationProc` / `rotationTimer` that run the rotation.
+- Settings are persisted per plugin id under
+  `~/.config/omarchy/<id>/settings.json` (auto-save, debounced; no Save button).
+  The same object is the source of truth for `scriptCmd`'s env caps.
+- Keyboard: focus model `navArea` ("sections" | "content"), arrows / j-k move,
+  Tab cycles areas, Enter/Space toggles, numeric rows open an edit mode, the
+  interval opens the real `Dropdown` (`dropdownOpen` releases the panel
+  catcher), "Rotate now" fires `rotateRequested()`.
+- **Automatic rotation**: `rotationTimer` (`interval = rotationInterval` min,
+  `running = rotationEnabled`) calls `rotateWallpaper()` →
+  `manager.sh rotate [--all] [--random]`, which sets the next background of the
+  **current Omarchy theme** from files already on disk (never a download). The
+  default pool is the plugin's installs, narrowed to the collection catalog when
+  available; `Include theme wallpapers` (`--all`) adds the theme's bundled
+  backgrounds and `Random order` (`--random`) picks at random. Because the
+  overlay is `keepLoaded`, the timer runs from shell start even with the overlay
+  closed, and it follows the Setup settings live; the first change lands one full
+  interval after enabling. "Rotate now" calls the same function and works with
+  the switch off.
 - `s` is handled globally in `handleTextKey`, before the per-view branches, and
   ignored while `actionRunning`; Shuffle moved to `f` in
   `Model.themeTextAction` to free the key. `moveCursor` / `pageCursor` /
