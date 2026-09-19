@@ -267,6 +267,16 @@ Item {
             onTapped: if (!navEntry.isSection) help.selectFlat(navEntry.modelData.flat)
           }
         }
+
+        // Accent ring on the selected topic, matching the Setup screen's
+        // SECTIONS column, so the cursor is obvious in the index.
+        BorderSurface {
+          anchors.fill: itemSurface
+          color: "transparent"
+          radius: Style.cornerRadius
+          borderSpec: Border.flat(help.accent, Math.max(1, Style.normalBorderWidth))
+          visible: !navEntry.isSection && navEntry.modelData.flat === help.selectedFlat
+        }
       }
     }
 

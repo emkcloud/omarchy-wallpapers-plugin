@@ -453,6 +453,15 @@ Item {
       id: listRoot
       property var block
 
+      // A list of multi-line items reads as a stack of blocks and gets a little
+      // air between them; one-line entries stay compact, like plain lines.
+      readonly property bool blocky: {
+        var items = listRoot.block ? listRoot.block.items : []
+        for (var i = 0; i < items.length; i++)
+          if (items[i] && items[i].multiline) return true
+        return false
+      }
+
       width: parent ? parent.width : 0
       implicitHeight: listColumn.implicitHeight
       height: implicitHeight
@@ -460,16 +469,21 @@ Item {
       Column {
         id: listColumn
         width: parent.width
-        spacing: Style.space(6)
+        spacing: listRoot.blocky ? Style.space(6) : Style.space(2)
 
         Repeater {
           model: listRoot.block ? listRoot.block.items : []
 
           delegate: Row {
+            id: listRow
+
             required property var modelData
             required property int index
 
-            width: listColumn.width
+            readonly property int depth: modelData && modelData.depth ? modelData.depth : 0
+
+            x: depth * Style.space(18)
+            width: listColumn.width - x
             spacing: Style.space(8)
 
             Text {
@@ -481,12 +495,17 @@ Item {
             }
 
             Text {
-              width: listColumn.width - Style.space(22)
+              width: listRow.width - Style.space(22)
               textFormat: Text.StyledText
-              text: Model.inlineMarkdown(modelData, view.accentString)
+              text: Model.inlineMarkdown(modelData ? modelData.text : "",
+                view.accentString)
               color: view.foreground
               font.family: view.fontFamily
               font.pixelSize: Style.font.body
+              // Same line height as the paragraphs and notes, so a list does not
+              // read tighter than the rest of the guide.
+              lineHeight: 1.4
+              lineHeightMode: Text.ProportionalHeight
               wrapMode: Text.WordWrap
               onLinkActivated: function(link) { Qt.openUrlExternally(link) }
             }

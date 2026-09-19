@@ -443,10 +443,40 @@ function parseMarkdown(raw) {
     if (/^\s*([-*+]|\d+\.)\s+/.test(line)) {
       var ordered = /^\s*\d+\./.test(line)
       var items = []
-      while (i < lines.length && /^\s*([-*+]|\d+\.)\s+/.test(lines[i])) {
-        items.push(lines[i].replace(/^\s*([-*+]|\d+\.)\s+/, "").trim())
-        i++
+      var baseIndent = -1
+      var current = null
+      while (i < lines.length) {
+        var cur = lines[i]
+        if (blank(cur)) break
+        var bullet = cur.match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/)
+        if (bullet) {
+          if (current) items.push(current)
+          // Indentation (tabs as two spaces) gives the nesting depth, so a
+          // sub-list stays indented instead of flattening to the top level.
+          var indent = bullet[1].replace(/\t/g, "  ").length
+          if (baseIndent < 0) baseIndent = indent
+          current = {
+            text: bullet[3].trim(),
+            depth: Math.max(0, Math.round((indent - baseIndent) / 2)),
+            // Set when a continuation line follows: the renderer spaces list
+            // blocks (multi-line items) apart, one-liners stay compact.
+            multiline: false
+          }
+          i++
+          continue
+        }
+        // A wrapped/lazy line belongs to the item above, unless it opens another
+        // block type.
+        if (current && !/^(#{1,6})\s+/.test(cur) && !/^\s*```/.test(cur)
+            && !/^\s*>\s?/.test(cur)) {
+          current.text += " " + cur.trim()
+          current.multiline = true
+          i++
+          continue
+        }
+        break
       }
+      if (current) items.push(current)
       blocks.push({ type: "list", ordered: ordered, items: items })
       continue
     }

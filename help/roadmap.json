@@ -4,11 +4,11 @@
   "items": [
     {
       "title": "Add new theme",
-      "description": "Add a new theme to the collections that already exist."
+      "description": "Add a new theme to the collections that already exist today."
     },
     {
       "title": "Add new collection",
-      "description": "Add a new collection across all the existing themes."
+      "description": "Add a new collection across all the existing themes as well."
     },
     {
       "title": "Create version 4K",
@@ -20,7 +20,11 @@
     },
     {
       "title": "Multi-monitor preview",
-      "description": "Assign a different wallpaper to each Hyprland output."
+      "description": "Assign a different wallpaper to each and every Hyprland output."
+    },
+    {
+      "title": "Advanced search",
+      "description": "Search by tags and by the elements shown in the image, not just by text."
     }
   ]
 }

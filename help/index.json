@@ -12,9 +12,14 @@
       "title": "CONFIGURATION",
       "items": [
         { "id": "setup", "title": "Setup", "file": "setup.md" },
-        { "id": "default-wallpaper", "title": "Default wallpaper", "file": "default-wallpaper.md" },
-        { "id": "automatic-rotation", "title": "Automatic rotation", "file": "automatic-rotation.md" },
-        { "id": "multi-monitor", "title": "Multi Monitor", "file": "multi-monitor.md" }
+        { "id": "download", "title": "Download", "file": "download.md" },
+        { "id": "automatic-rotation", "title": "Automatic rotation", "file": "automatic-rotation.md" }
+      ]
+    },
+    {
+      "title": "ADVANCED",
+      "items": [
+        { "id": "default-wallpaper", "title": "Default wallpaper", "file": "default-wallpaper.md" }
       ]
     }
   ],
