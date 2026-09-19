@@ -66,7 +66,8 @@ omarchy plugin remove emkcloud.wallpaper-manager
 ```
 
 This disables the plugin and deletes its git checkout. It does **not** touch
-your wallpapers or the runtime caches, so cleanup is opt-in:
+your wallpapers or the runtime caches, so cleanup is entirely opt-in and left to
+you:
 
 - **Installed wallpapers** live in `~/.config/omarchy/backgrounds/<theme>/`.
   Remove only the ones you installed, or the whole folder of a theme you no
@@ -79,7 +80,7 @@ your wallpapers or the runtime caches, so cleanup is opt-in:
   missing file.
 
 The plugin never modifies your configuration without an explicit action, and
-removal is always available. Everything stays inside your home folder.
+removal is always available.
 
 ## How it works
 
