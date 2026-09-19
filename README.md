@@ -27,8 +27,7 @@ installs wallpapers natively into the active Omarchy theme.
 - **Live progress** — the footer bar and the list keep counting while an
   operation runs.
 - **Search** — a small search engine to filter themes and wallpapers.
-- **Automatic rotation** — cycle the current theme's wallpapers on a schedule,
-  with a configurable pool and order.
+- **Automatic rotation** — cycle the current theme's wallpapers on a schedule.
 - **Theme-aware UI** — colors, borders and rounding follow the active Omarchy
   theme.
 
@@ -80,7 +79,7 @@ your wallpapers or the runtime caches, so cleanup is opt-in:
   missing file.
 
 The plugin never modifies your configuration without an explicit action, and
-removal requires no elevated privileges.
+removal is always available. Everything stays inside your home folder.
 
 ## How it works
 
