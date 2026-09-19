@@ -27,6 +27,8 @@ installs wallpapers natively into the active Omarchy theme.
 - **Live progress** — the footer bar and the list keep counting while an
   operation runs.
 - **Search** — a small search engine to filter themes and wallpapers.
+- **Automatic rotation** — cycle the current theme's wallpapers on a schedule,
+  with a configurable pool and order.
 - **Theme-aware UI** — colors, borders and rounding follow the active Omarchy
   theme.
 
@@ -96,6 +98,26 @@ tab-separated records on stdout that the QML parses into list models.
   `main` branch.
 - **Caches** — the dataset and the big images are stored in
   `~/.cache/omarchy/<plugin-id>/`.
+
+## Automatic rotation
+
+The plugin can change the background on its own, so a theme stays fresh without
+touching it by hand. Everything is configured in **Setup → Automatic rotation**:
+
+- **Enable feature** — turn the timer on or off.
+- **Interval time** — how long each wallpaper stays up before the next one (1,
+  5, 15, 30, 60 or 120 minutes).
+- **Include theme wallpapers** — off rotates only the wallpapers you installed
+  from the collection; on adds the backgrounds bundled with the Omarchy theme.
+- **Random order** — sequential by name, or pick at random (never the one already
+  on screen).
+- **Rotate now** — change the background immediately with the settings above,
+  even when the timer is off.
+
+Rotation follows the **current Omarchy theme**, so switching theme switches the
+pool. It only uses files already on disk — nothing is downloaded — and it keeps
+running with the overlay closed, from shell start to shell restart. Turning the
+switch off leaves the current wallpaper in place.
 
 ## Showcase
 
