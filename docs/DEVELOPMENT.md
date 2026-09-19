@@ -75,6 +75,11 @@ set-default), theme by theme.
   upstream wallpaper repo.
 - `assets/images/banner.png` — the README banner (2000×1125), shown under the
   title. Repo-only: not referenced by the plugin at runtime.
+- `assets/images/showcase/` — the README Showcase thumbnails
+  (`showcase-0NN-<theme>.webp`, copies of the upstream `readme/images/`
+  previews). Repo-only: the README `href`s keep pointing at the full-size
+  images in the upstream repo, so only these local thumbnails are maintained
+  here.
 - `preview.png` — repo-root marketplace preview (a copy of the banner). The
   Omarchy plugin marketplace reads at most one root `preview.*` and generates
   the optimized card/detail images itself. Repo-only: not referenced by the
