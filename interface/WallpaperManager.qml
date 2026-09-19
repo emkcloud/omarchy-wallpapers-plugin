@@ -539,13 +539,28 @@ Item {
   // Set by `open()`: the next themes load lands the cursor on the active
   // Omarchy theme instead of the first row. Refreshes leave the selection be.
   property bool pendingThemeSelect: false
+  // True once the active theme has been selected for this shell session, so
+  // reopening the overlay keeps the theme the user last left selected. It
+  // resets on a shell restart, when we re-land on the active theme once.
+  property bool themesInitialized: false
+  // Last cursor position on the themes list, tracked while that view is shown
+  // so closing from another screen still reopens on the right theme.
+  property int themesCursorIndex: 0
 
   function open(payload) {
     opened = true
     view = "themes"
-    selectedIndex = 0
     cursorActive = true
-    pendingThemeSelect = true
+    // Only the first open of this shell session lands on the active theme;
+    // afterwards reopening keeps the theme the user last selected.
+    if (!themesInitialized) {
+      selectedIndex = 0
+      pendingThemeSelect = true
+    } else {
+      pendingThemeSelect = false
+      selectedIndex = Math.max(0,
+        Math.min(activeThemesModel.count - 1, themesCursorIndex))
+    }
     statusText = ""
     filterText = ""
     wallpaperFilterText = ""
@@ -1504,7 +1519,13 @@ Item {
     refreshDetailShown()
   }
   onPreviewTargetUrlChanged: resolvePreviewImage()
-  onSelectedIndexChanged: prefetchTimer.restart()
+  onSelectedIndexChanged: {
+    prefetchTimer.restart()
+    // Remember the themes-screen cursor so reopening the overlay lands back on
+    // the theme the user left selected (other screens reuse `selectedIndex` for
+    // their own cursor, so only track it while on the themes list).
+    if (view === "themes") themesCursorIndex = selectedIndex
+  }
   onViewChanged: {
     refreshDetailShown()
     hoverArmed = false
@@ -1548,6 +1569,9 @@ Item {
         if (root.pendingThemeSelect) {
           root.pendingThemeSelect = false
           root.selectedIndex = root.activeThemeIndex()
+          // The active theme has been picked once for this session; later opens
+          // keep whatever the user selected.
+          root.themesInitialized = true
           root.refreshDetailShown()
         } else if (root.selectedIndex >= root.activeThemesModel.count) {
           root.selectedIndex = Math.max(0, root.activeThemesModel.count - 1)
