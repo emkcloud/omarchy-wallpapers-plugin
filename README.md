@@ -10,9 +10,9 @@ leaving the desktop.
 
 https://github.com/emkcloud/omarchy-wallpapers
 
-The plugin (`emkcloud.wallpaper-manager`) talks to a pinned snapshot of the
-remote repository, so it keeps working offline once the catalogue is cached, and
-installs wallpapers natively into the active Omarchy theme.
+The plugin (`emkcloud.wallpaper-manager`) talks to a versioned snapshot served
+from a CloudFront CDN, so it keeps working offline once the catalogue is cached,
+and installs wallpapers natively into the active Omarchy theme.
 
 ## Features
 
@@ -109,8 +109,8 @@ tab-separated records on stdout that the QML parses into list models.
   `sha256`.
 - **Set default** — downloads the file first if needed, then calls
   `omarchy-theme-bg-set`.
-- **Pinned release** — wallpapers come from the pinned release, not from the
-  `main` branch.
+- **Versioned CDN snapshot** — wallpapers come from a versioned CloudFront base,
+  so a snapshot never changes under the user's feet.
 - **Caches** — the dataset and the big images are stored in
   `~/.cache/omarchy/<plugin-id>/`.
 

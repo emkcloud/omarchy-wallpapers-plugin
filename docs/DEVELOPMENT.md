@@ -39,12 +39,12 @@ set-default), theme by theme.
   (renders the Help blocks) and `HelpView.qml` (the whole Help screen).
 - `config/` — plugin config, kept out of the repo root.
 - `config/config.json` — plugin config, read by both `manager.sh` and the QML.
-  - `repo` / `release` — pin the upstream snapshot. `manager.sh` reads the
-    `release` (a tag), builds every upstream URL from it, then rebases the
-    absolute URLs embedded in the generated JSON onto that ref, so clients stay
-    frozen on a tested snapshot while `main` keeps moving. Missing or invalid
-    falls back to `main`. Bump `release` and push to roll a new release: clients
-    pick it up with `omarchy plugin update`.
+  - `base` — the versioned CloudFront base of the wallpaper snapshot, e.g.
+    `https://content.emkcloud.com/wallpapers/1.1.0`. `manager.sh` downloads
+    `datasets/datasets.json` from `<base>/datasets/datasets.json`; that JSON
+    already carries every absolute URL (catalogs, previews, images) under the
+    same versioned base, so there is no rebase. Bump `base` and push to roll a
+    new snapshot: clients pick it up with `omarchy plugin update`.
   - `paths` — `scripts`, `assets`, `logo`, `datasets`, `help`. The first three
     and `help` are relative to the plugin root; `datasets` is now relative to
     the **app cache** (`~/.cache/omarchy/<pluginId>`), so the layout is
@@ -105,10 +105,10 @@ set-default), theme by theme.
   changes, so caching datasets inside the plugin closed the overlay on every
   catalog fetch. `.gitignore` ignores `datasets/*` except `.gitkeep`.
 - Dataset cache (`~/.cache/omarchy/<pluginId>/datasets/`) — runtime cache of the
-  pinned upstream dataset. `manager.sh` fills it on the **first run**:
+  versioned upstream dataset. `manager.sh` fills it on the **first run**:
   `datasets.json` plus every theme catalog (eager warm-up; a catalog that fails
-  is fetched again on demand), tagged by a `.release` marker. The marker forces
-  a wipe + re-download when `release` changes. One release at a time.
+  is fetched again on demand), tagged by a `.base` marker. The marker forces
+  a wipe + re-download when `base` changes. One snapshot at a time.
 - `images/`, `masters/` — never here. The wallpapers live in the separate repo
   `emkcloud/omarchy-wallpapers`.
 - `README.md` — user-facing docs (install, usage, requirements).
@@ -404,16 +404,16 @@ shows a `DEFAULT` pill before the dot; Esc returns to the grid.
   cache, outside the watched plugin dir) and read
   locally. On the first run `ensure_datasets()` downloads `datasets.json` and
   then warms every catalog (`prefetch_catalogs`, best-effort); a missing catalog
-  is retried by `ensure_catalog(theme)`. The `.release` marker ties the cache to
-  the pinned ref: when `release` changes the cache is wiped and rebuilt. Once
+  is retried by `ensure_catalog(theme)`. The `.base` marker ties the cache to
+  the configured base: when `base` changes the cache is wiped and rebuilt. Once
   cached, listing needs no network; wallpapers, previews and set-default stay
   remote. A failed `datasets.json` exits non-zero (no live fallback).
 - **Image cache**: the big remote images (theme detail pane, fullscreen
   preview) are downloaded once by `manager.sh image` into
   `${XDG_CACHE_HOME:-$HOME/.cache}/omarchy/<pluginId>/` and then loaded from
   disk, so switching selection never re-downloads or re-decodes a 2K frame.
-  The key is `md5(url)` and the URL already carries the release ref, so a
-  release bump invalidates the cache on its own. The QML resolves the selected
+  The key is `md5(url)` and the URL already carries the versioned base, so a
+  base bump invalidates the cache on its own. The QML resolves the selected
   image through `detailImageProc` / `previewImageProc` (latest request wins,
   `flock` on the script side) and prefetches the ±3 neighbours via `prewarm`,
   which prints `url<TAB>path` per warmed image; QML records them in
@@ -778,15 +778,17 @@ The repo root is the plugin: `omarchy plugin add
 https://github.com/emkcloud/omarchy-wallpapers-plugin.git --enable --yes`.
 Keep `manifest.json` at the repo root (required by `omarchy plugin add`).
 
-To roll a new upstream snapshot: bump `release` in `config/config.json`, commit and push.
+To roll a new upstream snapshot: bump `base` in `config/config.json` to the new
+versioned CloudFront path, commit and push.
 Installed clients get it with `omarchy plugin update` (a fast-forward of the git
 checkout, validated and rescanned by the shell).
 
 Plugin releases are tagged with the same number as the manifest's `version`
 (e.g. both `1.2.1`). To cut one: bump `version` in `manifest.json`, commit, then
 `git tag -a <version>` and push the tag. Do **not** confuse this with
-`config/config.json`'s `release`: that pins the upstream wallpaper snapshot, so a
-`release` bump reaches clients through the next plugin release, not a new tag.
+`config/config.json`'s `base`: that pins the upstream wallpaper snapshot on the
+CDN, so a `base` bump reaches clients through the next plugin release, not a new
+tag.
 
 ## Notes for the agent
 

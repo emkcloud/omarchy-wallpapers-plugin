@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "emkcloud.wallpaper-manager",
   "name": "Wallpaper manager",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "author": "emkcloud",
   "description": "Browse the emkcloud/omarchy-wallpapers collection: install, remove or set the default wallpaper in the local Omarchy theme, with scheduled automatic rotation",
   "kinds": [

@@ -4,9 +4,11 @@
 # Scarica i dati dal repo emkcloud/omarchy-wallpapers e gestisce
 # install/remove/set-default dei wallpaper nel tema Omarchy locale.
 #
-# Il ref del repo (un tag di release) viene letto da config.json e ogni URL
-# assoluto che punta al repo viene rebasato su quel ref: i clienti restano
-# congelati su una snapshot testata anche se `main` continua a cambiare.
+# La base CloudFront (un path versionato, es.
+# https://content.emkcloud.com/wallpapers/1.1.0) viene letta da config.json:
+# da lì si scarica `datasets/datasets.json`, che contiene già tutti gli URL
+# assoluti versionati (cataloghi, preview, immagini). Nessun rebase: cambiare
+# la base in config è sufficiente a passare a una nuova snapshot.
 
 set -euo pipefail
 
@@ -35,24 +37,19 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && p
 PLUGIN_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
 CONFIG_FILE="$PLUGIN_ROOT/config/config.json"
-DEFAULT_REPO="emkcloud/omarchy-wallpapers"
-DEFAULT_REF="main"
+DEFAULT_BASE="https://content.emkcloud.com/wallpapers/1.1.0"
 DEFAULT_DATASETS="datasets"
 
-REPO="$DEFAULT_REPO"
-REF="$DEFAULT_REF"
+BASE="$DEFAULT_BASE"
 DATASETS_REL="$DEFAULT_DATASETS"
 if [[ -f $CONFIG_FILE ]]; then
-  cfg_repo="$(jq -r '.repo // empty' "$CONFIG_FILE" 2>/dev/null || true)"
-  cfg_ref="$(jq -r '.release // empty' "$CONFIG_FILE" 2>/dev/null || true)"
+  cfg_base="$(jq -r '.base // empty' "$CONFIG_FILE" 2>/dev/null || true)"
   cfg_datasets="$(jq -r '.paths.datasets // empty' "$CONFIG_FILE" 2>/dev/null || true)"
-  [[ -n $cfg_repo ]] && REPO="$cfg_repo"
-  [[ -n $cfg_ref ]] && REF="$cfg_ref"
+  [[ -n $cfg_base ]] && BASE="${cfg_base%/}"
   [[ -n $cfg_datasets ]] && DATASETS_REL="$cfg_datasets"
 fi
 
-RAW_BASE="https://raw.githubusercontent.com/$REPO/$REF"
-DATASETS_URL="$RAW_BASE/datasets/datasets.json"
+DATASETS_URL="$BASE/datasets/datasets.json"
 
 # App cache, one directory per plugin id so the official and the developer
 # installs never share files. The QML passes its manifest id via
@@ -60,19 +57,20 @@ DATASETS_URL="$RAW_BASE/datasets/datasets.json"
 WALLPAPER_MANAGER_ID="${WALLPAPER_MANAGER_ID:-emkcloud.wallpaper-manager}"
 CACHE_BASE="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy/$WALLPAPER_MANAGER_ID"
 
-# Local cache of the pinned dataset. It must live OUTSIDE the plugin directory:
-# the shell watches ~/.config/omarchy/plugins/ and hot-reloads a plugin whenever
-# a file under it changes, so caching the datasets inside the plugin closed the
-# overlay every time a catalog was fetched. Tagged with the release in
-# `.release`, so a release bump wipes and re-downloads. `paths.datasets` is
-# relative to the cache base; an absolute value is honoured as-is.
+# Local cache of the versioned dataset. It must live OUTSIDE the plugin
+# directory: the shell watches ~/.config/omarchy/plugins/ and hot-reloads a
+# plugin whenever a file under it changes, so caching the datasets inside the
+# plugin closed the overlay every time a catalog was fetched. Tagged with the
+# base URL in `.base`, so changing `base` wipes and re-downloads.
+# `paths.datasets` is relative to the cache base; an absolute value is honoured
+# as-is.
 if [[ $DATASETS_REL = /* ]]; then
   DATASETS_DIR="$DATASETS_REL"
 else
   DATASETS_DIR="$CACHE_BASE/$DATASETS_REL"
 fi
 DATASETS_JSON="$DATASETS_DIR/datasets.json"
-DATASETS_REF_FILE="$DATASETS_DIR/.release"
+DATASETS_BASE_FILE="$DATASETS_DIR/.base"
 
 # Concurrent downloads for install / random-install, set by the UI
 # (Setup → Download → Parallel downloads). Clamped to 1-12, default 8.
@@ -116,7 +114,7 @@ Commands:
   image <url>                       Print the local cache path of an image, downloading it if missing
   prewarm <url>...                  Warm the image cache in the background (best-effort)
   download <url> <dest-dir>         Copy the original wallpaper into a folder, print the saved path
-Repository: $REPO@$REF
+Source: $BASE
 EOF
 }
 
@@ -138,8 +136,8 @@ download_file() {
 }
 
 # Local path of a remote image, downloading it once. The cache key is the URL,
-# which already carries the pinned release ref, so a release bump invalidates
-# the cache on its own. Prints the path on success, nothing on failure (the UI
+# which already carries the versioned base, so changing `base` invalidates the
+# cache on its own. Prints the path on success, nothing on failure (the UI
 # then falls back to the remote URL). `flock` keeps concurrent callers (detail
 # + prefetch) from downloading the same image twice.
 cmd_image() {
@@ -239,54 +237,46 @@ invalidate_datasets() {
 # Warm every theme catalog once datasets.json is in place. Best effort: a
 # failure here does not fail the caller, `ensure_catalog()` retries on demand.
 prefetch_catalogs() {
-  local theme path remote dest
-  while IFS=$'\t' read -r theme path; do
+  local theme remote path dest
+  while IFS=$'\t' read -r theme remote path; do
     [[ -n $theme ]] || continue
     dest="$DATASETS_DIR/$theme/catalog.json"
     [[ -s $dest ]] && continue
-    remote="$RAW_BASE/${path#/}"
+    [[ -n $remote ]] || remote="$BASE/${path#/}"
     download_file "$remote" "$dest" || echo "Warning: could not cache catalog '$theme'." >&2
   done < <(jq -r '
     .themes | to_entries[]
     | select(.value.kind == "theme")
-    | [.key, (.value.catalog.path // "")] | @tsv
+    | [.key, (.value.catalog.url // ""), (.value.catalog.path // "")] | @tsv
   ' "$DATASETS_JSON")
   return 0
 }
 
-# Ensure the dataset for the pinned release is cached. The first run downloads
+# Ensure the dataset for the configured base is cached. The first run downloads
 # `datasets.json` and then warms every catalog; later runs reuse the cache until
-# the `.release` marker no longer matches.
+# the `.base` marker no longer matches.
 ensure_datasets() {
-  if [[ -s $DATASETS_JSON && -f $DATASETS_REF_FILE ]] \
-    && [[ "$(cat -- "$DATASETS_REF_FILE" 2>/dev/null || true)" == "$REF" ]]; then
+  if [[ -s $DATASETS_JSON && -f $DATASETS_BASE_FILE ]] \
+    && [[ "$(cat -- "$DATASETS_BASE_FILE" 2>/dev/null || true)" == "$BASE" ]]; then
     return 0
   fi
   mkdir -p "$DATASETS_DIR"
   invalidate_datasets
   download_file "$DATASETS_URL" "$DATASETS_JSON" || return 1
-  printf '%s\n' "$REF" >"$DATASETS_REF_FILE"
+  printf '%s\n' "$BASE" >"$DATASETS_BASE_FILE"
   prefetch_catalogs
 }
 
 # Ensure the catalog of one theme is cached. Normally the eager first-run
 # prefetch already did it; this is the on-demand fallback.
 ensure_catalog() {
-  local theme="$1" path remote dest
+  local theme="$1" remote dest
   ensure_datasets || return 1
   dest="$DATASETS_DIR/$theme/catalog.json"
   [[ -s $dest ]] && return 0
-  path="$(jq -r --arg t "$theme" '.themes[$t].catalog.path // empty' "$DATASETS_JSON" 2>/dev/null || true)"
-  [[ -n $path ]] || path="datasets/$theme/catalog.json"
-  remote="$RAW_BASE/${path#/}"
+  remote="$(jq -r --arg t "$theme" '.themes[$t].catalog.url // empty' "$DATASETS_JSON" 2>/dev/null || true)"
+  [[ -n $remote ]] || remote="$BASE/datasets/$theme/catalog.json"
   download_file "$remote" "$dest"
-}
-
-# Rebase any absolute raw.githubusercontent.com/$REPO/<ref>/ URL onto the
-# pinned REF, so data generated against `main` still resolves to the release.
-rebase_url() {
-  printf '%s\n' "$1" | sed -E \
-    "s#^https://raw\.githubusercontent\.com/$REPO/[^/]+/#https://raw.githubusercontent.com/$REPO/$REF/#"
 }
 
 sha256_of() {
@@ -420,9 +410,9 @@ cmd_themes() {
     present=0
     if theme_installed_in_omarchy "$name"; then present=1; fi
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "$name" "$title" "$(rebase_url "$catalog")" "$collections" "$count" \
-      "$(rebase_url "$preview")" "$installed" "$palette" "$description" \
-      "$(rebase_url "$image")" "$present"
+      "$name" "$title" "$catalog" "$collections" "$count" \
+      "$preview" "$installed" "$palette" "$description" \
+      "$image" "$present"
   done < <(jq -r '
     .themes | to_entries[]
     | select(.value.kind == "theme")
@@ -452,7 +442,7 @@ cmd_catalog() {
       current="0"
     fi
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "$filename" "$name" "$code" "$(rebase_url "$url")" "$sha256" "$installed" "$current" "$(rebase_url "$preview")" "$size" "$collection" "$resolution" "$width" "$height"
+      "$filename" "$name" "$code" "$url" "$sha256" "$installed" "$current" "$preview" "$size" "$collection" "$resolution" "$width" "$height"
   done < <(jq -r '.wallpapers[] | [.filename, .name, .code, .url, .sha256, (.preview // ""), (.size_bytes // 0), (.collection // ""), (.resolution // ""), (.width // 0), (.height // 0)] | @tsv' \
     "$DATASETS_DIR/$theme/catalog.json")
 }
@@ -524,7 +514,7 @@ cmd_install() {
         remaining=$((remaining - 1))
         bytes_remaining=$((bytes_remaining - size))
       fi
-      sel_url+=("$(rebase_url "$url")")
+      sel_url+=("$url")
       sel_dest+=("$DEST_BASE/$theme/$filename")
       sel_sha+=("$sha")
     fi
@@ -624,7 +614,6 @@ cmd_set_default() {
     return 1
   fi
   local path="$DEST_BASE/$theme/$filename"
-  url="$(rebase_url "$url")"
   if [[ ! -f $path ]]; then
     mkdir -p "$DEST_BASE/$theme"
     fetch "$url" -o "$path"
@@ -727,7 +716,7 @@ cmd_random_install() {
     else
       bytes_remaining=$((bytes_remaining - size))
     fi
-    sel_url+=("$(rebase_url "$url")")
+    sel_url+=("$url")
     sel_dest+=("$dest")
     sel_sha+=("$sha")
     accepted=$((accepted + 1))
