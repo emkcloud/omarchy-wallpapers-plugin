@@ -779,7 +779,7 @@ Installed clients get it with `omarchy plugin update` (a fast-forward of the git
 checkout, validated and rescanned by the shell).
 
 Plugin releases are tagged with the same number as the manifest's `version`
-(e.g. both `1.1.0`). To cut one: bump `version` in `manifest.json`, commit, then
+(e.g. both `1.2.0`). To cut one: bump `version` in `manifest.json`, commit, then
 `git tag -a <version>` and push the tag. Do **not** confuse this with
 `config/config.json`'s `release`: that pins the upstream wallpaper snapshot, so a
 `release` bump reaches clients through the next plugin release, not a new tag.
