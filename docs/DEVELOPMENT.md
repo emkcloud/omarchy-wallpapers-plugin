@@ -758,6 +758,11 @@ The dataset and image caches are keyed by plugin id
 (`WALLPAPER_MANAGER_ID`, passed by the QML), so the official and dev installs
 never share files and neither writes inside the watched plugin directory.
 
+Automatic rotation is the exception: it changes the current Omarchy theme's
+background, which is shared state. While testing it on the developer install,
+leave it off on the official one (and vice versa), or the two timers will fight
+over the background.
+
 Lint: `qmllint -I <dir containing a `qs` symlink to /usr/share/omarchy/shell>`.
 The residual `unqualified` / `missing-property` warnings on `Style.spacing.*`,
 `Style.font.*`, `Color.menu.*` are unavoidable (the shell's own code produces
