@@ -2992,7 +2992,7 @@ Item {
             anchors.rightMargin: Style.space(12)
             anchors.verticalCenter: parent.verticalCenter
             text: root.wallpaperFilterText
-            placeholder: "Search wallpapers — name or code…"
+            placeholder: "Search wallpapers…"
             active: root.searching
             foreground: root.foreground
             accent: root.accent
@@ -3025,6 +3025,11 @@ Item {
           anchors.topMargin: root.contentSpacing
           anchors.left: parent.left
           anchors.right: parent.right
+          // Cancel the outer `tileGap` so the first and last tiles line up with
+          // the content edges of the rows above instead of sitting slightly
+          // inside them.
+          anchors.leftMargin: -root.tileGap
+          anchors.rightMargin: -root.tileGap
           anchors.bottom: footer.top
           anchors.bottomMargin: root.contentSpacing
           model: root.activeWallpapersModel
@@ -3032,7 +3037,9 @@ Item {
 
           // Grid adapts to the card width: as many columns as fit while keeping
           // each tile at least ~190px wide (five columns on a regular screen).
-          readonly property int columnsHint: Math.max(2, Math.floor(width / root.minTileWidth))
+          // Column count comes from the parent width so the negative margins
+          // above cannot add a column.
+          readonly property int columnsHint: Math.max(2, Math.floor(parent.width / root.minTileWidth))
           readonly property int colCount: Math.max(1, Math.floor(width / cellWidth))
           cellWidth: Math.floor(width / columnsHint)
           // Thumbnail is 16:9 and fills the card; code + name overlay it, so no
