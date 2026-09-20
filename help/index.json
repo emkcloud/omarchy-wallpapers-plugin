@@ -11,7 +11,7 @@
     {
       "title": "CONFIGURATION",
       "items": [
-        { "id": "setup", "title": "Setup", "file": "setup.md" },
+        { "id": "setup", "title": "Setup", "file": "settings.md" },
         { "id": "download", "title": "Download", "file": "download.md" },
         { "id": "automatic-rotation", "title": "Automatic rotation", "file": "automatic-rotation.md" }
       ]
