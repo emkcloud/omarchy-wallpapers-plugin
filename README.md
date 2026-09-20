@@ -57,6 +57,16 @@ Update to the latest snapshot with:
 omarchy plugin update emkcloud.wallpaper-manager --yes
 ```
 
+## Screenshots
+
+<table>
+  <tr>
+    <td><a href="assets/images/screenshots/theme-selection-2k.webp"><img src="assets/images/screenshots/theme-selection.webp" alt="Theme selection"></a></td>
+    <td><a href="assets/images/screenshots/wallpapers-2k.webp"><img src="assets/images/screenshots/wallpapers.webp" alt="Wallpaper grid"></a></td>
+    <td><a href="assets/images/screenshots/preview-2k.webp"><img src="assets/images/screenshots/preview.webp" alt="Wallpaper preview"></a></td>
+  </tr>
+</table>
+
 ## Removal
 
 Remove the plugin the same way as any other Omarchy plugin:

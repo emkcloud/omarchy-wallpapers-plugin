@@ -80,6 +80,10 @@ set-default), theme by theme.
   previews). Repo-only: the README `href`s keep pointing at the full-size
   images in the upstream repo, so only these local thumbnails are maintained
   here.
+- `assets/images/screenshots/` — the plugin screenshots for the README
+  Screenshots section: `<name>.webp` (960×540 preview) and `<name>-2k.webp`
+  (2560×1440 full, opened by the `href`). Repo-only: not referenced by the
+  plugin at runtime.
 - `preview.png` — repo-root marketplace preview (a copy of the banner). The
   Omarchy plugin marketplace reads at most one root `preview.*` and generates
   the optimized card/detail images itself. Repo-only: not referenced by the
