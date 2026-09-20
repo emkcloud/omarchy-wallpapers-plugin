@@ -66,9 +66,9 @@ omarchy plugin update emkcloud.wallpaper-manager --yes
     <td><a href="assets/images/screenshots/preview-2k.webp"><img src="assets/images/screenshots/preview.webp" alt="Wallpaper preview"></a></td>
   </tr>
   <tr>
-    <td><a href="assets/images/screenshots/installing-2k.webp"><img src="assets/images/screenshots/installing.webp" alt="Install in progress"></a></td>
+    <td><a href="assets/images/screenshots/downloading-2k.webp"><img src="assets/images/screenshots/downloading.webp" alt="Download in progress"></a></td>
     <td><a href="assets/images/screenshots/help-2k.webp"><img src="assets/images/screenshots/help.webp" alt="Guide and support"></a></td>
-    <td><a href="assets/images/screenshots/setup-2k.webp"><img src="assets/images/screenshots/setup.webp" alt="Setup and options"></a></td>
+    <td><a href="assets/images/screenshots/settings-2k.webp"><img src="assets/images/screenshots/settings.webp" alt="Settings and options"></a></td>
   </tr>
 </table>
 
