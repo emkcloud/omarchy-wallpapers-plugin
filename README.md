@@ -1,6 +1,6 @@
 # Omarchy Wallpapers Plugin
 
-![Omarchy Wallpapers Plugin](assets/images/banner.png)
+![Omarchy Wallpapers Plugin](assets/images/banner.webp)
 
 An [Omarchy](https://github.com/omacom/omarchy) shell plugin to browse, preview,
 install and manage the wallpaper collection, theme by theme, straight from the

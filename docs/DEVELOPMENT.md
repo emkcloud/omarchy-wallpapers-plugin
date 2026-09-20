@@ -70,11 +70,12 @@ set-default), theme by theme.
   checkout as `emkcloud.wallpaper-manager-developer` via symlinks. See *Local
   development*.
 - `assets/` — local plugin assets. Scalable by kind; today
-  `assets/images/logo.png` (hero icon) and `assets/images/banner.png` (README
+  `assets/images/logo.png` (hero icon) and `assets/images/banner.webp` (README
   banner) exist, but future icons/fonts belong here too. This is **not** the
   upstream wallpaper repo.
-- `assets/images/banner.png` — the README banner (2000×1125), shown under the
-  title. Repo-only: not referenced by the plugin at runtime.
+- `assets/images/banner.webp` — the README banner (2000×1125), shown under the
+  title. Stored as WebP (~220 KB instead of the ~2.3 MB PNG) so the checkout
+  stays light. Repo-only: not referenced by the plugin at runtime.
 - `assets/images/showcase/` — the README Showcase thumbnails
   (`showcase-0NN-<theme>.webp`, copies of the upstream `readme/images/`
   previews). Repo-only: the README `href`s keep pointing at the full-size
