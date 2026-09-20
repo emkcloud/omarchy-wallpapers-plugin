@@ -9,10 +9,12 @@
 #   omarchy restart shell
 #
 #   scripts/developer.sh link     # create wrapper + enable + summon
+#   scripts/developer.sh refresh  # re-sync symlinks + manifest (no cache clear)
 #   scripts/developer.sh unlink   # remove the wrapper
 #
 # `link` also clears the dataset cache, so a dev session always exercises the
-# download path.
+# download path. Run `refresh` after a manifest change (version, description)
+# so the dev wrapper picks it up without a full re-link.
 
 set -euo pipefail
 
@@ -34,13 +36,31 @@ die() {
 
 usage() {
   cat >&2 <<EOF
-Usage: $0 <link|unlink>
+Usage: $0 <link|refresh|unlink>
 
   link     Install this checkout as $DEV_ID via symlinks and clear the cache
+  refresh  Re-sync the symlinks and regenerate the dev manifest from the repo
   unlink   Remove the $DEV_ID wrapper
 
 Repository: $REPO
 EOF
+}
+
+# Symlink the plugin dirs from the checkout into the dev wrapper (idempotent).
+link_dirs() {
+  local d
+  for d in "${LINKS[@]}"; do
+    if [[ -e "$REPO/$d" ]]; then
+      ln -sfn "$REPO/$d" "$DEV_DIR/$d"
+    fi
+  done
+}
+
+# Derive the dev manifest from the official one so it never drifts.
+write_dev_manifest() {
+  jq --arg id "$DEV_ID" --arg name "Wallpaper manager (dev)" \
+    '.id = $id | .name = $name' "$REPO/manifest.json" >"$DEV_DIR/manifest.json.tmp"
+  mv -f -- "$DEV_DIR/manifest.json.tmp" "$DEV_DIR/manifest.json"
 }
 
 cmd_link() {
@@ -48,18 +68,8 @@ cmd_link() {
   command -v jq >/dev/null 2>&1 || die "jq is required"
 
   mkdir -p "$DEV_DIR"
-
-  local d
-  for d in "${LINKS[@]}"; do
-    if [[ -e "$REPO/$d" ]]; then
-      ln -sfn "$REPO/$d" "$DEV_DIR/$d"
-    fi
-  done
-
-  # Derive the dev manifest from the official one so it never drifts.
-  jq --arg id "$DEV_ID" --arg name "Wallpaper manager (dev)" \
-    '.id = $id | .name = $name' "$REPO/manifest.json" >"$DEV_DIR/manifest.json.tmp"
-  mv -f -- "$DEV_DIR/manifest.json.tmp" "$DEV_DIR/manifest.json"
+  link_dirs
+  write_dev_manifest
   : >"$MARKER"
 
   # Drop the dataset cache so a dev session always exercises the download path.
@@ -85,6 +95,19 @@ cmd_link() {
   echo "Edit the repo, then: omarchy restart shell"
 }
 
+# Re-sync the wrapper without the disruptive parts of `link`: no cache clear,
+# no disable/enable, no summon. Handy after a manifest change.
+cmd_refresh() {
+  [[ -f "$MARKER" ]] || die "not linked yet: run '$0 link' first"
+  command -v jq >/dev/null 2>&1 || die "jq is required"
+
+  link_dirs
+  write_dev_manifest
+  omarchy-shell shell rescanPlugins >/dev/null
+  echo "Refreshed $DEV_ID from the repo manifest."
+  echo "Restart the shell to load it: omarchy restart shell"
+}
+
 cmd_unlink() {
   [[ -f "$MARKER" ]] ||
     die "refusing: $DEV_DIR is not a developer wrapper (missing .dev-wrapper)"
@@ -97,6 +120,7 @@ cmd_unlink() {
 
 case "${1:-}" in
 link) cmd_link ;;
+refresh) cmd_refresh ;;
 unlink) cmd_unlink ;;
 -h | --help)
   usage

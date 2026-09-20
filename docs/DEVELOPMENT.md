@@ -737,11 +737,15 @@ Two installs can coexist, distinguished by id:
 
 ```bash
 bash scripts/developer.sh link     # create/enable/summon the dev plugin
+bash scripts/developer.sh refresh  # re-sync symlinks + dev manifest
 bash scripts/developer.sh unlink   # remove it
 ```
 
 `link` generates the dev `manifest.json` from the official one (only `.id` and
-`.name` change) and symlinks `interface`, `scripts`, `config`, `assets`. It also
+`.name` change) and symlinks `interface`, `scripts`, `config`, `assets`, `help`.
+After editing the manifest (a version bump, the description), run `refresh`
+instead of re-linking: it re-syncs the symlinks and regenerates the dev manifest
+without clearing the dataset cache or touching the bar. `link` also
 clears the dev dataset cache (`~/.cache/omarchy/<dev-id>/datasets`) so every dev
 session re-downloads the dataset and exercises the full path. Because the plugin is a
 `bar-widget`, `link` does a `disable` + `enable` so the bar icon is (re)placed;
