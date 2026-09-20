@@ -69,6 +69,8 @@ set-default), theme by theme.
 - `scripts/developer.sh` — dev-only helper (`link` / `unlink`): installs this
   checkout as `emkcloud.wallpaper-manager-developer` via symlinks. See *Local
   development*.
+- `tests/` — unit tests for the pure logic (`interface/js/Model.js`), run with
+  `node --test` from the repo root. No dependencies, no network. See *Testing*.
 - `assets/` — local plugin assets. Scalable by kind; today
   `assets/images/logo.png` (hero icon) and `assets/images/banner.webp` (README
   banner) exist, but future icons/fonts belong here too. This is **not** the
@@ -696,6 +698,29 @@ Rules that follow from that:
    count and only a re-entry showed the wallpapers gone. `onExited` also calls
    `flushProgress()` before clearing `pendingProgress*` so the last line is
    never lost.
+
+## Testing
+
+`interface/js/Model.js` holds the pure logic (parsers, labels, cursor math,
+Markdown splitting) with no Qt or Quickshell dependency, so it is unit-tested
+directly with Node's built-in test runner — **no dependencies, no install, no
+network**:
+
+```bash
+node --test            # from the repo root, discovers tests/*.test.js
+```
+
+The tests live in `tests/model.test.js` and cover `parseThemes` / `parseCatalog`
+(TSV edge cases), the labels and search matchers, the cursor and status helpers,
+`parseHelpIndex` / `parseRoadmap`, `inlineMarkdown`, and `parseMarkdown`
+including the wrapped- and nested-list handling that the Help screen relies on.
+The file ends with a guarded CommonJS export block so the module can be
+`require`d from the tests; QML never defines `module`, so that block is a no-op
+inside the plugin. Keep the suite dependency-free so it stays CI-friendly and
+never trips the marketplace security review.
+
+The shell side is checked with `bash -n scripts/manager.sh` (`qmllint` for the
+QML, see below).
 
 ## Local development
 

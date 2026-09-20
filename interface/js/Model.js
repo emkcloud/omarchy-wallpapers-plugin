@@ -65,7 +65,7 @@ function parseCatalog(raw) {
 // The dataset carries a readable `title` ("Tokyo Night"); tiles show it
 // uppercased. Fallback for older datasets: normalize the slug.
 function themeLabel(item) {
-  var label = item && item.title ? item.title : (item ? item.name : "")
+  var label = item ? (item.title || item.name || "") : ""
   return String(label).replace(/[-_]+/g, " ").toUpperCase()
 }
 
@@ -528,5 +528,40 @@ function parsePaths(raw, fallback) {
     }
   } catch (e) {
     return base
+  }
+}
+
+// Export CommonJS for the unit tests under `tests/`. QML imports this file as a
+// JS module and never defines `module`, so the guard is a no-op there.
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    parseThemes,
+    parseCatalog,
+    themeLabel,
+    normalizeSlug,
+    ucfirst,
+    themeMatches,
+    formatPercent,
+    formatSize,
+    wallpaperMatches,
+    themeState,
+    themeStatusLabel,
+    paletteList,
+    stepIndex,
+    textAction,
+    themeTextAction,
+    themesStatus,
+    catalogStatus,
+    emptyHelpIndex,
+    parseHelpIndex,
+    helpFlatItems,
+    helpSidebarEntries,
+    parseRoadmap,
+    inlineMarkdown,
+    splitTableRow,
+    isTableSeparator,
+    parseMarkdown,
+    parseLinks,
+    parsePaths
   }
 }
