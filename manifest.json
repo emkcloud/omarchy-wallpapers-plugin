@@ -4,7 +4,7 @@
   "name": "Wallpaper manager",
   "version": "1.2.1",
   "author": "emkcloud",
-  "description": "Browse the emkcloud/omarchy-wallpapers collection: install, remove or set the default wallpaper in the local Omarchy theme",
+  "description": "Browse the emkcloud/omarchy-wallpapers collection: install, remove or set the default wallpaper in the local Omarchy theme, with scheduled automatic rotation",
   "kinds": [
     "overlay",
     "bar-widget"
