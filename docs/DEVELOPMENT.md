@@ -366,7 +366,10 @@ A thumbnail navigator (filmstrip) sits bottom-right over the image and follows
 the selection. h/l/j/k or arrows walk wallpapers, Enter installs, `d` or double
 click toggles the theme default (sets it, installing the file first if needed;
 if it already is the default, clears it back to the theme's own background) and
-shows a `DEFAULT` pill before the dot; Esc returns to the grid.
+shows a `DEFAULT` pill before the dot; Esc returns to the grid. When the open
+theme is not the running Omarchy theme, the choice is **remembered per theme**
+(`themeDefaults` in settings.json) instead of touching the live background, and
+applied when the user switches to that theme (see *Setup → per-theme default*).
 
 **Technical.**
 - `previewView` overlays the card (`z: 10`). Header: `PanelHero`
@@ -566,7 +569,15 @@ hero also keeps Help / GitHub / "Wallpaper manager".
   chrome) and owns the `rotationProc` / `rotationTimer` that run the rotation.
 - Settings are persisted per plugin id under
   `~/.config/omarchy/<id>/settings.json` (auto-save, debounced; no Save button).
-  The same object is the source of truth for `scriptCmd`'s env caps.
+  The same object is the source of truth for `scriptCmd`'s env caps. It also
+  carries `themeDefaults` (`<theme> -> { filename, url }`): the default chosen
+  on a theme that is not the running one. `actionToggleDefault` only touches the
+  live background while `browsingActiveTheme`; otherwise it remembers the
+  choice (installing the file) and leaves the desktop alone. `activeThemeFile`
+  watches `~/.local/state/omarchy/current/theme.name`; a real switch (not the
+  initial load) arms `themeDefaultApplyTimer`, which after the switch settles
+  runs `manager.sh set-default` for the remembered default, so switching to a
+  theme shows the wallpaper the user picked for it.
 - Keyboard: focus model `navArea` ("sections" | "content"), arrows / j-k move,
   Tab cycles areas, Enter/Space toggles, numeric rows open an edit mode, the
   interval opens the real `Dropdown` (`dropdownOpen` releases the panel
@@ -713,6 +724,18 @@ Rules that follow from that:
    count and only a re-entry showed the wallpapers gone. `onExited` also calls
    `flushProgress()` before clearing `pendingProgress*` so the last line is
    never lost.
+8. `loadWallpapers()` must guard against a slow catalog: a `Process` ignores a
+   `command` assignment while it is running, so calling `loadWallpapers()` for a
+   new theme before the previous `manager.sh catalog` exits silently dropped the
+   request. The old theme's `onStreamFinished` then populated `wallpapersModel`
+   while `themeName` already pointed at the new theme, and the preview's
+   `actionToggleDefault` ran `set-default <new-theme> <old-theme filename/url>`,
+   installing another theme's wallpaper (e.g. a matte-black file while browsing
+   tokyo-night) and setting it as the background. `catalogSerial`/`catalogPending`
+   fix it: every request invalidates the in-flight result, a result is applied
+   only while its serial *and* theme still match, and a superseded request is
+   re-run on exit. `cmd_set_default` also refuses a filename absent from the
+   theme's catalog, as defence in depth.
 
 ## Testing
 

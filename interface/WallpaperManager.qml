@@ -115,12 +115,24 @@ Item {
   // Active Omarchy theme: `theme.name` (e.g. "osaka-jade"). Used to land the
   // cursor on the theme the user is actually running when the overlay opens.
   property string activeThemeSlug: ""
+  // Last theme observed in `theme.name`, so a real switch can be told apart
+  // from the initial load (which must not re-apply a remembered default).
+  property string lastActiveTheme: ""
   FileView {
     id: activeThemeFile
     path: root.stateHome + "/omarchy/current/theme.name"
     watchChanges: true
     printErrors: false
-    onLoaded: root.activeThemeSlug = text().trim()
+    // `text()` is stale inside the change signal itself: reload -> onLoaded.
+    onFileChanged: reload()
+    onLoaded: {
+      var next = text().trim()
+      var prev = root.lastActiveTheme
+      root.lastActiveTheme = next
+      root.activeThemeSlug = next
+      if (prev !== "" && next !== "" && prev !== next)
+        root.scheduleThemeDefaultApply(next)
+    }
     onLoadFailed: root.activeThemeSlug = ""
   }
 
@@ -175,6 +187,12 @@ Item {
   property var wallpaperCursorByTheme: ({})
   property int pendingWallpaperIndex: 0
   property bool pendingWallpaperSelect: false
+  // Catalog request guard: a slow `manager.sh catalog` for a theme the user has
+  // already left must never repopulate `wallpapersModel`. Every request bumps
+  // `catalogSerial`; a result is applied only while its serial and theme still
+  // match the current selection, and the superseded request is re-run on exit.
+  property int catalogSerial: 0
+  property bool catalogPending: false
   // Multi-select of the wallpapers screen: filename -> true. `selectionRevision`
   // makes the plain-object map a tracked dependency for the tile checkboxes.
   property var checkedWallpapers: ({})
@@ -429,11 +447,12 @@ Item {
     return !!item && String(item.installed) === "1"
   }
 
-  // Whether the open wallpaper is the theme's current default background.
+  // Whether the open wallpaper is the open theme's default. For the running
+  // Omarchy theme that is the catalog `isDefault`; for any other theme it is the
+  // remembered per-theme default, because the live background is unrelated.
   readonly property bool currentIsDefault: {
     var rev = wallpapersRevision
-    var item = currentItem()
-    return !!item && String(item.isDefault) === "1"
+    return isThemeDefault(currentItem())
   }
 
   // Gap around the preview overlays (path pill / filmstrip), set to the card's
@@ -770,6 +789,21 @@ Item {
   }
 
   function loadWallpapers() {
+    // Invalidate any in-flight result first: the user may have switched theme,
+    // and a stale catalog must never populate this theme's model (bug #8).
+    catalogSerial++
+    if (catalogProc.running) {
+      catalogPending = true
+      return
+    }
+    startCatalog()
+  }
+
+  // Start the request for the current theme. Only called while `catalogProc` is
+  // idle, so the `command` assignment is accepted.
+  function startCatalog() {
+    catalogProc.requestedSerial = catalogSerial
+    catalogProc.requestedTheme = themeName
     busy = true
     setStatus("Loading wallpapers of " + themeName + "…")
     wallpapersModel.clear()
@@ -1189,6 +1223,23 @@ Item {
     return null
   }
 
+  // True when the open theme is the one Omarchy is currently running. Only then
+  // does "set default" change the live background directly; on any other theme
+  // the choice is remembered per theme and applied when the user switches.
+  readonly property bool browsingActiveTheme: themeName !== ""
+    && root.activeThemeSlug !== ""
+    && Model.normalizeSlug(themeName) === Model.normalizeSlug(root.activeThemeSlug)
+
+  // Whether `model` is the default of the open theme (live for the running
+  // theme, remembered otherwise).
+  function isThemeDefault(model) {
+    if (!model) return false
+    if (browsingActiveTheme) return String(model.isDefault) === "1"
+    var rev = setupSettings.themeDefaultsRevision
+    var d = setupSettings.themeDefault(themeName)
+    return !!d && String(d.filename) === String(model.filename)
+  }
+
   function currentItem() {
     if ((view !== "wallpapers" && view !== "preview")
         || selectedIndex < 0 || selectedIndex >= activeWallpapersModel.count)
@@ -1263,17 +1314,44 @@ Item {
   // `d` / double click: a switch. Not the default → set it (manager.sh installs
   // the file first if missing); already the default → clear it back to the
   // theme's own background.
+  //
+  // On the running Omarchy theme the change is live. On any other theme it is
+  // remembered for that theme and applied when the user switches to it, so
+  // choosing a matte-black default while on tokyo-night never replaces the
+  // current desktop background.
   function actionToggleDefault() {
     if (actionRunning) return
     var item = currentItem()
     if (!item) return
-    busy = true
-    if (String(item.isDefault) === "1") {
-      setStatus("Clearing default: " + item.name + "…")
-      runAction(["unset-default", themeName, item.filename])
+    if (browsingActiveTheme) {
+      busy = true
+      if (String(item.isDefault) === "1") {
+        setupSettings.clearThemeDefault(themeName)
+        setStatus("Clearing default: " + item.name + "…")
+        runAction(["unset-default", themeName, item.filename])
+      } else {
+        setupSettings.setThemeDefault(themeName, item.filename, item.url)
+        setStatus("Setting default: " + item.name + "…")
+        runAction(["set-default", themeName, item.filename, item.url])
+      }
+      return
+    }
+    // Another theme: remember the choice (making sure the file lands on disk)
+    // and leave the current background untouched.
+    var remembered = setupSettings.themeDefault(themeName)
+    if (remembered && String(remembered.filename) === String(item.filename)) {
+      setupSettings.clearThemeDefault(themeName)
+      setStatus("Default cleared for " + Model.ucfirst(themeName))
+      return
+    }
+    setupSettings.setThemeDefault(themeName, item.filename, item.url)
+    if (String(item.installed) !== "1") {
+      busy = true
+      setStatus("Installing " + item.name + "…")
+      runAction(["install", themeName, item.filename])
     } else {
-      setStatus("Setting default: " + item.name + "…")
-      runAction(["set-default", themeName, item.filename, item.url])
+      setStatus("Default for " + Model.ucfirst(themeName)
+        + " set — applies when you switch to it")
     }
   }
 
@@ -1352,6 +1430,54 @@ Item {
     if (setupSettings.rotationRandom) args.push("--random")
     rotationProc.command = scriptCmd(args)
     rotationProc.running = true
+  }
+
+  // ---- per-theme default apply on switch ------------------------------------
+  // `omarchy-theme-set` writes `theme.name` *before* it picks the new theme's
+  // background, so wait for the switch to settle, then apply the default the
+  // user remembered for the newly active theme (downloading it if needed).
+  property string pendingThemeDefaultTheme: ""
+
+  function scheduleThemeDefaultApply(theme) {
+    pendingThemeDefaultTheme = theme
+    themeDefaultApplyTimer.restart()
+  }
+
+  function applyThemeDefault(theme) {
+    var d = setupSettings.themeDefault(theme)
+    if (!d || !d.filename) return
+    if (themeDefaultProc.running) {
+      pendingThemeDefaultTheme = theme
+      themeDefaultApplyTimer.restart()
+      return
+    }
+    themeDefaultProc.applyTheme = theme
+    themeDefaultProc.applyFilename = d.filename
+    themeDefaultProc.command = scriptCmd(["set-default", theme, d.filename, d.url])
+    themeDefaultProc.running = true
+  }
+
+  Timer {
+    id: themeDefaultApplyTimer
+    interval: 1500
+    repeat: false
+    onTriggered: root.applyThemeDefault(root.pendingThemeDefaultTheme)
+  }
+
+  Process {
+    id: themeDefaultProc
+    property string applyTheme: ""
+    property string applyFilename: ""
+    onExited: {
+      root.loadLimits()
+      // The plugin may be open on the theme that just became active: reflect
+      // the applied default (and its installed file) without a full reload.
+      if (root.themeName !== "" && Model.normalizeSlug(root.themeName)
+            === Model.normalizeSlug(themeDefaultProc.applyTheme)) {
+        root.setWallpaperInstalled(themeDefaultProc.applyFilename, "1")
+        root.setWallpaperDefault(themeDefaultProc.applyFilename)
+      }
+    }
   }
 
   // Apply the finished action to the in-memory catalog instead of reloading it:
@@ -1695,9 +1821,18 @@ Item {
   // ---- catalog loading ------------------------------------------------------
   Process {
     id: catalogProc
+    // Stamp of the request this run belongs to; checked against `root` before
+    // the rows are applied, so a superseded theme is discarded.
+    property int requestedSerial: 0
+    property string requestedTheme: ""
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
+        // The user has already switched theme: drop the rows entirely; the
+        // pending request is picked up in `onExited` (bug #8).
+        if (catalogProc.requestedSerial !== root.catalogSerial
+            || catalogProc.requestedTheme !== root.themeName)
+          return
         wallpapersModel.clear()
         var rows = Model.parseCatalog(text)
         for (var i = 0; i < rows.length; i++) wallpapersModel.append(rows[i])
@@ -1724,6 +1859,13 @@ Item {
       }
     }
     onExited: {
+      // A request was queued (or this run belonged to a theme the user has
+      // left): load the current theme now that the process is free.
+      if (root.catalogPending || catalogProc.requestedTheme !== root.themeName) {
+        root.catalogPending = false
+        root.startCatalog()
+        return
+      }
       if (root.busy) {
         root.busy = false
         root.setStatus(wallpapersModel.count > 0
@@ -3105,8 +3247,9 @@ Item {
               accent: root.accent
               bordered: true
               hasCursor: root.cursorActive && root.view === "wallpapers" && root.selectedIndex === tile.index
-              // Persistent state: this is the theme's default background.
-              current: String(tile.model.isDefault) === "1"
+              // Persistent state: this is the open theme's default background
+              // (live for the running theme, remembered otherwise).
+              current: root.isThemeDefault(tile.model)
 
               RoundedImage {
                 id: preview
@@ -3243,7 +3386,7 @@ Item {
               // default wallpaper (dark fill so the accent reads on any image).
               // The corners stay free for the selection checkbox.
               Pill {
-                visible: String(tile.model.isDefault) === "1"
+                visible: root.isThemeDefault(tile.model)
                 anchors.centerIn: parent
                 width: implicitWidth
                 height: implicitHeight

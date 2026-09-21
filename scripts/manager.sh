@@ -613,6 +613,16 @@ cmd_set_default() {
     echo "Refusing '$filename': not an allowed image (webp/jpg/jpeg/png)." >&2
     return 1
   fi
+  # Defence in depth against a stale UI model: a filename that does not belong
+  # to this theme must never be installed into its folder (and become the
+  # background). Skipped only when the catalog cannot be resolved at all.
+  if ensure_catalog "$theme" && [[ -s "$DATASETS_DIR/$theme/catalog.json" ]]; then
+    if ! jq -e --arg f "$filename" '.wallpapers[] | select(.filename == $f)' \
+        "$DATASETS_DIR/$theme/catalog.json" >/dev/null 2>&1; then
+      echo "Refusing '$filename': not part of theme '$theme'." >&2
+      return 1
+    fi
+  fi
   local path="$DEST_BASE/$theme/$filename"
   if [[ ! -f $path ]]; then
     mkdir -p "$DEST_BASE/$theme"

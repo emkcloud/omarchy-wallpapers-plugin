@@ -59,6 +59,13 @@ Item {
   // selected theme.
   property bool rotationAllTheme: false
   property bool rotationRandom: false
+  // Per-theme remembered default wallpaper: `<theme> -> { filename, url }`.
+  // Not a row in the UI, but persisted with the other settings so a default
+  // chosen while browsing another theme survives restarts and is applied when
+  // the user switches to that theme. `themeDefaultsRevision` makes the plain
+  // object a tracked dependency for the DEFAULT markers.
+  property var themeDefaults: ({})
+  property int themeDefaultsRevision: 0
   // Injected by the panel: a rotate is in flight, so "Rotate now" is disabled.
   property bool rotateBusy: false
 
@@ -84,6 +91,49 @@ Item {
   function grouped(n) {
     var s = String(Math.max(0, Math.round(Number(n) || 0)))
     return s.replace(/\B(?=(\d{3})+(?!\d))/g, ",")
+  }
+
+  // ---- per-theme default wallpaper -----------------------------------------
+  // The wallpaper chosen as a theme's default while browsing a theme that is
+  // not the running one. `setThemeDefault`/`clearThemeDefault` are called by the
+  // panel and persist immediately (debounced).
+  function themeDefault(theme) {
+    var d = themeDefaults[String(theme)]
+    return d && d.filename ? d : null
+  }
+
+  function sanitizeThemeDefaults(raw) {
+    var out = {}
+    if (!raw || typeof raw !== "object") return out
+    for (var k in raw) {
+      var v = raw[k]
+      if (v && typeof v === "object" && typeof v.filename === "string" && v.filename !== "")
+        out[String(k)] = {
+          filename: String(v.filename),
+          url: typeof v.url === "string" ? v.url : ""
+        }
+    }
+    return out
+  }
+
+  function setThemeDefault(theme, filename, url) {
+    if (!settingsLoaded || !theme || !filename) return
+    var next = {}
+    for (var k in themeDefaults) next[k] = themeDefaults[k]
+    next[String(theme)] = { filename: String(filename), url: String(url || "") }
+    themeDefaults = next
+    themeDefaultsRevision++
+    scheduleSave()
+  }
+
+  function clearThemeDefault(theme) {
+    if (!settingsLoaded || !themeDefaults[String(theme)]) return
+    var next = {}
+    for (var k in themeDefaults)
+      if (k !== String(theme)) next[k] = themeDefaults[k]
+    themeDefaults = next
+    themeDefaultsRevision++
+    scheduleSave()
   }
 
   // Shared sidebar caption: uppercase, dim, with the uniform gap below.
@@ -520,6 +570,7 @@ Item {
     rotationInterval = intervalOptions.indexOf(interval) >= 0 ? interval : defaults.rotationInterval
     rotationAllTheme = parsed.rotationAllTheme === true
     rotationRandom = parsed.rotationRandom === true
+    themeDefaults = sanitizeThemeDefaults(parsed.themeDefaults)
 
     settingsLoaded = true
     saved = false
@@ -536,7 +587,8 @@ Item {
       rotationEnabled: rotationEnabled,
       rotationInterval: rotationInterval,
       rotationAllTheme: rotationAllTheme,
-      rotationRandom: rotationRandom
+      rotationRandom: rotationRandom,
+      themeDefaults: themeDefaults
     }, null, 2) + "\n"
   }
 
