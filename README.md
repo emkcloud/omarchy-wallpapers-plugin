@@ -12,7 +12,7 @@ https://github.com/emkcloud/omarchy-wallpapers
 
 The plugin (`emkcloud.wallpaper-manager`) talks to a versioned snapshot served
 from a CloudFront CDN, so it keeps working offline once the catalogue is cached,
-and installs wallpapers natively into the active Omarchy theme.
+and installs wallpapers natively into the active theme.
 
 ## Features
 
