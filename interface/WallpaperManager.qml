@@ -319,6 +319,11 @@ Item {
   // `containsMouse`, so only one tile is ever highlighted.
   property bool cursorActive: true
 
+  // Keyboard focus of the wallpapers filter row: -1 = the grid, 0 = collection
+  // dropdown, 1 = search field, 2 = Select all, 3 = Clear. Mirrors the Setup
+  // screen's focus model so the whole row is reachable without a mouse.
+  property int filterFocus: -1
+
   // ---- theme tokens ---------------------------------------------------------
   // Overlay chrome follows the first-party overlays (menu / clipboard /
   // emojis): a single flat `Color.menu.*` surface, no per-region fills, and
@@ -630,6 +635,7 @@ Item {
     wallpaperFilterText = ""
     collectionFilter = ""
     searching = false
+    filterFocus = -1
     actionTheme = ""
     actionCancelled = false
     actionRunning = false
@@ -715,13 +721,54 @@ Item {
   function startSearch() {
     if (actionRunning) return
     if ((view !== "themes" && view !== "wallpapers") || searching) return
+    if (view === "wallpapers") filterFocus = 1
     searching = true
   }
 
   // Leave the search editor but keep the filter, so Tab can cycle back in/out.
   function stopSearch() {
     searching = false
+    if (view === "wallpapers") filterFocus = -1
     Qt.callLater(function() { keys.forceActiveFocus() })
+  }
+
+  // ---- filter row focus -----------------------------------------------------
+  // The wallpapers filter row (collection dropdown, search, Select all, Clear)
+  // is a focusable strip like the Setup screen's: arrows / Tab move between the
+  // four controls, Enter / Space activate the focused one, Down returns to the
+  // grid. `searching` is implied by the search field owning focus, so landing
+  // on it starts editing and leaving it stops.
+  readonly property bool filterRowFocused: view === "wallpapers" && filterFocus >= 0
+
+  function focusFilterField(index) {
+    if (view !== "wallpapers") return
+    filterFocus = Math.max(0, Math.min(3, index))
+    searching = filterFocus === 1
+  }
+
+  // Enter the row from the grid (Up on the first row, `/` or Tab). The search
+  // field is the natural landing spot, editing straight away.
+  function enterFilterRow(index) {
+    if (view !== "wallpapers") return
+    focusFilterField(index === undefined ? 1 : index)
+  }
+
+  // Back to the grid, keeping any active filter.
+  function leaveFilterRow() {
+    filterFocus = -1
+    searching = false
+    Qt.callLater(function() { keys.forceActiveFocus() })
+  }
+
+  // Move between the row controls (clamped at both ends). Landing on the
+  // search field opens the editor; leaving it closes the editor.
+  function moveFilterField(dir) {
+    if (!filterRowFocused) return
+    var next = Math.max(0, Math.min(3, filterFocus + dir))
+    if (next === filterFocus) return
+    filterFocus = next
+    searching = next === 1
+    if (searching) Qt.callLater(function() { keys.forceActiveFocus() })
   }
 
   // Apply the filter and rebuild the visible list. The index resets to the top
@@ -775,6 +822,7 @@ Item {
     wallpapersModel.clear()
     wallpaperFilterText = ""
     collectionFilter = ""
+    filterFocus = -1
     // Checks belong to the theme being left.
     clearWallpaperSelection()
     themeName = item.name
@@ -815,6 +863,8 @@ Item {
   function goBack() {
     // Remember the wallpaper cursor so re-entering this theme resumes here.
     if (themeName !== "") wallpaperCursorByTheme[themeName] = selectedIndex
+    filterFocus = -1
+    searching = false
     view = "themes"
     selectedIndex = Math.max(0, Math.min(activeThemesModel.count - 1, lastThemeIndex))
     cursorActive = true
@@ -951,9 +1001,21 @@ Item {
       return
     }
 
-    // Up from the first row moves the focus into the search field.
+    // The filter row owns the arrows while it is focused (and not typing — the
+    // search editor handles its own keys through the card fallback): Left/Right
+    // walk the controls, Down drops back to the grid.
+    if (filterRowFocused && !searching) {
+      if (dx !== 0) {
+        moveFilterField(dx > 0 ? 1 : -1)
+        return
+      }
+      if (dy > 0) leaveFilterRow()
+      return
+    }
+
+    // Up from the first row moves the focus into the filter row (search field).
     if (dy < 0 && selectedIndex < grid.colCount) {
-      startSearch()
+      enterFilterRow(1)
       return
     }
     stepCursor(dx !== 0 ? dx : dy * grid.colCount)
@@ -998,7 +1060,16 @@ Item {
     }
     if (view === "help") helpView.activateSelection()
     else if (view === "themes") selectTheme(selectedIndex)
-    else if (view === "wallpapers") showPreview()
+    else if (view === "wallpapers") {
+      if (filterRowFocused && !searching) {
+        if (filterFocus === 0) collectionDropdown.open()
+        else if (filterFocus === 1) searching = true
+        else if (filterFocus === 2) selectAllWallpapers()
+        else if (filterFocus === 3) clearWallpaperSelection()
+        return
+      }
+      showPreview()
+    }
     else actionInstall()
   }
 
@@ -1007,6 +1078,11 @@ Item {
   function spaceCursor() {
     if (actionRunning) return
     if (view === "wallpapers") {
+      // The filter row: Space activates the focused control, like Enter.
+      if (filterRowFocused && !searching) {
+        activateCursor()
+        return
+      }
       var item = currentItem()
       if (item) toggleWallpaperCheck(item.filename)
       return
@@ -1033,6 +1109,12 @@ Item {
     }
     if (view === "help") {
       closeHelp()
+      return
+    }
+    // The filter row is a step back to the grid (the filter is kept); the
+    // search editor handles its own Esc through the card fallback.
+    if (filterRowFocused) {
+      leaveFilterRow()
       return
     }
     // An active filter swallows the first Esc (clear, stay put).
@@ -1129,6 +1211,9 @@ Item {
 
   function takeCursor(index) {
     cursorActive = true
+    // Mouse back on the grid drops the filter-row focus (never while typing:
+    // hovering a tile must not steal the search editor).
+    if (filterFocus >= 0 && !searching) filterFocus = -1
     selectedIndex = index
   }
 
@@ -1249,12 +1334,15 @@ Item {
 
   function showPreview() {
     if (activeWallpapersModel.count === 0) return
+    filterFocus = -1
+    searching = false
     view = "preview"
   }
 
   function closePreview() {
     view = "wallpapers"
     cursorActive = true
+    filterFocus = -1
     selectedIndex = Math.max(0, Math.min(activeWallpapersModel.count - 1, selectedIndex))
     // Deferred: the GridView only becomes visible on the view change, so
     // scrolling in the same frame reads stale geometry and lands nowhere.
@@ -2111,8 +2199,16 @@ Item {
             if (root.currentFilter() !== "") root.clearFilter()
             else root.stopSearch()
             event.accepted = true
+          } else if (event.key === Qt.Key_Left || event.key === Qt.Key_Right) {
+            // Move focus between the filter-row controls (dropdown / search /
+            // Select all / Clear), like the Setup screen's content area.
+            root.moveFilterField(event.key === Qt.Key_Right ? 1 : -1)
+            event.accepted = true
           } else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
-            root.stopSearch()
+            if (root.view === "wallpapers")
+              root.moveFilterField(event.key === Qt.Key_Backtab ? -1 : 1)
+            else
+              root.stopSearch()
             event.accepted = true
           } else if (Util.editsFilter(event, root.currentFilter())) {
             root.applyFilter(Util.editedFilter(event, root.currentFilter()))
@@ -2199,6 +2295,7 @@ Item {
         onTextKey: function(text) { root.handleTextKey(text) }
         onTabRequested: function(direction) {
           if (root.view === "setup") setupSettings.cycleArea(direction)
+          else if (root.filterRowFocused) root.moveFilterField(direction)
           else if ((root.view === "themes" || root.view === "wallpapers")
             && !root.searching) root.startSearch()
         }
@@ -3136,10 +3233,28 @@ Item {
             background: root.background
             accent: root.accent
             fontFamily: root.fontFamily
-            onChanged: function(v) { root.setCollectionFilter(v) }
+            hasCursor: root.view === "wallpapers" && root.filterFocus === 0
+            onChanged: function(v) {
+              if (!root.searching) root.filterFocus = 0
+              root.setCollectionFilter(v)
+            }
+            // Taking the keyboard focus to open the popup (click or Enter) also
+            // lands the row focus on the picker.
+            onPopupOpenChanged: if (popupOpen && !root.searching) root.filterFocus = 0
           }
 
-          // Selection helpers: no-op until multi-select lands.
+          // Accent ring on the focused filter-row control, same treatment as the
+          // grid tiles and the Setup sidebar.
+          BorderSurface {
+            anchors.fill: collectionDropdown
+            color: "transparent"
+            radius: Style.cornerRadius
+            borderSpec: Border.flat(root.accent, Math.max(1, Style.normalBorderWidth))
+            visible: root.view === "wallpapers" && root.filterFocus === 0
+          }
+
+          // Selection helpers, reachable by keyboard (Left/Right from the
+          // search field, Enter/Space to fire).
           Row {
             id: selectionActions
 
@@ -3153,7 +3268,18 @@ Item {
               foreground: root.foreground
               accent: root.accent
               fontFamily: root.fontFamily
-              onClicked: root.selectAllWallpapers()
+              onClicked: {
+                if (!root.searching) root.filterFocus = 2
+                root.selectAllWallpapers()
+              }
+
+              BorderSurface {
+                anchors.fill: parent
+                color: "transparent"
+                radius: Style.cornerRadius
+                borderSpec: Border.flat(root.accent, Math.max(1, Style.normalBorderWidth))
+                visible: root.view === "wallpapers" && root.filterFocus === 2
+              }
             }
 
             Button {
@@ -3162,7 +3288,18 @@ Item {
               foreground: root.foreground
               accent: root.accent
               fontFamily: root.fontFamily
-              onClicked: root.clearWallpaperSelection()
+              onClicked: {
+                if (!root.searching) root.filterFocus = 3
+                root.clearWallpaperSelection()
+              }
+
+              BorderSurface {
+                anchors.fill: parent
+                color: "transparent"
+                radius: Style.cornerRadius
+                borderSpec: Border.flat(root.accent, Math.max(1, Style.normalBorderWidth))
+                visible: root.view === "wallpapers" && root.filterFocus === 3
+              }
             }
           }
 

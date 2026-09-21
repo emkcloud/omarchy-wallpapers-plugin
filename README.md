@@ -159,6 +159,21 @@ switch off leaves the current wallpaper in place.
   </tr>
 </table>
 
+## Available themes
+
+- **Catppuccin** — soothing pastel accents over deep dark backgrounds.
+- **Gruvbox** — retro groove color scheme with warm earthy browns and muted greens.
+- **Matte Black** — matte black backgrounds with a strong orange accent.
+- **Nord** — cold, muted blue-gray tones from the Nord palette, with crisp arctic-inspired contrast.
+- **Osaka Jade** — a fresh jade green palette with warm highlights.
+- **Solitude** — minimal monochrome near-black backgrounds with quiet gray tones.
+- **Tokyo Night** — deep blue backgrounds with cyan and purple neon accents.
+
+## Available collections
+
+- **Countries** — panoramas and iconic scenery inspired by individual countries.
+- **Shelters** — cozy improvised refuges tucked into the city.
+
 ## Security
 
 Only image files are accepted at install time: a catalogue entry whose extension

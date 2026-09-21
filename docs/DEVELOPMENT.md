@@ -495,6 +495,13 @@ applied when the user switches to that theme (see *Setup → per-theme default*)
   composes with the text filter in `Model.wallpaperMatches`; both `Select all`
   and the grid then see only the narrowed rows. The options list rebuilds on
   `wallpapersRevision`, and the filter resets on theme change / `open()`.
+- **Filter row focus** (`filterFocus`): the four controls of the search row are
+  one keyboard strip on the Setup model. Up on the grid's first row (or `/` /
+  Tab) lands on the search field, Left/Right or Tab/Shift+Tab walk to the picker
+  and the two buttons, Enter/Space activate the focused control, Down returns to
+  the grid (the filter is kept). A focused picker renders `hasCursor`; a focused
+  button gets the same accent `BorderSurface` ring as the tiles, and the search
+  field keeps its `active` accent border.
 - **Local components**: `components/RoundedImage.qml` (MultiEffect mask +
   `Style.cornerRadius`, `clip: true` is not enough), `components/HeroLogo.qml`
   (assets/images/logo.png with a nerd-font glyph fallback),
@@ -667,7 +674,12 @@ Rules that follow from that:
   (jump a whole visible page of tiles — visible rows × columns — via
   `pageCursor(dir)`; on the Help screen they scroll the topic content) work
   through a fallback `Keys.onPressed` on the card (the catcher does not accept
-  them, so they bubble up); Backspace is filter-only.
+  them, so they bubble up); Backspace is filter-only. The wallpapers filter row
+  (collection picker / search / `Select all` / `Clear`) is a focusable strip on
+  the Setup model (`filterFocus`): Left/Right or Tab/Shift+Tab walk the four
+  controls, Enter/Space activate the focused one (open the popup, start typing,
+  fire the button), Down returns to the grid and Up from the first row drops into
+  the search. The focused control carries the same accent ring as the tiles.
 - **Buttons** = `Ui/Button` with `bordered: true`. Never pin `hasCursor: true`
   — the component derives `hot` from its own hover. No tooltips: key hints live
   in the footer hint row (`keyHint`).
@@ -836,6 +848,9 @@ tag.
   introduce a translation framework yet; just keep strings in English until
   the user decides how to handle i18n.
 - Commit messages: concise (short and to the point).
+- **Restart the shell yourself after every change** (`omarchy restart shell`) —
+  do not wait to be asked. The dev wrapper is symlinks, so inotify does not
+  hot-reload edits; without the restart the user keeps seeing the stale build.
 - **Do NOT verify the UI with screenshots** (`grim` + reading the image): it is
   slow and expensive. After restarting the shell, just ask the user to look at
   the overlay and report the visual result.
