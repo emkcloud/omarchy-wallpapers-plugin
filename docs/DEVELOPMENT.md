@@ -30,7 +30,9 @@ set-default), theme by theme.
   the Help data helpers (`parseHelpIndex`, `parseRoadmap`, `parseMarkdown`).
 - `interface/components/` — local QML atoms shared by the screens:
   `RoundedImage.qml` (rounded image via MultiEffect mask), `HeroLogo.qml`
-  (brand mark + glyph fallback), `Pill.qml` (state pill), `ThemeProgress.qml`
+  (brand mark + glyph fallback), `Pill.qml` (state pill), `StorePill.qml`
+  (global "N available | M installed" pill, with the storage-cap warning),
+  `ThemeProgress.qml`
   (install progress of one theme: caption + percentage + accent bar),
   `SearchField.qml` (shared search box with caret and clear X),
   `RunningOverlay.qml` (opaque scrim + accent spinner + pulsing caption while
@@ -52,11 +54,13 @@ set-default), theme by theme.
     these (silent fallback to the shipped layout if the file is missing/invalid);
     `manager.sh` reads `paths.datasets` for its cache dir (an absolute path is
     honoured as-is).
-  - `links` — `repo`, `donation`, `issues`, `releases`, `database`: the project
-    URLs, opened by the hero GitHub / Releases buttons, the Help footer
-    "Archive RAW" / "Star" buttons and the Help resources / "propose a feature"
-    (whose `index.json` entries name a key here). Data, so they can be
-    repointed without a code change.
+  - `links` — `repo`, `donation`, `issues`, `releases` (plus an optional
+    `database` override): the project URLs, opened by the hero GitHub /
+    Releases buttons, the Help footer "Archive RAW" / "Star" buttons and the
+    Help resources / "propose a feature" (whose `index.json` entries name a key
+    here). Data, so they can be repointed without a code change. When
+    `database` is absent the QML derives it as `<base>/datasets/datasets.json`,
+    so "Archive RAW" always opens the dataset of the version in use.
 - `help/` — the Help screen data. `index.json` describes the sidebar sections,
   the external resources and the "propose a feature" target; `roadmap.json`
   drives the right column; one Markdown file per topic is the centre content.
@@ -157,10 +161,10 @@ before the `PanelWindow`. This is the source order and where each concern lives:
 
 | Source order | ids / functions | Role |
 |---|---|---|
-| paths | `pluginRoot`, `configFile`, `pluginPaths`, `scriptPath`, `logoPath` | resolve the layout from `config/config.json` `paths`, from the plugin root |
-| state | `view`, `themeName`, `themeCatalogUrl`, `selectedIndex`, `lastThemeIndex`, `wallpaperCursorByTheme`, `pendingWallpaperIndex`, `pendingWallpaperSelect`, `checkedWallpapers`, `selectionRevision`, `hoverArmed`, `cursorActive`, `busy`, `statusText`, `filterText`, `wallpaperFilterText`, `searching`, `themesModel`, `themesDisplayModel`, `wallpapersModel`, `wallpapersDisplayModel` | single source of truth |
+| paths | `pluginRoot`, `configFile`, `pluginPaths`, `scriptPath`, `logoPath`, `pluginBase`, `pluginLinks`, `pluginDatabaseUrl` | resolve the layout from `config/config.json` `paths`, from the plugin root; `pluginDatabaseUrl` is the Archive RAW target (`<base>/datasets/datasets.json`, or an explicit `links.database`) |
+| state | `view`, `themeName`, `themeCatalogUrl`, `selectedIndex`, `lastThemeIndex`, `wallpaperCursorByTheme`, `pendingWallpaperIndex`, `pendingWallpaperSelect`, `checkedWallpapers`, `selectionRevision`, `hoverArmed`, `cursorActive`, `busy`, `statusText`, `filterText`, `wallpaperFilterText`, `collectionFilter`, `searching`, `themesModel`, `themesDisplayModel`, `wallpapersModel`, `wallpapersDisplayModel` | single source of truth |
 | tokens | `foreground`, `background`, `accent`, `urgent`, `scrim`, `dim`, `borderSpec`, `contentMargin`, `contentSpacing`, `minTileWidth`, `themeTileWidth`, `tileGap`, `tileInset`, `fontFamily`, `heroHeight` | `Color.menu.*` / `Style.*` aliases |
-| components | `RoundedImage`, `HeroLogo`, `Pill`, `ThemeProgress`, `SearchField` | atoms in `components/`, shared by both grids and the preview |
+| components | `RoundedImage`, `HeroLogo`, `Pill`, `StorePill`, `ThemeProgress`, `SearchField` | atoms in `components/`, shared by both grids and the preview |
 | startup / termination | `open()`, `close()`, `onOpenedChanged` | summon / hide |
 | cursor state machine | `activeGrid`, `activeCount`, `stepCursor`, `moveCursor`, `pageCursor`, `activateCursor`, `dismissCursor`, `handleTextKey`, `takeCursor` | one `selectedIndex` driven by mouse *and* keyboard |
 | actions | `currentItem`, `showPreview`, `closePreview`, `previewNext`, `actionInstall`, `actionRemove`, `actionSetDefault`, `actionInstallAll`, `actionRemoveAll`, `runAction` | user operations |
@@ -169,8 +173,8 @@ before the `PanelWindow`. This is the source order and where each concern lives:
 
 Pure helpers live in `interface/js/Model.js` (imported as `Model`): `parseThemes`,
 `parseCatalog`, `themeLabel`, `ucfirst`, `formatSize`, `themeMatches`,
-`wallpaperMatches`, `stepIndex`, `textAction`, `themesStatus`, `catalogStatus`,
-`parsePaths`. Keep it free of QML ids/state —
+`wallpaperMatches`, `collectionOptions`, `stepIndex`, `textAction`,
+`themesStatus`, `catalogStatus`, `parsePaths`. Keep it free of QML ids/state —
 the view owns the models, the processes and `selectedIndex`.
 
 The steps below walk the same file in **runtime order**, not source order.
@@ -282,7 +286,10 @@ status caption. Enter/Space or click opens the theme; Esc closes the plugin.
 **Functional.** Grid of the selected theme's wallpapers: each tile is a
 thumbnail with the accent-colored code + name overlaid on a translucent band
 at its bottom (no extra row). Header
-has Back / Refresh / Close buttons and shows the theme name + count. Footer has
+has Back / Refresh / Close buttons and shows the theme name + count. The search
+row leads with a collection picker (`All collections` + the collections present
+in the open theme), then the search field and the `Select all` / `Clear`
+buttons. Footer has
 three sections on one row — Install / Uninstall on the left, the theme's progress
 in the middle, and the key hints on the right. Enter or click opens the
 preview; Space checks the cursor tile; `Select all` / `Clear` (search row) fill
@@ -474,15 +481,23 @@ shows a `DEFAULT` pill before the dot; Esc returns to the grid.
   `Util.editsFilter`, arrows/PageUp/PageDown navigate, Enter browses, Esc clears
   the filter then exits. Footer counts stay global.
 - **Wallpapers search**: the same shared state/behaviour as the themes one, but
-  the field sits in a full-width row above the grid next to two inert buttons
-  (`Select all` / `Clear`, multi-select comes next). Typing filters by name or
-  code through `Model.wallpaperMatches`; the grid binds to
-  `activeWallpapersModel` — `wallpapersModel` when the filter is empty, else the
-  JS-rebuilt `wallpapersDisplayModel`. Enter opens the preview.
+  the field sits in a full-width row above the grid, after the collection picker
+  and before the `Select all` / `Clear` buttons. Typing filters by name or code
+  through `Model.wallpaperMatches`; the grid binds to `activeWallpapersModel` —
+  `wallpapersModel` when both filters are empty, else the JS-rebuilt
+  `wallpapersDisplayModel`. Enter opens the preview.
+- **Collection filter**: a `Dropdown` above the grid (leading the search row)
+  offering `All collections` plus the collections present in the open theme,
+  built by `Model.collectionOptions`. Picking one sets `collectionFilter` and
+  composes with the text filter in `Model.wallpaperMatches`; both `Select all`
+  and the grid then see only the narrowed rows. The options list rebuilds on
+  `wallpapersRevision`, and the filter resets on theme change / `open()`.
 - **Local components**: `components/RoundedImage.qml` (MultiEffect mask +
   `Style.cornerRadius`, `clip: true` is not enough), `components/HeroLogo.qml`
   (assets/images/logo.png with a nerd-font glyph fallback),
   `components/Pill.qml` (state pills, transparent fill + flat tinted border),
+  `components/StorePill.qml` (global "N available | M installed" pill, with the
+  storage-cap warning; shared by the header and the preview),
   `components/ThemeProgress.qml` (theme install bar, shared by both footers),
   `components/SearchField.qml` (search box with caret and clear X, shared by the
   themes and wallpapers searches).
@@ -511,8 +526,8 @@ hero "Wallpaper manager" button jumps straight to the theme list; the footer
 holds a Setup placeholder, an "Archive RAW" link and a "Star" link. Shortcuts:
 `enter`/`space`
 open the highlighted topic, arrows/h/j/k/l move the index cursor,
-`pageup`/`pagedown` scroll the topic, `p` proposes a feature, `d` opens the raw
-database, `q`/`x` close the plugin.
+`pageup`/`pagedown` scroll the topic, `p` proposes a feature, `d` opens the
+dataset (`<base>/datasets/datasets.json`), `q`/`x` close the plugin.
 
 **Technical.**
 - The view lives in `components/HelpView.qml` (rendering) and

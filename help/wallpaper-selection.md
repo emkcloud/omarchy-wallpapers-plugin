@@ -17,6 +17,15 @@ To find a wallpaper, use the search bar on this screen. The search
 is literal, not semantic, but it still helps you find it quickly:
 type a word such as **italy** and the grid narrows to the matching wallpapers.
 
+## Collections
+
+The picker to the left of the search bar narrows the grid to a single
+collection of the open theme instead of everything at once. The default
+**All collections** shows every wallpaper; pick one (for example the shelters
+set while browsing a theme whose other collection is countries) and the grid,
+the **Select all** button and the counts follow it. The collection filter and
+the text search combine, so a collection can be searched within.
+
 ## Keyboard
 
 | Key | Action |
@@ -38,10 +47,3 @@ type a word such as **italy** and the grid narrows to the matching wallpapers.
 
 If the thumbnails are too small to judge a wallpaper, press enter on a tile to
 open it in the preview and install it from there in large format.
-
-## Download RAW
-
-You can also browse all the wallpapers at the source. The **Archive RAW** link in
-the Help footer (or `d` on the Help screen) opens the original repository in
-your browser, where every file is available in its full-resolution original
-format and can be downloaded directly.

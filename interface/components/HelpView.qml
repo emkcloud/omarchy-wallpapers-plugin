@@ -120,7 +120,7 @@ Item {
     return String(entry.url || "")
   }
 
-  // Help keyboard shortcuts: `p` proposes a feature, `d` opens the raw database.
+  // Help keyboard shortcuts: `p` proposes a feature, `d` opens the version dataset.
   function openFeature() {
     openUrl(linkFor(help.index.feature))
   }

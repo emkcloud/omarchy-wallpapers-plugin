@@ -41,6 +41,11 @@ Item {
     help: "help"
   })
 
+  // The versioned CloudFront base from `config/config.json` (`base`). The
+  // Archive RAW links derive `<base>/datasets/datasets.json` from it, so they
+  // always open the dataset of the snapshot currently in use.
+  property string pluginBase: "https://content.emkcloud.com/wallpapers/1.1.0"
+
   // Project links, resolved from `config/config.json` `links` so the Help
   // resources and the GitHub button can be repointed without a code change.
   // The defaults match the shipped config so nothing flickers while it loads.
@@ -49,8 +54,16 @@ Item {
     donation: "https://github.com/sponsors/emkcloud",
     issues: "https://github.com/emkcloud/omarchy-wallpapers-plugin/issues",
     releases: "https://github.com/emkcloud/omarchy-wallpapers-plugin/releases",
-    database: "https://github.com/emkcloud/omarchy-wallpapers/tree/main/images"
+    database: ""
   })
+
+  // Archive RAW target: an explicit `links.database` wins, otherwise the
+  // datasets.json of the configured version.
+  readonly property string pluginDatabaseUrl: {
+    if (pluginLinks && pluginLinks.database) return String(pluginLinks.database)
+    if (!pluginBase) return ""
+    return pluginBase.replace(/\/+$/, "") + "/datasets/datasets.json"
+  }
 
   FileView {
     id: configFile
@@ -60,6 +73,7 @@ Item {
     onLoaded: {
       root.pluginPaths = Model.parsePaths(text(), root.pluginPaths)
       root.pluginLinks = Model.parseLinks(text(), root.pluginLinks)
+      root.pluginBase = Model.parseBase(text(), root.pluginBase)
     }
   }
 
@@ -192,6 +206,11 @@ Item {
   // Entered with `/`, exited with Esc/Tab.
   property string filterText: ""
   property string wallpaperFilterText: ""
+  // Collection filter on the wallpapers screen (`""` = every collection).
+  property string collectionFilter: ""
+  // Keep the picker label in sync when the filter is reset programmatically:
+  // the Dropdown's own selection breaks the `value` binding.
+  onCollectionFilterChanged: if (collectionDropdown) collectionDropdown.value = collectionFilter
   property bool searching: false
   // Set when Esc stops a running action, so `actionProc.onExited` reports a
   // cancellation instead of a completion.
@@ -346,17 +365,30 @@ Item {
     themesRevision++
   }
 
-  // What the wallpapers grid and cursor read from.
+  // What the wallpapers grid and cursor read from: the raw model while no
+  // filter is active, else the rebuilt display model.
   readonly property var activeWallpapersModel:
-    wallpaperFilterText === "" ? wallpapersModel : wallpapersDisplayModel
+    (wallpaperFilterText === "" && collectionFilter === "")
+      ? wallpapersModel : wallpapersDisplayModel
 
   function rebuildWallpaperDisplay() {
     wallpapersDisplayModel.clear()
     for (var i = 0; i < wallpapersModel.count; i++) {
       var row = wallpapersModel.get(i)
-      if (Model.wallpaperMatches(row, wallpaperFilterText)) wallpapersDisplayModel.append(row)
+      if (Model.wallpaperMatches(row, wallpaperFilterText, collectionFilter))
+        wallpapersDisplayModel.append(row)
     }
     wallpapersRevision++
+  }
+
+  // Collections present in the open theme, as Dropdown options ("All
+  // collections" first). `wallpapersRevision` makes the binding re-read the
+  // rows after a catalog reload (`ListModel.get()` is not tracked).
+  readonly property var collectionOptions: {
+    var rev = wallpapersRevision
+    var rows = []
+    for (var i = 0; i < wallpapersModel.count; i++) rows.push(wallpapersModel.get(i))
+    return Model.collectionOptions(rows)
   }
 
   // Theme highlighted in the master-detail themes screen. Depends on
@@ -404,10 +436,13 @@ Item {
     return !!item && String(item.isDefault) === "1"
   }
 
-  // Gap around the preview overlays (path pill / filmstrip). The lateral insets
-  // match the bottom one so all four sides read the same.
-  readonly property real overlayInset: Style.space(12)
-    + (previewStrip.height - previewPathPill.height) / 2
+  // Gap around the preview overlays (path pill / filmstrip), set to the card's
+  // own content padding so they line up with the footer controls and the grids
+  // instead of hugging the border.
+  readonly property real overlayInset: root.contentMargin
+  // Fill opacity of both bottom overlays, so they read identically over the
+  // image (higher = more solid).
+  readonly property real overlayFillAlpha: 0.55
 
   // Real image info of the open wallpaper: "2K" and "2560x1440".
   readonly property string currentResolution: {
@@ -421,6 +456,16 @@ Item {
     if (!item || !item.width || !item.height) return ""
     return item.width + "x" + item.height
   }
+  // File size of the open wallpaper, e.g. "0.3 MB"; empty when unknown.
+  readonly property string currentSize: {
+    var rev = wallpapersRevision
+    var item = currentItem()
+    return item ? Model.formatSize(item.sizeBytes) : ""
+  }
+  // Longest file name shown in the preview header before middle-elision.
+  readonly property int fileNameMaxChars: 48
+  // Same for the full install path in the bottom-left pill.
+  readonly property int pathMaxChars: 72
 
   // Caption of the running overlay: what the action is doing. On the preview it
   // names the wallpaper's size; on the themes screen `currentItem()` is null, so
@@ -564,6 +609,7 @@ Item {
     statusText = ""
     filterText = ""
     wallpaperFilterText = ""
+    collectionFilter = ""
     searching = false
     actionTheme = ""
     actionCancelled = false
@@ -576,6 +622,8 @@ Item {
   }
 
   function close() {
+    // A dropdown popup is a separate window and would outlive the overlay.
+    if (collectionDropdown && collectionDropdown.popupOpen) collectionDropdown.close()
     opened = false
   }
 
@@ -675,7 +723,20 @@ Item {
     var next = String(text || "")
     if (next === wallpaperFilterText) return
     wallpaperFilterText = next
-    if (wallpaperFilterText !== "") rebuildWallpaperDisplay()
+    if (wallpaperFilterText !== "" || collectionFilter !== "") rebuildWallpaperDisplay()
+    selectedIndex = 0
+    cursorActive = true
+    if (activeWallpapersModel.count > 0)
+      Qt.callLater(function() { grid.positionViewAtIndex(0, GridView.Beginning) })
+  }
+
+  // Narrow the grid to one collection ("" = all). Shares the rebuild/cursor
+  // reset with the text filter so the two compose.
+  function setCollectionFilter(value) {
+    var next = String(value || "")
+    if (next === collectionFilter) return
+    collectionFilter = next
+    if (wallpaperFilterText !== "" || collectionFilter !== "") rebuildWallpaperDisplay()
     selectedIndex = 0
     cursorActive = true
     if (activeWallpapersModel.count > 0)
@@ -694,6 +755,7 @@ Item {
     // the new theme and log a pile of "Cannot open" warnings.
     wallpapersModel.clear()
     wallpaperFilterText = ""
+    collectionFilter = ""
     // Checks belong to the theme being left.
     clearWallpaperSelection()
     themeName = item.name
@@ -985,7 +1047,7 @@ Item {
       if (text === "d" || text === "D") setupSettings.restoreDefaults()
       return
     }
-    // The help screen: `p` proposes a feature, `d` opens the raw database;
+    // The help screen: `p` proposes a feature, `d` opens the version dataset;
     // Enter/Space pick a topic, Esc goes back, everything else is ignored.
     if (view === "help") {
       if (text === "p" || text === "P") helpView.openFeature()
@@ -1544,6 +1606,10 @@ Item {
     refreshDetailShown()
     hoverArmed = false
     hoverGate.restart()
+    // The collection popup is a separate window: close it when the wallpapers
+    // screen is left, or it would stay floating over the other views.
+    if (view !== "wallpapers" && collectionDropdown && collectionDropdown.popupOpen)
+      collectionDropdown.close()
   }
   // A prewarmed neighbour may make the full image available: upgrade the detail
   // pane from the small preview without waiting for the next selection.
@@ -1635,7 +1701,8 @@ Item {
         wallpapersModel.clear()
         var rows = Model.parseCatalog(text)
         for (var i = 0; i < rows.length; i++) wallpapersModel.append(rows[i])
-        if (root.wallpaperFilterText !== "") root.rebuildWallpaperDisplay()
+        if (root.wallpaperFilterText !== "" || root.collectionFilter !== "")
+          root.rebuildWallpaperDisplay()
         root.wallpapersRevision++
         // Land the cursor on the entry target (first tile, or the remembered
         // one). Applied here, after the model is populated, so a hover event
@@ -1964,9 +2031,10 @@ Item {
         anchors.leftMargin: card.contentLeftInset
 
         // Search owns the keyboard entirely: let the card's fallback handle it.
-        // Same while the Setup interval dropdown's popup is open, so its list
-        // gets the arrows / Enter / Esc.
+        // Same while a dropdown popup is open (Setup interval / collections),
+        // so its list gets the arrows / Enter / Esc.
         blocked: root.searching || setupSettings.dropdownOpen
+          || collectionDropdown.popupOpen
 
         onMoveRequested: function(dx, dy) { root.moveCursor(dx, dy) }
         // Enter also fires `activateRequested`, so the flag drops that second
@@ -2045,79 +2113,22 @@ Item {
             }
 
             // Global store: total wallpapers and installed count across every
-            // theme. Height matches a sibling Button's implicitHeight so the
-            // pill lines up with the kit controls (the kit has no shared
-            // "control height" applied to Button).
-            BorderSurface {
+            // theme. Also shown in the preview header (see `previewActions`).
+            StorePill {
               visible: root.view !== "help"
-              width: storeRow.implicitWidth + leftPadding + rightPadding
-              height: refreshButton.implicitHeight
-              radius: Style.cornerRadius
-              color: "transparent"
-              borderSpec: Border.controlSpec("normal", root.foreground, root.accent)
-              leftPadding: Style.spacing.controlPaddingX
-              rightPadding: Style.spacing.controlPaddingX
-
-              Row {
-                id: storeRow
-                anchors.centerIn: parent
-                spacing: Style.space(10)
-
-                Text {
-                  textFormat: Text.PlainText
-                  text: root.globalCounts.wallpapers + " available"
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                  anchors.verticalCenter: parent.verticalCenter
-                }
-
-                Rectangle {
-                  width: Math.max(1, Style.normalBorderWidth)
-                  height: storeRow.implicitHeight
-                  color: Util.alpha(root.foreground, 0.25)
-                  anchors.verticalCenter: parent.verticalCenter
-                }
-
-                Text {
-                  textFormat: Text.PlainText
-                  text: root.globalCounts.installed + " installed"
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                  anchors.verticalCenter: parent.verticalCenter
-                }
-
-                // Third segment, only while a storage cap is reached outside
-                // Setup (which handles the caps its own way): bulk installs are
-                // disabled there, so flag it next to the counts.
-                Rectangle {
-                  visible: root.storageLimitReached && root.view !== "setup"
-                  width: Math.max(1, Style.normalBorderWidth)
-                  height: storeRow.implicitHeight
-                  color: Util.alpha(root.foreground, 0.25)
-                  anchors.verticalCenter: parent.verticalCenter
-                }
-
-                Text {
-                  visible: root.storageLimitReason !== "" && root.view !== "setup"
-                  textFormat: Text.PlainText
-                  text: root.storageLimitReason
-                  color: root.accent
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                  font.capitalization: Font.AllUppercase
-                  anchors.verticalCenter: parent.verticalCenter
-
-                  // Jump straight to the caps in Setup → Download.
-                  HoverHandler { cursorShape: Qt.PointingHandCursor }
-                  TapHandler { onTapped: root.openSetupDownload() }
-                }
-              }
+              controlHeight: refreshButton.implicitHeight
+              wallpapers: root.globalCounts.wallpapers
+              installed: root.globalCounts.installed
+              limitReason: root.storageLimitReached && root.view !== "setup"
+                ? root.storageLimitReason : ""
+              foreground: root.foreground
+              accent: root.accent
+              fontFamily: root.fontFamily
+              onLimitActivated: root.openSetupDownload()
             }
 
             Button {
-              visible: root.view === "themes" || root.view === "wallpapers"
+              visible: root.view === "themes"
               // Frozen while an action runs, like the preview's actions.
               enabled: !actionRunning
               opacity: enabled ? 1 : 0.4
@@ -2234,16 +2245,16 @@ Item {
           fontFamily: root.fontFamily
           iconComponent: heroIcon
           trailingControl: heroActions
-          title: root.view === "help"
+          title: (root.view === "help"
             ? "Guide & support"
             : (root.view === "setup"
               ? "Setup & options"
               : (root.view === "themes"
                 ? "Theme selection"
-                : ("Theme / " + Model.ucfirst(root.themeName))))
+                : ("Theme / " + Model.ucfirst(root.themeName))))).toUpperCase()
           detail: ""
           meta: root.view === "help"
-            ? "Wallpaper manager documentation"
+            ? root.versionedName
             : (root.view === "setup"
               ? root.versionedName
               : (root.view === "themes"
@@ -2891,7 +2902,16 @@ Item {
           anchors.right: parent.right
           anchors.bottom: footer.top
           helpRoot: root.helpRoot
-          links: root.pluginLinks
+          links: {
+            var l = root.pluginLinks
+            return {
+              repo: l.repo,
+              donation: l.donation,
+              issues: l.issues,
+              releases: l.releases,
+              database: root.pluginDatabaseUrl
+            }
+          }
           roadmap: root.roadmapData
           index: root.helpIndex
           // Same master-pane width as the themes screen, so the two sidebars
@@ -2955,7 +2975,27 @@ Item {
           anchors.topMargin: root.contentSpacing
           anchors.left: parent.left
           anchors.right: parent.right
-          height: Math.max(wallpapersSearch.height, selectionActions.implicitHeight)
+          height: Math.max(wallpapersSearch.height, selectionActions.implicitHeight,
+            collectionDropdown.height)
+
+          // Collection picker: narrows the grid to one collection of the open
+          // theme, "All collections" by default.
+          Dropdown {
+            id: collectionDropdown
+
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            // Same width as a grid tile below, so the picker lines up with the
+            // first column.
+            width: Math.max(Style.space(120), grid.cellWidth - root.tileGap * 2)
+            options: root.collectionOptions
+            value: root.collectionFilter
+            foreground: root.foreground
+            background: root.background
+            accent: root.accent
+            fontFamily: root.fontFamily
+            onChanged: function(v) { root.setCollectionFilter(v) }
+          }
 
           // Selection helpers: no-op until multi-select lands.
           Row {
@@ -2987,7 +3027,8 @@ Item {
           SearchField {
             id: wallpapersSearch
 
-            anchors.left: parent.left
+            anchors.left: collectionDropdown.right
+            anchors.leftMargin: Style.space(12)
             anchors.right: selectionActions.left
             anchors.rightMargin: Style.space(12)
             anchors.verticalCenter: parent.verticalCenter
@@ -3115,7 +3156,9 @@ Item {
 
                   Text {
                     textFormat: Text.PlainText
-                    text: tile.model.name
+                    // Datasets mix cases (country names vs lowercase captions):
+                    // title-case each word so the grid reads consistently.
+                    text: Model.titleCase(tile.model.name)
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -3420,6 +3463,19 @@ Item {
               anchors.verticalCenter: parent.verticalCenter
               spacing: Style.spacing.controlGap
 
+              // Help, before the actions (the wallpapers header carries none).
+              Button {
+                enabled: !actionRunning
+                opacity: enabled ? 1 : 0.4
+                text: "Help"
+                iconText: "󰘥"
+                bordered: true
+                foreground: root.foreground
+                accent: root.accent
+                fontFamily: root.fontFamily
+                onClicked: root.openHelp()
+              }
+
               Button {
                 // A batch install is bulk: disabled while a storage cap is
                 // reached (one wallpaper at a time stays available).
@@ -3527,6 +3583,20 @@ Item {
               anchors.verticalCenter: parent.verticalCenter
               spacing: Style.spacing.controlGap
 
+              // Help, before the actions (the big preview's only Help button:
+              // the header carries none).
+              Button {
+                enabled: !actionRunning
+                opacity: enabled ? 1 : 0.4
+                text: "Help"
+                iconText: "󰘥"
+                bordered: true
+                foreground: root.foreground
+                accent: root.accent
+                fontFamily: root.fontFamily
+                onClicked: root.openHelp()
+              }
+
               Button {
                 id: previewInstall
 
@@ -3616,9 +3686,8 @@ Item {
             }
           }
 
-          // Help footer: Setup placeholder plus a direct link to the raw
-          // wallpaper database, then the same master/detail divider as the
-          // other screens.
+          // Help footer: Setup placeholder plus a direct link to the version
+          // dataset, then the same master/detail divider as the other screens.
           Item {
             id: helpFooterRow
 
@@ -3650,7 +3719,7 @@ Item {
                 onClicked: root.openSetup()
               }
 
-              // Direct link to the upstream image repository (URL in config).
+              // Direct link to the version dataset (derived from `base`).
               Button {
                 enabled: !actionRunning
                 opacity: enabled ? 1 : 0.4
@@ -3880,12 +3949,25 @@ Item {
                 fontFamily: root.fontFamily
               }
 
-              // Real image info ("2K | 2560x1440"), standard colours, styled
-              // like the store pill on the themes screen.
+              // Global store, same pill as the themes/wallpapers header.
+              StorePill {
+                controlHeight: previewDownloadButton.implicitHeight
+                wallpapers: root.globalCounts.wallpapers
+                installed: root.globalCounts.installed
+                limitReason: root.storageLimitReached ? root.storageLimitReason : ""
+                foreground: root.foreground
+                accent: root.accent
+                fontFamily: root.fontFamily
+                onLimitActivated: root.openSetupDownload()
+              }
+
+              // Real image info ("2K | 2560x1440 | 0.3 MB"), standard colours,
+              // styled like the store pill on the themes screen.
               BorderSurface {
                 id: previewInfoPill
 
                 visible: root.currentResolution !== "" || root.currentDimensions !== ""
+                  || root.currentSize !== ""
                 height: previewDownloadButton.implicitHeight
                 width: infoRow.implicitWidth + leftPadding + rightPadding
                 radius: Style.cornerRadius
@@ -3926,19 +4008,26 @@ Item {
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.bodySmall
                   }
-                }
-              }
 
-              Button {
-                enabled: !actionRunning
-                opacity: enabled ? 1 : 0.4
-                text: "Help"
-                iconText: "󰘥"
-                bordered: true
-                foreground: root.foreground
-                accent: root.accent
-                fontFamily: root.fontFamily
-                onClicked: root.openHelp()
+                  Rectangle {
+                    visible: root.currentSize !== ""
+                      && (root.currentResolution !== "" || root.currentDimensions !== "")
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Math.max(1, Style.normalBorderWidth)
+                    height: infoRow.implicitHeight
+                    color: Util.alpha(root.foreground, 0.25)
+                  }
+
+                  Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    textFormat: Text.PlainText
+                    visible: root.currentSize !== ""
+                    text: root.currentSize
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                  }
+                }
               }
 
               Button {
@@ -3992,16 +4081,17 @@ Item {
             fontFamily: root.fontFamily
             iconComponent: previewIcon
             trailingControl: previewActions
-            // "Theme / Catppuccin / Preview": the file name and size below
-            // already identify the wallpaper, so the title stays short.
-            title: "Theme / " + Model.ucfirst(root.themeName) + " / Preview"
-            // Second line: file name, then its size in MB.
+            // "Theme / Catppuccin / Preview": the file name below already
+            // identifies the wallpaper, so the title stays short.
+            title: ("Theme / " + Model.ucfirst(root.themeName) + " / Preview").toUpperCase()
+            // Second line: just the file name, middle-elided so the extension
+            // and resolution at the end stay readable; resolution and size live
+            // in the info pill on the right.
             meta: {
               var item = root.currentItem()
               if (!item) return ""
               if (previewView.failed) return "failed to load"
-              var size = Model.formatSize(item.sizeBytes)
-              return size !== "" ? item.filename + " · " + size : item.filename
+              return Model.elideMiddle(item.filename, root.fileNameMaxChars)
             }
           }
 
@@ -4109,21 +4199,31 @@ Item {
               anchors.leftMargin: root.overlayInset
               anchors.bottom: parent.bottom
               anchors.bottomMargin: root.overlayInset
-              width: Math.min(pathText.implicitWidth + Style.space(28),
+              readonly property int padLeft: Style.space(14)
+              readonly property int padRight: Style.space(32)
+
+              width: Math.min(pathText.implicitWidth + padLeft + padRight,
                 parent.width - card.leftPadding - Style.space(12))
-              height: pathText.implicitHeight + Style.space(16)
+              // Same height as the filmstrip on the right, so the two overlays
+              // read as one row; the path itself stays vertically centred.
+              height: previewStrip.height
               radius: Style.cornerRadius
-              color: Util.alpha(root.background, 0.82)
+              color: Util.alpha(root.background, root.overlayFillAlpha)
               borderSpec: Border.flat(Util.alpha(root.foreground, 0.22),
                 Math.max(1, Style.normalBorderWidth))
 
               Text {
                 id: pathText
 
-                width: parent.width - Style.space(28)
-                anchors.centerIn: parent
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.leftMargin: parent.padLeft
+                anchors.rightMargin: parent.padRight
+                anchors.verticalCenter: parent.verticalCenter
                 textFormat: Text.PlainText
-                text: root.currentInstallPath
+                // Same middle-elision as the header: the directory head and the
+                // file tail stay readable at any length.
+                text: Model.elideMiddle(root.currentInstallPath, root.pathMaxChars)
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -4158,10 +4258,9 @@ Item {
             readonly property int visibleCells: 7
 
             anchors.right: parent.right
-            // Match the pill's lateral gap from the card border: the strip lives
-            // in the padded content area, so add back its content inset.
-            anchors.rightMargin: root.overlayInset
-              - (card.borderRight + card.rightPadding)
+            // The strip lives in the padded content area, so no lateral margin:
+            // its right edge lines up with the footer controls and the grids.
+            anchors.rightMargin: 0
             anchors.bottom: parent.bottom
             // Lifted so the strip's bottom edge lines up with the path pill's.
             anchors.bottomMargin: footer.height - root.footerOverlap
@@ -4170,7 +4269,7 @@ Item {
               + contentLeftInset + contentRightInset
             height: cellH + contentTopInset + contentBottomInset
             radius: Style.cornerRadius
-            color: Util.alpha(root.background, 0.7)
+            color: Util.alpha(root.background, root.overlayFillAlpha)
             borderSpec: Border.flat(Util.alpha(root.foreground, 0.18),
               Math.max(1, Style.normalBorderWidth))
             padding: Style.space(6)

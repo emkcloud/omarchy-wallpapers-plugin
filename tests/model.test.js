@@ -97,6 +97,15 @@ test("ucfirst uppercases only the first letter", () => {
   assert.equal(Model.ucfirst(null), "");
 });
 
+test("titleCase uppercases each word, leaving the rest untouched", () => {
+  assert.equal(Model.titleCase("001 the old windmill"), "001 The Old Windmill");
+  assert.equal(Model.titleCase("helicopter on the roof"), "Helicopter On The Roof");
+  assert.equal(Model.titleCase("South Africa"), "South Africa");
+  assert.equal(Model.titleCase("USA"), "USA");
+  assert.equal(Model.titleCase(""), "");
+  assert.equal(Model.titleCase(null), "");
+});
+
 test("themeMatches treats hyphens as spaces and searches title and name", () => {
   const item = { name: "tokyo-night", title: "Tokyo Night" };
   assert.equal(Model.themeMatches(item, "tokyo night"), true);
@@ -114,6 +123,31 @@ test("wallpaperMatches searches name and code", () => {
   assert.equal(Model.wallpaperMatches(item, ""), true);
 });
 
+test("wallpaperMatches narrows by collection when given", () => {
+  const row = { name: "Andorra", code: "AD", collection: "countries" };
+  assert.equal(Model.wallpaperMatches(row, "", "countries"), true);
+  assert.equal(Model.wallpaperMatches(row, "", "shelters"), false);
+  assert.equal(Model.wallpaperMatches(row, "and", "shelters"), false);
+  assert.equal(Model.wallpaperMatches(row, "", ""), true);
+});
+
+test("collectionOptions lists unique sorted collections with All first", () => {
+  const rows = [
+    { collection: "shelters" },
+    { collection: "countries" },
+    { collection: "countries" },
+    { collection: "" }
+  ];
+  assert.deepEqual(Model.collectionOptions(rows), [
+    { value: "", label: "All collections" },
+    { value: "countries", label: "Countries" },
+    { value: "shelters", label: "Shelters" }
+  ]);
+  assert.deepEqual(Model.collectionOptions(null), [
+    { value: "", label: "All collections" }
+  ]);
+});
+
 test("formatPercent floors whole percents and keeps sub-1% decimals", () => {
   assert.equal(Model.formatPercent(0), "0%");
   assert.equal(Model.formatPercent(1), "100%");
@@ -123,6 +157,17 @@ test("formatPercent floors whole percents and keeps sub-1% decimals", () => {
   assert.equal(Model.formatPercent(0.0005), "<0.1%");
   assert.equal(Model.formatPercent(2), "100%");
   assert.equal(Model.formatPercent(-1), "0%");
+});
+
+test("elideMiddle keeps head and tail within the limit", () => {
+  const long = "omarchy-country-AU-Australia-2K.webp";
+  const short = Model.elideMiddle(long, 20);
+  assert.equal(short.length, 20);
+  assert.ok(short.includes("…"));
+  assert.ok(short.startsWith("omarchy"));
+  assert.ok(short.endsWith(".webp"));
+  assert.equal(Model.elideMiddle("short.webp", 20), "short.webp");
+  assert.equal(Model.elideMiddle("short.webp", 2), "short.webp");
 });
 
 test("formatSize renders MB with one decimal", () => {
@@ -321,6 +366,12 @@ test("parseLinks merges over the fallback", () => {
   assert.equal(links.repo, "x");
   assert.equal(links.donation, "d");
   assert.deepEqual(Model.parseLinks("nope", base), base);
+});
+
+test("parseBase reads config.base and trims the trailing slash", () => {
+  assert.equal(Model.parseBase(JSON.stringify({ base: "https://cdn/x/1.2.0/" }), "fb"), "https://cdn/x/1.2.0");
+  assert.equal(Model.parseBase("nope", "https://cdn/x/1.2.0/"), "https://cdn/x/1.2.0");
+  assert.equal(Model.parseBase(JSON.stringify({}), "https://cdn/x"), "https://cdn/x");
 });
 
 test("parsePaths merges over the fallback", () => {

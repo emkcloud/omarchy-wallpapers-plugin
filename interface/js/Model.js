@@ -83,6 +83,27 @@ function ucfirst(value) {
   return text.charAt(0).toUpperCase() + text.slice(1)
 }
 
+// Upper-case the first letter of every word, leaving the rest untouched, so
+// mixed datasets read consistently ("001 the old windmill" -> "001 The Old
+// Windmill", "South Africa" and "USA" unchanged). Numeric prefixes stay as-is.
+function titleCase(value) {
+  var text = String(value || "")
+  var out = ""
+  var atWordStart = true
+  for (var i = 0; i < text.length; i++) {
+    var ch = text.charAt(i)
+    if (atWordStart && ch >= "a" && ch <= "z") {
+      out += ch.toUpperCase()
+      atWordStart = false
+    } else {
+      out += ch
+      if (!/\s/.test(ch)) atWordStart = false
+    }
+    if (/\s/.test(ch)) atWordStart = true
+  }
+  return out
+}
+
 // Case-insensitive substring match of a search query against the theme name
 // and title. Hyphens/underscores are treated as spaces on both sides, so
 // "tokyo night" matches the `tokyo-night` slug.
@@ -106,6 +127,19 @@ function formatPercent(ratio) {
   return pct.toFixed(1) + "%"
 }
 
+// Shorten `value` to at most `max` characters with a middle ellipsis, keeping
+// the head and the tail (the tail carries the extension and resolution, so it
+// must survive). Shorter strings are returned untouched.
+function elideMiddle(value, max) {
+  var s = String(value || "")
+  var n = Number(max) || 0
+  if (n < 3 || s.length <= n) return s
+  var keep = n - 1
+  var head = Math.ceil(keep / 2)
+  var tail = keep - head
+  return s.substring(0, head) + "…" + (tail > 0 ? s.substring(s.length - tail) : "")
+}
+
 // Human file size in MB with one decimal ("1.8 MB"); empty when unknown.
 function formatSize(bytes) {
   var n = Number(bytes) || 0
@@ -114,13 +148,35 @@ function formatSize(bytes) {
 }
 
 // Case-insensitive substring match of a search query against a wallpaper's
-// name or country code (both shown on the tile).
-function wallpaperMatches(item, query) {
+// name or country code (both shown on the tile). `collection`, when set,
+// narrows to a single collection first (exact match, `""` = every collection).
+function wallpaperMatches(item, query, collection) {
+  var col = String(collection || "")
+  if (col && String((item && item.collection) || "") !== col) return false
   var q = String(query || "").trim().toLowerCase()
   if (!q) return true
   if (!item) return false
   return String(item.name || "").toLowerCase().indexOf(q) !== -1
     || String(item.code || "").toLowerCase().indexOf(q) !== -1
+}
+
+// Unique collection names present in a wallpaper list, sorted, as Dropdown
+// options: the "All collections" entry (value "") comes first, then every
+// collection found. Rows without a collection are ignored.
+function collectionOptions(items) {
+  var seen = {}
+  var names = []
+  for (var i = 0; i < (items ? items.length : 0); i++) {
+    var c = String((items[i] && items[i].collection) || "")
+    if (!c || seen[c]) continue
+    seen[c] = true
+    names.push(c)
+  }
+  names.sort()
+  var out = [{ value: "", label: "All collections" }]
+  for (var j = 0; j < names.length; j++)
+    out.push({ value: names[j], label: ucfirst(names[j]) })
+  return out
 }
 
 // --- theme state -----------------------------------------------------------
@@ -494,9 +550,24 @@ function parseMarkdown(raw) {
 
 // --- config ----------------------------------------------------------------
 
+// The versioned CloudFront base from config.json, without the trailing slash.
+// The "Archive RAW" links derive `<base>/datasets/datasets.json` from it, so
+// they always point at the dataset of the version currently in use.
+function parseBase(raw, fallback) {
+  var fb = String(fallback || "").replace(/\/+$/, "")
+  try {
+    var cfg = JSON.parse(String(raw || "{}"))
+    if (!cfg || !cfg.base) return fb
+    return String(cfg.base).replace(/\/+$/, "")
+  } catch (e) {
+    return fb
+  }
+}
+
 // Merge the `links` block of config.json over the shipped defaults. Links are
 // data so the Help screen and the GitHub button can be repointed without a code
-// change.
+// change. `database` has no default: the Archive RAW target is derived from
+// `base` (see parseBase), and an explicit value here overrides it.
 function parseLinks(raw, fallback) {
   var base = fallback || {}
   try {
@@ -507,7 +578,7 @@ function parseLinks(raw, fallback) {
       donation: cfg.links.donation || base.donation,
       issues: cfg.links.issues || base.issues,
       releases: cfg.links.releases || base.releases,
-      database: cfg.links.database || base.database
+      database: cfg.links.database || base.database || ""
     }
   } catch (e) {
     return base
@@ -540,10 +611,13 @@ if (typeof module !== "undefined" && module.exports) {
     themeLabel,
     normalizeSlug,
     ucfirst,
+    titleCase,
     themeMatches,
     formatPercent,
+    elideMiddle,
     formatSize,
     wallpaperMatches,
+    collectionOptions,
     themeState,
     themeStatusLabel,
     paletteList,
@@ -561,6 +635,7 @@ if (typeof module !== "undefined" && module.exports) {
     splitTableRow,
     isTableSeparator,
     parseMarkdown,
+    parseBase,
     parseLinks,
     parsePaths
   }

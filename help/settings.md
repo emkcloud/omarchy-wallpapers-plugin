@@ -31,3 +31,10 @@ arrows (or h / j / k / l), press enter or space to toggle a switch.
 only changes the settings, never the wallpapers already installed: nothing is
 downloaded or deleted. Run it from the **Restore defaults** button in the ACTIONS
 column on the right, or press `d` while Setup is open.
+
+## Archive RAW
+
+The whole collection also lives at the source. The **Archive RAW** button in the
+footer (or `d` on the Help screen) opens the `datasets.json` of the version
+currently in use on the CloudFront CDN in your browser. It lists every theme and
+wallpaper with the absolute URLs of the full-resolution original files.
