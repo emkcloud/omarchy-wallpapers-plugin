@@ -179,6 +179,77 @@ function collectionOptions(items) {
   return out
 }
 
+// Most frequent non-empty resolution in a list ("2K" wins over a single "4K").
+// Empty when no row carries one.
+function dominantResolution(counts) {
+  var best = ""
+  var bestN = 0
+  for (var key in counts) {
+    if (counts[key] > bestN) {
+      bestN = counts[key]
+      best = key
+    }
+  }
+  return best
+}
+
+// Whole-list totals for the "Full collection" card: wallpaper count, how many
+// are installed, the total size in bytes and the dominant resolution.
+function wallpaperTotals(items) {
+  var out = { count: 0, installed: 0, sizeBytes: 0, resolution: "" }
+  var resCount = {}
+  for (var i = 0; i < (items ? items.length : 0); i++) {
+    var item = items[i]
+    if (!item) continue
+    out.count++
+    if (String(item.installed) === "1") out.installed++
+    out.sizeBytes += Number(item.sizeBytes) || 0
+    var res = String(item.resolution || "")
+    if (res) resCount[res] = (resCount[res] || 0) + 1
+  }
+  out.resolution = dominantResolution(resCount)
+  return out
+}
+
+// Aggregate a wallpaper list by collection: one entry per collection present,
+// sorted by name, with count / installed / total size and the dominant
+// resolution. Rows without a collection are ignored. Used by the custom-install
+// screen to build one card per collection.
+function collectionSummary(items) {
+  var map = {}
+  var order = []
+  for (var i = 0; i < (items ? items.length : 0); i++) {
+    var item = items[i]
+    if (!item) continue
+    var name = String(item.collection || "")
+    if (!name) continue
+    var entry = map[name]
+    if (!entry) {
+      entry = map[name] = { count: 0, installed: 0, sizeBytes: 0, resCount: {} }
+      order.push(name)
+    }
+    entry.count++
+    if (String(item.installed) === "1") entry.installed++
+    entry.sizeBytes += Number(item.sizeBytes) || 0
+    var res = String(item.resolution || "")
+    if (res) entry.resCount[res] = (entry.resCount[res] || 0) + 1
+  }
+  order.sort()
+  var out = []
+  for (var j = 0; j < order.length; j++) {
+    var e = map[order[j]]
+    out.push({
+      name: order[j],
+      label: ucfirst(order[j]),
+      count: e.count,
+      installed: e.installed,
+      sizeBytes: e.sizeBytes,
+      resolution: dominantResolution(e.resCount)
+    })
+  }
+  return out
+}
+
 // --- theme state -----------------------------------------------------------
 
 // "installed" when every catalog entry is present on disk, "partial" when only
@@ -618,6 +689,8 @@ if (typeof module !== "undefined" && module.exports) {
     formatSize,
     wallpaperMatches,
     collectionOptions,
+    wallpaperTotals,
+    collectionSummary,
     themeState,
     themeStatusLabel,
     paletteList,

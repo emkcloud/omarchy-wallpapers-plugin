@@ -4,6 +4,8 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
+import "../components"
+import "../sections"
 
 // Setup screen: the same three-column skeleton as Help — the shared roadmap on
 // the left (same width and padding as Help), the selected section's settings in
@@ -45,7 +47,8 @@ Item {
     rotationEnabled: false,
     rotationInterval: 30,
     rotationAllTheme: false,
-    rotationRandom: false
+    rotationRandom: false,
+    randomDefaultOnInstall: true
   })
 
   property string resolution: "2k"
@@ -59,6 +62,10 @@ Item {
   // selected theme.
   property bool rotationAllTheme: false
   property bool rotationRandom: false
+  // Custom-install screen: set a random wallpaper of the theme as the default
+  // when an install launched from there finishes. Persisted here with the other
+  // settings; only surfaced on that screen.
+  property bool randomDefaultOnInstall: true
   // Per-theme remembered default wallpaper: `<theme> -> { filename, url }`.
   // Not a row in the UI, but persisted with the other settings so a default
   // chosen while browsing another theme survives restarts and is applied when
@@ -570,6 +577,7 @@ Item {
     rotationInterval = intervalOptions.indexOf(interval) >= 0 ? interval : defaults.rotationInterval
     rotationAllTheme = parsed.rotationAllTheme === true
     rotationRandom = parsed.rotationRandom === true
+    randomDefaultOnInstall = parsed.randomDefaultOnInstall !== false
     themeDefaults = sanitizeThemeDefaults(parsed.themeDefaults)
 
     settingsLoaded = true
@@ -588,6 +596,7 @@ Item {
       rotationInterval: rotationInterval,
       rotationAllTheme: rotationAllTheme,
       rotationRandom: rotationRandom,
+      randomDefaultOnInstall: randomDefaultOnInstall,
       themeDefaults: themeDefaults
     }, null, 2) + "\n"
   }
@@ -614,6 +623,7 @@ Item {
     rotationInterval = defaults.rotationInterval
     rotationAllTheme = defaults.rotationAllTheme
     rotationRandom = defaults.rotationRandom
+    randomDefaultOnInstall = defaults.randomDefaultOnInstall
   }
 
   readonly property var intervalOptions: [1, 5, 15, 30, 60, 120]

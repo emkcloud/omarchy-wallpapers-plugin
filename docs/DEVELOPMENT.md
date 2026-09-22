@@ -1,6 +1,8 @@
 # Development guide
 
-Guidelines for contributors working on this repository. Read this file before making any changes.
+Guidelines for contributors working on this repository. Read this file before
+making any changes; how to run the tests and the static checks lives in
+`docs/TESTING.md`.
 
 ## Project overview
 
@@ -16,19 +18,33 @@ set-default), theme by theme.
   (overlay) and `interface/BarLauncher.qml` (bar launcher). Validated by
   `omarchy plugin validate`.
 - `interface/` — the QML UI. Kept in a subdirectory so root holds only plugin
-  metadata and config; the entry points are exactly one level deep.
-- `interface/WallpaperManager.qml` — the UI view + thin controller: state,
-  `Process`/`FileView` and the four screens. Imports `"components"` and
-  `"js/Model.js" as Model`.
+  metadata and config; the entry points are exactly one level deep. The QML is
+  layered the way the shell itself is (`Ui/` atoms, `services/`, `plugins/`):
+  an entry point imports the layer directories it needs (`import "views"`,
+  `import "sections"`, `import "../components"`).
+- `interface/WallpaperManager.qml` — the overlay entry point: the controller
+  (state, models, `Process`/`FileView`, the cursor state machine and the
+  actions) plus the window shell (`PanelWindow` + scrim + card +
+  `PanelKeyCatcher`). It no longer holds any screen markup. Imports
+  `"views"`, `"sections"` and `"js/Model.js" as Model`.
 - `interface/BarLauncher.qml` — bar launcher: one click toggles this plugin's own
   overlay via the scoped shell facade (`bar.shell.toggle(pluginId, …)`). The
   developer install shares the file but gets a distinct glyph from its
   `-developer` moduleName.
+- `interface/views/` — the six full screens, one file each:
+  `ThemeSelectionView.qml` (theme list + detail), `WallpapersView.qml` (filter
+  row + grid), `PreviewView.qml` (fullscreen wallpaper), `HelpView.qml`,
+  `SetupView.qml` and `CustomInstallView.qml` (previews + install choices).
+- `interface/sections/` — composite header/footer/style columns shared across
+  screens: `HeroBar.qml` (icon + title/meta + action row), `ActionFooter.qml`
+  (the card footer, all five rows) and `RoadmapPane.qml` (the roadmap column
+  shared by Help and Setup).
 - `interface/js/` — JavaScript logic modules, kept out of the QML files.
 - `interface/js/Model.js` — pure logic, no QML ids/state: TSV parsing,
-  `themeLabel`, cursor arithmetic, key mapping, status text, `parsePaths`, and
+  `themeLabel`, cursor arithmetic, key mapping, status text, `parsePaths`, the
+  collection aggregates (`wallpaperTotals`, `collectionSummary`) and
   the Help data helpers (`parseHelpIndex`, `parseRoadmap`, `parseMarkdown`).
-- `interface/components/` — local QML atoms shared by the screens:
+- `interface/components/` — local QML atoms shared by the views and sections:
   `RoundedImage.qml` (rounded image via MultiEffect mask), `HeroLogo.qml`
   (brand mark + glyph fallback), `Pill.qml` (state pill), `StorePill.qml`
   (global "N available | M installed" pill, with the storage-cap warning),
@@ -37,8 +53,8 @@ set-default), theme by theme.
   `SearchField.qml` (shared search box with caret and clear X),
   `RunningOverlay.qml` (opaque scrim + accent spinner + pulsing caption while
   an install/remove runs, shared by the themes detail pane and the preview),
-  `DashedButton.qml` (dotted-outline action button), `MarkdownView.qml`
-  (renders the Help blocks) and `HelpView.qml` (the whole Help screen).
+  `DashedButton.qml` (dotted-outline action button) and `MarkdownView.qml`
+  (renders the Help blocks).
 - `config/` — plugin config, kept out of the repo root.
 - `config/config.json` — plugin config, read by both `manager.sh` and the QML.
   - `base` — the versioned CloudFront base of the wallpaper snapshot, e.g.
@@ -119,11 +135,13 @@ set-default), theme by theme.
 - `LICENSE` — project license.
 - `docs/DEVELOPMENT.md` — this file (contributor/architecture guide). The
   published plugin must not ship an agent instruction file (the marketplace
-  security review flags a root `AGENTS.md` as a prompt-injection surface), so
-  this guide is tracked here as ordinary documentation and the local `AGENTS.md`
-  is a **gitignored symlink** to it. Anything written through `AGENTS.md` lands
-  in this file, so the two never drift. If the symlink is lost, recreate it with
-  `ln -sf docs/DEVELOPMENT.md AGENTS.md`.
+  security review flags a root `AGENTS.md` as a prompt-injection surface), so the
+  guide is tracked here as ordinary documentation and the local `AGENTS.md` is a
+  **gitignored regular file** (never a symlink: `omarchy plugin validate` rejects
+  symlinks inside the plugin folder) that only points agents here and to
+  `docs/TESTING.md`. The tracked docs remain the single source of truth.
+- `docs/TESTING.md` — how to test: the unit suite, the static checks and the
+  manual pass on the running shell.
 
 ## Plugin contract (Omarchy)
 
@@ -154,28 +172,42 @@ set-default), theme by theme.
 
 ## Code map — `interface/WallpaperManager.qml`
 
-The plugin is one view file plus, since the split, a pure-logic JS module and a
-`components/` folder for the shared QML atoms. `WallpaperManager.qml` is written
-**logic-first, UI-last**: state, imports and the script-driven processes come
-before the `PanelWindow`. This is the source order and where each concern lives:
+The QML is split into three layers by directory — `views/` (a whole screen),
+`sections/` (a composite of atoms shared across screens: header, footer) and
+`components/` (atoms) — plus the `js/` pure logic and the two entry points.
+`WallpaperManager.qml` keeps the controller and the window shell only. Every
+screen component takes the panel as `required property var manager` and reaches
+state/actions through it (`manager.view`, `manager.actionInstall()`, …), the
+same pattern with explicit properties/signals for the reusable pieces
+(`HeroBar`, `ActionFooter`). Cross-directory types need an explicit
+`import "../components"` / `import "../sections"`; same-directory ones are
+implicitly visible.
+
+`WallpaperManager.qml` is written **logic-first, UI-last**: state, imports and
+the script-driven processes come before the `PanelWindow`. This is the source
+order and where each concern lives:
 
 | Source order | ids / functions | Role |
 |---|---|---|
 | paths | `pluginRoot`, `configFile`, `pluginPaths`, `scriptPath`, `logoPath`, `pluginBase`, `pluginLinks`, `pluginDatabaseUrl` | resolve the layout from `config/config.json` `paths`, from the plugin root; `pluginDatabaseUrl` is the Archive RAW target (`<base>/datasets/datasets.json`, or an explicit `links.database`) |
 | state | `view`, `themeName`, `themeCatalogUrl`, `selectedIndex`, `lastThemeIndex`, `wallpaperCursorByTheme`, `pendingWallpaperIndex`, `pendingWallpaperSelect`, `checkedWallpapers`, `selectionRevision`, `hoverArmed`, `cursorActive`, `busy`, `statusText`, `filterText`, `wallpaperFilterText`, `collectionFilter`, `searching`, `themesModel`, `themesDisplayModel`, `wallpapersModel`, `wallpapersDisplayModel` | single source of truth |
 | tokens | `foreground`, `background`, `accent`, `urgent`, `scrim`, `dim`, `borderSpec`, `contentMargin`, `contentSpacing`, `minTileWidth`, `themeTileWidth`, `tileGap`, `tileInset`, `fontFamily`, `heroHeight` | `Color.menu.*` / `Style.*` aliases |
-| components | `RoundedImage`, `HeroLogo`, `Pill`, `StorePill`, `ThemeProgress`, `SearchField` | atoms in `components/`, shared by both grids and the preview |
 | startup / termination | `open()`, `close()`, `onOpenedChanged` | summon / hide |
 | cursor state machine | `activeGrid`, `activeCount`, `stepCursor`, `moveCursor`, `pageCursor`, `activateCursor`, `dismissCursor`, `handleTextKey`, `takeCursor` | one `selectedIndex` driven by mouse *and* keyboard |
 | actions | `currentItem`, `showPreview`, `closePreview`, `previewNext`, `actionInstall`, `actionRemove`, `actionSetDefault`, `actionInstallAll`, `actionRemoveAll`, `runAction` | user operations |
 | processes | `themesProc`, `catalogProc`, `actionProc` | run `manager.sh`, parse TSV |
-| overlay UI | `panel`, `card`, `keys`, `hero`, `heroRule`, `themesGrid`, `grid`, `footer`, `previewView`, `helpView`, `setupView` | the chrome and the five screens |
+| window shell | `panel`, `card`, `keys`, `heroRule` | the overlay chrome; the screens live in `views/`, the header/footer in `sections/` |
+
+The screens themselves: `views/ThemeSelectionView.qml`,
+`views/WallpapersView.qml`, `views/PreviewView.qml`, `views/HelpView.qml`,
+`views/SetupView.qml`; the shared chrome: `sections/HeroBar.qml`,
+`sections/ActionFooter.qml`, `sections/RoadmapPane.qml`.
 
 Pure helpers live in `interface/js/Model.js` (imported as `Model`): `parseThemes`,
 `parseCatalog`, `themeLabel`, `ucfirst`, `formatSize`, `themeMatches`,
 `wallpaperMatches`, `collectionOptions`, `stepIndex`, `textAction`,
 `themesStatus`, `catalogStatus`, `parsePaths`. Keep it free of QML ids/state —
-the view owns the models, the processes and `selectedIndex`.
+the controller owns the models, the processes and `selectedIndex`.
 
 The steps below walk the same file in **runtime order**, not source order.
 
@@ -185,7 +217,7 @@ The plugin ships two entry points: the overlay described below, and
 `interface/BarLauncher.qml` (a `WidgetButton` that toggles that overlay from the
 bar). Both share the same code; the bar icon is just a launcher.
 
-The overlay shows **five screens**, switched by the single `view` property on
+The overlay shows **six screens**, switched by the single `view` property on
 `root`:
 
 | `view` | screen | content |
@@ -195,6 +227,7 @@ The overlay shows **five screens**, switched by the single `view` property on
 | `"preview"` | single wallpaper | fullscreen preview + actions |
 | `"help"` | guide | data-driven documentation (HelpView) |
 | `"setup"` | setup | placeholder screen, "Work in progress" |
+| `"custom"` | custom install | previews + info (left), install choices (right) |
 
 Every screen is the same skeleton inside the container: **hero header** (icon,
 title, meta caption, optional pills/buttons) + `PanelSeparator` + **body** +
@@ -257,11 +290,13 @@ Refresh/Close buttons (Back is hidden on this view). The footer is just the dim
 status caption. Enter/Space or click opens the theme; Esc closes the plugin.
 
 **Technical.**
-- Header: `PanelHero` (`hero`) — title "Wallpaper manager", `detail` = theme
-  count, `meta` = "remote collections", icon = `HeroLogo` with glyph `󰸌`,
-  `trailingControl` = `heroActions` (the same Back/Refresh/Close row as step 4,
-  where Back is `visible` only on the wallpapers view).
-- Body: `GridView` `themesGrid` over `themesModel`. Themes are few, so tiles
+- Header: `HeroBar` (`sections/HeroBar.qml`) — title "Wallpaper manager",
+  `detail` = theme count, `meta` = "remote collections", icon = `HeroLogo` with
+  glyph `󰸌`, `trailingControl` = the HeroBar action row (the same
+  Back/Refresh/Close row as step 4, where Back is `visible` only on the
+  wallpapers view).
+- Body: the master `ListView` (`themesList`) over `themesModel`
+  (`views/ThemeSelectionView.qml`). Themes are few, so tiles
   are wider than the wallpaper ones: dynamic columns
   `columnsHint = Math.max(2, Math.floor(width / root.themeTileWidth))` with
   `themeTileWidth ~ Style.space(340)`; `cellWidth = floor(width / columnsHint)`,
@@ -276,8 +311,16 @@ status caption. Enter/Space or click opens the theme; Esc closes the plugin.
 - Labels use `root.themeLabel(model)`: the dataset `title` uppercased
   (`"tokyo-night"` → `"TOKYO NIGHT"`); slug normalized (`-`/`_` → space) if a
   dataset has no `title`.
-- `selectTheme(index)` clears `wallpapersModel` first (the grid delegates
-  survive the trip through the themes view; leaving them alive while
+- Keyboard focus: Tab switches between the theme list and the detail action
+  row (`Browse` / `Install (ALL)` / `Shuffle` / `Uninstall` / `Custom Install`).
+  Once in the row, Left/Right walk the buttons, Enter/Space activate the
+  focused one (same accent `BorderSurface` ring as the wallpapers filter-row
+  controls), Down/Tab return to the list, while Esc keeps its usual meaning
+  (clear the active filter, else close). Search stays on `/` (or Up on the
+  first row) — Tab no longer opens it. The row's button set tracks
+  `selectedThemePresent` and skips the disabled ones (`themeActionKeys`), so
+  Tab/arrows never land on a control that cannot run.
+- `selectTheme(index)` clears `wallpapersModel` first (the grid delegates  survive the trip through the themes view; leaving them alive while
   `themeName` changes makes them re-resolve paths against the new theme), sets
   `themeName` / `themeCatalogUrl` and switches to `"wallpapers"`.
 
@@ -308,12 +351,13 @@ checks are cleared when the action completes; with none checked they act on the
 cursor tile as before. Checks are reset on theme change and on `open()`.
 
 **Technical.**
-- Header: `PanelHero` (`hero`) — title `"Theme / " +
+- Header: `HeroBar` (`sections/HeroBar.qml`) — title `"Theme / " +
   Model.ucfirst(root.themeName)`, no `detail` pill, `meta` = "browse and manage
-  wallpapers", `trailingControl` = `heroActions` (`Ui/Button`s
+  wallpapers", `trailingControl` = the HeroBar action row (`Ui/Button`s
   Back/Refresh/Close, `bordered: true`).
-- Body: `GridView` (`grid`) over `wallpapersModel`, same dynamic-columns recipe
-  as the themes grid. `current: tile.model.isDefault === "1"` marks the theme's
+- Body: `GridView` (`grid`) over `wallpapersModel`
+  (`views/WallpapersView.qml`), same dynamic-columns recipe
+  as the themes list. `current: tile.model.isDefault === "1"` marks the theme's
   default background.
 - Thumbnail source priority: local installed file (instant) → remote `preview`
   → full `url`. GridView only instantiates visible delegates, so loading is
@@ -328,7 +372,7 @@ cursor tile as before. Checks are reset on theme change and on `open()`.
 - Tile taps open the preview (same as Enter) — never toggle state, so "set
   default" by mouse lives in the preview. Do NOT put single-tap-selects back on
   the tile (the checkbox click is routed by point, not by a nested handler).
-- Footer: `Column` (`footer`) — `PanelSeparator`, then the `actionRow` (only
+- Footer: `sections/ActionFooter.qml` — `PanelSeparator`, then the `actionRow` (only
   visible on this view) with three sections on one row: primary Install/Uninstall
   on the left, `ThemeProgress` (`wallpapersProgress`, the open theme's install
   bar) in the middle, the key hints on the right (bulk install/uninstall is gone;
@@ -372,16 +416,16 @@ theme is not the running Omarchy theme, the choice is **remembered per theme**
 applied when the user switches to that theme (see *Setup → per-theme default*).
 
 **Technical.**
-- `previewView` overlays the card (`z: 10`). Header: `PanelHero`
-  (`previewHero`) pinned to `root.heroHeight`. The title is
+- `views/PreviewView.qml` overlays the card (`z: 10`). Header: `PanelHero`
+  (`previewHero`) pinned to `manager.heroHeight`. The title is
   `<theme> / <collection> / <name>` (all `ucfirst`, collection dropped when
   empty); the meta carries the filename plus `Model.formatSize(sizeBytes)`, or
   the failed feedback. No `detail` pill.
 - Full-bleed: `previewImageFrame` cancels the card padding (negative margins) so
   the image touches the border's inner edge and starts right under the rule; no
-  rounded mask, `clip: true` only. The footer is a sibling of `previewView`, so
-  the frame cannot anchor to `footer.top`: it anchors bottom to its parent and
-  reserves `footer.height` as the bottom margin.
+  rounded mask, `clip: true` only. The footer is a sibling of the view, so the
+  frame cannot anchor to it: it anchors bottom to its parent and reserves the
+  passed `footerHeight` as the bottom margin.
 - Double buffer: hidden `nextImage` preloads the target (`nextSource`: local
   file if installed, else remote `url`); the swap to `previewImage` happens only
   on `Image.Ready`, so navigating never shows a blank screen. On load error the
@@ -436,9 +480,9 @@ applied when the user switches to that theme (see *Setup → per-theme default*)
   |---|---|---|
   | `themes` | — | `name  title  catalogUrl  collections  count  preview  installed  palette  description  image  present` (`preview` = card thumbnail, `image` = 2K for the detail pane; `palette` = comma-separated hex, read straight from the dataset — no hardcoded fallback; `present` = the Omarchy theme exists locally) |
   | `catalog` | `<theme> <catalog-url>` | `filename  name  code  url  sha256  installed  isDefault  preview  sizeBytes  collection  resolution  width  height` (local catalog; the URL arg is only a fallback) |
-  | `install` | `<theme> [selector...]` | human text; no selector = all, each selector matches id/name/code/filename (the QML passes one filename per checked wallpaper). Streams `PROGRESS\t<theme>\t<installed>\t<total>` lines while it runs |
+  | `install` | `<theme> [selector...]` / `<theme> --collection <name>` | human text; no selector = all (caps apply), each selector matches id/name/code/filename (the QML passes one filename per checked wallpaper); `--collection` installs one collection as a bulk action (caps apply too). Streams `PROGRESS\t<theme>\t<installed>\t<total>` lines while it runs |
   | `random-install` | `<theme> [count]` | human text; installs `<count>` random wallpapers (default 5). Same `PROGRESS` stream |
-  | `remove` | `<theme> [selector...]` | human text; same selector matching (any of them). Same `PROGRESS` stream (count decreases) |
+  | `remove` | `<theme> [selector...]` / `<theme> --collection <name>` | human text; same selector matching (any of them), or one collection via `--collection`. Same `PROGRESS` stream (count decreases) |
   | `set-default` | `<theme> <filename> <url>` | human text; downloads if missing then `omarchy-theme-bg-set` |
   | `unset-default` | `<theme> <filename>` | human text; if it is the background, falls back to the theme's own default background |
   | `rotate` | `[--all] [--random]` | `ROTATE\t<path>`; sets the next background of the **current Omarchy theme** (local files only). Default pool = the plugin's installs, narrowed to the collection catalog when available; `--all` adds the theme's bundled backgrounds; `--random` picks at random (never the current one). Drives automatic rotation and the Setup "Rotate now" action |
@@ -540,7 +584,7 @@ open the highlighted topic, arrows/h/j/k/l move the index cursor,
 dataset (`<base>/datasets/datasets.json`), `q`/`x` close the plugin.
 
 **Technical.**
-- The view lives in `components/HelpView.qml` (rendering) and
+- The view lives in `views/HelpView.qml` (rendering) and
   `components/MarkdownView.qml` (block rendering); `WallpaperManager.qml` only
   wires the state (`openHelp()` / `closeHelp()` remembering `helpReturnView`,
   the `moveCursor` / `activateCursor` delegation and the footer chrome). The
@@ -570,14 +614,15 @@ actions on the right. Two sections: **Download** and **Automatic rotation**. Esc
 hero also keeps Help / GitHub / "Wallpaper manager".
 
 **Technical.**
-- The view lives in `components/SetupView.qml`; `WallpaperManager.qml` wires the
+- The view lives in `views/SetupView.qml`; `WallpaperManager.qml` wires the
   state (`openSetup()` / `closeSetup()` remembering `setupReturnView`, the
   `moveCursor` / `activateCursor` / `pageCursor` delegation and the footer
   chrome) and owns the `rotationProc` / `rotationTimer` that run the rotation.
 - Settings are persisted per plugin id under
   `~/.config/omarchy/<id>/settings.json` (auto-save, debounced; no Save button).
   The same object is the source of truth for `scriptCmd`'s env caps. It also
-  carries `themeDefaults` (`<theme> -> { filename, url }`): the default chosen
+  carries `randomDefaultOnInstall` (the custom-install switch, default on) and
+  `themeDefaults` (`<theme> -> { filename, url }`): the default chosen
   on a theme that is not the running one. `actionToggleDefault` only touches the
   live background while `browsingActiveTheme`; otherwise it remembers the
   choice (installing the file) and leaves the desktop alone. `activeThemeFile`
@@ -607,6 +652,69 @@ hero also keeps Help / GitHub / "Wallpaper manager".
   hidden.
 - The footer `setupFooterRow` carries the note and an `esc back` hint, keeping
   the same height as the other footers.
+
+### 10. Custom install screen (`view = "custom"`)
+
+**Functional.** Opened from the themes detail `Custom Install` button (or `c`).
+The hero reads `Custom install` over the `Wallpaper manager <version>` meta.
+Left: a 3×3 grid of the theme's previews with its info (name, collections /
+wallpapers / installed, description, palette) **overlaid** at the bottom over a
+gradient scrim, like the themes detail pane. Right: the install choices as
+radio cards — `Full collections` (the whole theme), one `Full <Collection>` per
+collection, `Shuffle (N)`, and `Select only` (go to the wallpapers grid). A
+switch at the bottom, `Set a random wallpaper as default when done`, is
+persisted as `randomDefaultOnInstall` (default on). Arrows walk the rows, a
+single click only selects the card, Enter/Space/`i` (or a double click) run the
+selected card (or toggle the switch), `b` browses the theme's grid — narrowed to
+the highlighted collection when a collection card is selected — Tab jumps to the
+switch and back, Esc returns to the theme list. The footer mirrors the
+wallpapers one: Help / Install / Uninstall on the left, the theme
+progress in the middle and the key hints on the right. Install is enabled only
+for Full collections / a collection / Shuffle that still has something to
+install (`customCanInstall`); Uninstall removes the highlighted scope — the
+theme or just the collection (`remove --collection`) — and is enabled only when
+it has files (`customCanRemove`).
+
+**Technical.**
+- The view lives in `views/CustomInstallView.qml`; `WallpaperManager.qml` wires
+  the state (`openCustomInstall()` / `closeCustomInstall()`), the catalog load
+  and the actions.
+- The catalog is loaded by `customCatalogProc` into `customCatalogModel`, on its
+  own request stamp (`customSerial`) so it never disturbs the wallpapers grid's
+  `catalogProc`. `customRows` / `customPreviews` rebuild on `customRevision`; the
+  nine previews are prewarmed into the disk cache (`prefetchCustomPreviews`), so
+  reopening the screen loads them locally. The loading caption sits outside the
+  centred info block, so it never shifts it when it disappears.
+- Cards come from `Model.wallpaperTotals` (whole theme) and
+  `Model.collectionSummary` (one entry per collection); sizes use
+  `Model.formatSize`. The resolution shown is the collection's dominant one,
+  falling back to Setup's default (`setupResolution`, indicated but not enforced
+  yet).
+- Execution: `full` → `install <theme>`; a collection →
+  `install <theme> --collection <name>` (a bulk action, so the caps apply, see
+  the `manager.sh` table); `shuffle` → `random-install <theme> <shuffleCount>`;
+  `selectOnly` → `selectTheme()` on the wallpapers grid. Entering the grid this
+  way sets `wallpaperReturnCustom`, so Esc there returns to the custom screen
+  with its state intact (entering a theme from the list still goes back to the
+  list). `actionProc.onExited` reloads the custom catalog (so the counts catch
+  up even after an Esc cancel) and, when the switch is on, applies the
+  end-of-install random default via `applyCustomRandomDefault`: it picks a
+  random wallpaper of the **configured** theme only — setting the live
+  background when that theme is the running one, otherwise remembering the pick
+  per theme (`themeDefaults`) and making sure the file is on disk, exactly like
+  `actionToggleDefault`, so it never replaces the current desktop background.
+- Keyboard: `moveCursor` / `pageCursor` / `activateCursor` / `dismissCursor`
+  handle the `"custom"` branch; `handleTextKey` handles `i` (install) and `b`
+  (browse) and otherwise returns early (the globals `q`, `s`, `?` / F1 still
+  apply). The `RunningOverlay` freezes the screen while an action runs (only Esc
+  cancels).
+
+## Conventions
+
+- **UI language**: all user-facing strings are in **English** (decision
+  2026-09-02). Multilingual support is TBD — do not introduce a translation
+  framework yet; keep strings in English until the user decides how to handle
+  i18n.
 
 ## Design canon (decision 2026-09-03)
 
@@ -669,12 +777,13 @@ Rules that follow from that:
   screen Space toggles the checkbox while Enter opens the preview), Esc back/close,
   `d` default, `r` refresh, `f` shuffle (5 random wallpapers, themes screen),
   `s` setup (any screen) and `u` uninstall via `textKey`. `q` and `x`/`X`
-  (`deleteRequested`) close the plugin from any screen (ignored while typing in a
+  (  `deleteRequested`) close the plugin from any screen (ignored while typing in a
   search field, and while an action runs) — removal stays on `u` and `Del`. `Del` and **PageUp/PageDown**
   (jump a whole visible page of tiles — visible rows × columns — via
   `pageCursor(dir)`; on the Help screen they scroll the topic content) work
   through a fallback `Keys.onPressed` on the card (the catcher does not accept
-  them, so they bubble up); Backspace is filter-only. The wallpapers filter row
+  them, so they bubble up); **F1** also opens Help there (GUI habit, same target
+  as `?`); Backspace is filter-only. The wallpapers filter row
   (collection picker / search / `Select all` / `Clear`) is a focusable strip on
   the Setup model (`filterFocus`): Left/Right or Tab/Shift+Tab walk the four
   controls, Enter/Space activate the focused one (open the popup, start typing,
@@ -695,7 +804,7 @@ Rules that follow from that:
   "Downloading <size>…" / "Removing…" / "Downloading <n> wallpapers…"). It is
   used by the fullscreen preview (a sibling of `previewImageFrame` anchored to it
   with `z: 6`, so it also covers the filmstrip) and by the themes screen
-  (covering the whole `themesView` — sidebar + detail — while a bulk
+  (covering the whole `views/ThemeSelectionView.qml` — sidebar + detail — while a bulk
   install/remove runs). Its `MouseArea` swallows clicks and the keyboard
   navigation is guarded on `actionRunning` (`moveCursor` / `pageCursor` /
   `activateCursor` / `startSearch` all return early) and the hero actions are
@@ -717,8 +826,8 @@ Rules that follow from that:
    shell restart is required (see below). This once made the user see a stale,
    "transparent" version.
 4. Tiles must not anchor-horizontalCenter themselves (single-column bug).
-5. `GridView` has no `columns` property in Qt 6 — `grid.columns` /
-   `themesGrid.columns` are `undefined`, so Up/Down turned `selectedIndex`
+5. `GridView` has no `columns` property in Qt 6 — the wallpapers
+   `grid.columns` is `undefined`, so Up/Down turned `selectedIndex`
    into `NaN` (left/right worked since they use `±1`). Compute the column
    count manually (`colCount = max(1, floor(width / cellWidth))`) and call
    `positionViewAtIndex` after every move to keep the selection visible.
@@ -751,26 +860,9 @@ Rules that follow from that:
 
 ## Testing
 
-`interface/js/Model.js` holds the pure logic (parsers, labels, cursor math,
-Markdown splitting) with no Qt or Quickshell dependency, so it is unit-tested
-directly with Node's built-in test runner — **no dependencies, no install, no
-network**:
-
-```bash
-node --test            # from the repo root, discovers tests/*.test.js
-```
-
-The tests live in `tests/model.test.js` and cover `parseThemes` / `parseCatalog`
-(TSV edge cases), the labels and search matchers, the cursor and status helpers,
-`parseHelpIndex` / `parseRoadmap`, `inlineMarkdown`, and `parseMarkdown`
-including the wrapped- and nested-list handling that the Help screen relies on.
-The file ends with a guarded CommonJS export block so the module can be
-`require`d from the tests; QML never defines `module`, so that block is a no-op
-inside the plugin. Keep the suite dependency-free so it stays CI-friendly and
-never trips the marketplace security review.
-
-The shell side is checked with `bash -n scripts/manager.sh` (`qmllint` for the
-QML, see below).
+See `docs/TESTING.md`: the unit suite (`node --test`), the static checks
+(`bash -n`, `qmllint`, `omarchy plugin validate`) and the manual pass on the
+running shell.
 
 ## Local development
 
@@ -817,10 +909,7 @@ background, which is shared state. While testing it on the developer install,
 leave it off on the official one (and vice versa), or the two timers will fight
 over the background.
 
-Lint: `qmllint -I <dir containing a `qs` symlink to /usr/share/omarchy/shell>`.
-The residual `unqualified` / `missing-property` warnings on `Style.spacing.*`,
-`Style.font.*`, `Color.menu.*` are unavoidable (the shell's own code produces
-them).
+Tests and lint: see `docs/TESTING.md`.
 
 ## Distribution
 
@@ -839,18 +928,3 @@ Plugin releases are tagged with the same number as the manifest's `version`
 `config/config.json`'s `base`: that pins the upstream wallpaper snapshot on the
 CDN, so a `base` bump reaches clients through the next plugin release, not a new
 tag.
-
-## Notes for the agent
-
-- The user speaks Italian: respond and comment in Italian.
-- **UI language**: all user-facing strings in `interface/WallpaperManager.qml` are in
-  **English** (decision 2026-09-02). Multilingual support is TBD — do not
-  introduce a translation framework yet; just keep strings in English until
-  the user decides how to handle i18n.
-- Commit messages: concise (short and to the point).
-- **Restart the shell yourself after every change** (`omarchy restart shell`) —
-  do not wait to be asked. The dev wrapper is symlinks, so inotify does not
-  hot-reload edits; without the restart the user keeps seeing the stale build.
-- **Do NOT verify the UI with screenshots** (`grim` + reading the image): it is
-  slow and expensive. After restarting the shell, just ask the user to look at
-  the overlay and report the visual result.

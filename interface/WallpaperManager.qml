@@ -5,7 +5,8 @@ import QtQuick
 import QtQuick.Shapes
 import qs.Commons
 import qs.Ui
-import "components"
+import "views"
+import "sections"
 import "js/Model.js" as Model
 
 Item {
@@ -175,13 +176,16 @@ Item {
   readonly property string backgroundsDir: Quickshell.env("HOME") + "/.config/omarchy/backgrounds"
 
   property bool opened: false
-  property string view: "themes"          // "themes" | "wallpapers" | "preview" | "help" | "setup"
+  property string view: "themes"          // "themes" | "wallpapers" | "preview" | "help" | "setup" | "custom"
   property string themeName: ""
   property string themeCatalogUrl: ""
   property int selectedIndex: 0
   // Themes-screen cursor to restore when leaving a theme (goBack): browsing a
   // theme must not lose which row was open.
   property int lastThemeIndex: 0
+  // True when the wallpapers grid was entered from the custom-install screen
+  // ("Select only"): Esc then returns there instead of the theme list.
+  property bool wallpaperReturnCustom: false
   // Wallpaper cursor per theme (`themeName` -> index), so re-entering a theme
   // resumes where it was left instead of jumping back to the first tile.
   property var wallpaperCursorByTheme: ({})
@@ -228,7 +232,8 @@ Item {
   property string collectionFilter: ""
   // Keep the picker label in sync when the filter is reset programmatically:
   // the Dropdown's own selection breaks the `value` binding.
-  onCollectionFilterChanged: if (collectionDropdown) collectionDropdown.value = collectionFilter
+  onCollectionFilterChanged: if (wallpapersView && wallpapersView.collectionDropdown)
+    wallpapersView.collectionDropdown.value = collectionFilter
   property bool searching: false
   // Set when Esc stops a running action, so `actionProc.onExited` reports a
   // cancellation instead of a completion.
@@ -246,8 +251,7 @@ Item {
   property var lastAction: []
   // "Add remote source" placeholder: shows a COMING SOON label for 3s on click.
   property bool addSourceSoon: false
-  // Custom Install placeholder: same COMING SOON feedback, always clickable.
-  property bool setupSoon: false
+
   // Bumped whenever `themesModel` is reloaded: property bindings that read the
   // model rows (`selectedTheme`, `themeCounts`) depend on it to re-evaluate.
   property int themesRevision: 0
@@ -324,6 +328,28 @@ Item {
   // screen's focus model so the whole row is reachable without a mouse.
   property int filterFocus: -1
 
+  // Keyboard focus of the themes detail action row: -1 = the theme list, else
+  // the index into `themeActionKeys`. Tab switches between the list and the
+  // action row, Left/Right walk the buttons, Enter/Space activate the focused
+  // one, Down/Esc return to the list.
+  property int themeFocus: -1
+
+  // ---- custom install screen ------------------------------------------------
+  // The theme the custom-install screen configures, captured on open so the
+  // screen keeps its data even if the themes cursor moves underneath.
+  property string customThemeName: ""
+  property string customThemeCatalogUrl: ""
+  property bool customThemePresent: false
+  property bool customLoading: false
+  // Cursor over the option rows (0..N-1) plus the trailing switch row (N).
+  property int customSelection: 0
+  // Bumped when the custom catalog (re)loads: `customRows` re-reads the model.
+  property int customRevision: 0
+  // Request stamp, so a superseded catalog load is discarded.
+  property int customSerial: 0
+  // Theme queued for a random default once a custom install finishes ("" = none).
+  property string pendingCustomRandomDefault: ""
+
   // ---- theme tokens ---------------------------------------------------------
   // Overlay chrome follows the first-party overlays (menu / clipboard /
   // emojis): a single flat `Color.menu.*` surface, no per-region fills, and
@@ -361,7 +387,7 @@ Item {
   // The two heroes (grid / fullscreen preview) are pinned to the same height so
   // switching view — or a title that grows a resolution suffix — never shifts
   // the separator and the content below it.
-  readonly property int heroHeight: Math.max(hero.implicitHeight, previewHero.implicitHeight)
+  readonly property int heroHeight: Math.max(heroBar.implicitHeight, previewView.heroNaturalHeight)
 
   ListModel { id: themesModel }
   // Filtered view of `themesModel`, used by the left list only while a search
@@ -373,6 +399,10 @@ Item {
   // search is active; with no filter the grid reads `wallpapersModel` directly
   // so live install progress keeps updating.
   ListModel { id: wallpapersDisplayModel }
+  // Catalog of the theme being configured on the custom-install screen. Kept
+  // separate from `wallpapersModel` so opening the screen never disturbs the
+  // wallpapers grid's own load/scroll state.
+  ListModel { id: customCatalogModel }
 
   // What the themes list and cursor read from.
   readonly property var activeThemesModel: filterText === "" ? themesModel : themesDisplayModel
@@ -636,19 +666,23 @@ Item {
     collectionFilter = ""
     searching = false
     filterFocus = -1
+    themeFocus = -1
     actionTheme = ""
     actionCancelled = false
     actionRunning = false
     actionClearsChecks = false
     clearWallpaperSelection()
     addSourceSoon = false
-    setupSoon = false
+    customThemeName = ""
+    customSelection = 0
+    pendingCustomRandomDefault = ""
+    wallpaperReturnCustom = false
     loadThemes()
   }
 
   function close() {
     // A dropdown popup is a separate window and would outlive the overlay.
-    if (collectionDropdown && collectionDropdown.popupOpen) collectionDropdown.close()
+    if (wallpapersView.collectionDropdown && wallpapersView.collectionDropdown.popupOpen) wallpapersView.collectionDropdown.close()
     opened = false
   }
 
@@ -736,7 +770,7 @@ Item {
   // The wallpapers filter row (collection dropdown, search, Select all, Clear)
   // is a focusable strip like the Setup screen's: arrows / Tab move between the
   // four controls, Enter / Space activate the focused one, Down returns to the
-  // grid. `searching` is implied by the search field owning focus, so landing
+  // wallpapersView.grid. `searching` is implied by the search field owning focus, so landing
   // on it starts editing and leaving it stops.
   readonly property bool filterRowFocused: view === "wallpapers" && filterFocus >= 0
 
@@ -771,6 +805,359 @@ Item {
     if (searching) Qt.callLater(function() { keys.forceActiveFocus() })
   }
 
+  // ---- themes action-row focus ----------------------------------------------
+  // The themes screen is a master-detail: Tab moves the focus from the theme
+  // list into the detail action row and back. Once in the row, Left/Right walk
+  // the buttons, Enter/Space activate the focused one, Down/Esc/Tab return to
+  // the list. Mirrors the wallpapers filter-row model, so the bulk actions need
+  // no mouse and no memorised letter shortcuts.
+  // Actions reachable with the keyboard on the themes detail row, in visual
+  // order. Buttons that cannot run (absent theme, already full, storage cap,
+  // nothing installed) are skipped so Tab/arrows never land on a dead control.
+  readonly property var themeActionKeys: {
+    var all = selectedThemePresent
+      ? ["browse", "install", "shuffle", "uninstall", "custom"]
+      : ["browse", "custom"]
+    var out = []
+    for (var i = 0; i < all.length; i++)
+      if (themeActionEnabled(all[i])) out.push(all[i])
+    return out
+  }
+
+  function themeActionEnabled(key) {
+    if (key === "browse" || key === "custom") return true
+    if (!selectedThemePresent || actionRunning) return false
+    if (key === "install" || key === "shuffle")
+      return !selectedThemeFull && !storageLimitReached
+    if (key === "uninstall") return !selectedThemeEmpty
+    return false
+  }
+
+  function themeActionKeyAt(index) {
+    var keys = themeActionKeys
+    return (index >= 0 && index < keys.length) ? keys[index] : ""
+  }
+
+  function themeActionFocused(key) {
+    return view === "themes" && themeFocus >= 0 && themeActionKeyAt(themeFocus) === key
+  }
+
+  function enterThemeActions() {
+    if (view !== "themes") return
+    themeFocus = Math.max(0, Math.min(themeFocus, themeActionKeys.length - 1))
+  }
+
+  function leaveThemeActions() {
+    themeFocus = -1
+    Qt.callLater(function() { keys.forceActiveFocus() })
+  }
+
+  function moveThemeAction(dir) {
+    if (view !== "themes" || themeFocus < 0) return
+    themeFocus = Math.max(0, Math.min(themeActionKeys.length - 1, themeFocus + dir))
+  }
+
+  function activateThemeAction() {
+    if (view !== "themes" || themeFocus < 0) return
+    switch (themeActionKeyAt(themeFocus)) {
+    case "browse": selectTheme(selectedIndex); return
+    case "install":
+      if (selectedThemePresent && !selectedThemeFull && !storageLimitReached)
+        actionInstallTheme()
+      return
+    case "shuffle":
+      if (selectedThemePresent && !selectedThemeFull && !storageLimitReached)
+        actionRandomInstall()
+      return
+    case "uninstall":
+      if (selectedThemePresent && !selectedThemeEmpty) actionRemoveThemeAll()
+      return
+    case "custom": openCustomInstall(); return
+    }
+  }
+
+  // ---- custom install screen ------------------------------------------------
+  // The option rows of the custom screen, in visual order: the whole theme
+  // first, then one per collection, then the random sample and "select only".
+  // `customRevision` makes the binding re-read the ListModel.
+  readonly property var customRows: {
+    var rev = customRevision
+    var items = []
+    for (var i = 0; i < customCatalogModel.count; i++) items.push(customCatalogModel.get(i))
+    var totals = Model.wallpaperTotals(items)
+    var rows = [{
+      kind: "full",
+      label: "Full collections",
+      hint: "Every wallpaper of the theme",
+      count: totals.count,
+      installed: totals.installed,
+      sizeBytes: totals.sizeBytes,
+      resolution: totals.resolution
+    }]
+    var collections = Model.collectionSummary(items)
+    for (var j = 0; j < collections.length; j++) {
+      var c = collections[j]
+      rows.push({
+        kind: "collection",
+        collection: c.name,
+        label: "Full " + c.label,
+        hint: "Every wallpaper in the collection",
+        count: c.count,
+        installed: c.installed,
+        sizeBytes: c.sizeBytes,
+        resolution: c.resolution
+      })
+    }
+    rows.push({
+      kind: "shuffle",
+      label: "Shuffle (" + setupSettings.shuffleCount + ")",
+      hint: "Random sample, same as the themes screen",
+      count: setupSettings.shuffleCount,
+      installed: 0,
+      sizeBytes: 0,
+      resolution: totals.resolution
+    })
+    rows.push({
+      kind: "selectOnly",
+      label: "Select only",
+      hint: "Go to the grid and choose by hand",
+      count: 0,
+      installed: 0,
+      sizeBytes: 0,
+      resolution: ""
+    })
+    return rows
+  }
+
+  // The switch is the row right after the options.
+  readonly property int customSwitchRow: customRows.length
+
+  // The highlighted option row (null on the switch row).
+  readonly property var customSelectedRow:
+    (customSelection >= 0 && customSelection < customRows.length)
+      ? customRows[customSelection] : null
+
+  // Footer Install is enabled only for the bulk rows that still have something
+  // to install: Full collections, a collection, or Shuffle. Select only and the
+  // switch row keep it disabled, as does a fully-installed scope.
+  readonly property bool customCanInstall: {
+    var row = customSelectedRow
+    if (!row || !customThemePresent || actionRunning) return false
+    if (row.kind === "selectOnly") return false
+    var full = customRows.length > 0 ? customRows[0] : null
+    if (row.kind === "shuffle")
+      return !!full && (full.count || 0) > (full.installed || 0)
+    return (row.count || 0) > (row.installed || 0)
+  }
+
+  // Footer Uninstall is enabled only for Full collections / a collection that
+  // actually has files on disk.
+  readonly property bool customCanRemove: {
+    var row = customSelectedRow
+    if (!row || !customThemePresent || actionRunning) return false
+    if (row.kind !== "full" && row.kind !== "collection") return false
+    return (row.installed || 0) > 0
+  }
+
+  // Theme object being configured, and the first nine preview URLs for the 3x3
+  // grid. `customRevision` makes both re-read the model.
+  readonly property var customTheme: themeByName(customThemeName)
+  // True when the configured theme is the one Omarchy is currently running, so
+  // the end-of-install random default may touch the live background.
+  readonly property bool customThemeIsActive: customThemeName !== ""
+    && root.activeThemeSlug !== ""
+    && Model.normalizeSlug(customThemeName) === Model.normalizeSlug(root.activeThemeSlug)
+  // Preview URLs for the 3x3 grid, resolved once when the catalog loads
+  // (preferring an already-prewarmed local file). A plain property, not a live
+  // binding: swapping the source mid-render made the first open flash as all
+  // nine images re-rendered.
+  property var customPreviews: []
+
+  // Warm the 3x3 previews into the disk cache (best-effort), so reopening the
+  // screen — or restarting the shell — loads them from disk instead of the
+  // network. Skips what is already cached and never competes with an action.
+  function prefetchCustomPreviews() {
+    if (actionRunning) return
+    var urls = []
+    for (var i = 0; i < customCatalogModel.count && urls.length < 9; i++) {
+      var row = customCatalogModel.get(i)
+      if (!row || !row.preview) continue
+      var url = String(row.preview)
+      if (url.indexOf("http") !== 0) continue
+      if (cachedImagePath(url) === "") urls.push(url)
+    }
+    if (urls.length === 0) return
+    if (prewarmProc.running) {
+      pendingPrefetch = urls
+      return
+    }
+    startPrewarm(urls)
+  }
+  // Setup's default resolution, indicated on the cards (not enforced yet).
+  readonly property string setupResolution: setupSettings.resolution
+  readonly property bool randomDefaultOnInstall: setupSettings.randomDefaultOnInstall
+
+  function takeCustomCursor(index) {
+    if (view !== "custom") return
+    customSelection = index
+  }
+
+  function toggleRandomDefaultOnInstall() {
+    if (view !== "custom") return
+    setupSettings.randomDefaultOnInstall = !setupSettings.randomDefaultOnInstall
+  }
+
+  function customRowFocused(index) {
+    return view === "custom" && customSelection === index
+  }
+
+  function openCustomInstall() {
+    var theme = selectedTheme
+    if (!theme) return
+    customThemeName = theme.name
+    customThemeCatalogUrl = theme.catalogUrl
+    customThemePresent = selectedThemePresent
+    customSelection = 0
+    customLoading = true
+    customRevision++
+    view = "custom"
+    cursorActive = true
+    themeFocus = -1
+    setStatus("")
+    customCatalogModel.clear()
+    customPreviews = []
+    loadCustomCatalog()
+  }
+
+  function closeCustomInstall() {
+    view = "themes"
+    cursorActive = true
+    setStatus("")
+  }
+
+  function loadCustomCatalog() {
+    if (customThemeName === "") return
+    customLoading = true
+    customSerial++
+    customCatalogProc.requestedSerial = customSerial
+    customCatalogProc.requestedTheme = customThemeName
+    customCatalogProc.command = scriptCmd(["catalog", customThemeName, customThemeCatalogUrl])
+    customCatalogProc.running = true
+  }
+
+  function moveCustomCursor(dir) {
+    if (view !== "custom") return
+    customSelection = Math.max(0, Math.min(customSwitchRow, customSelection + dir))
+  }
+
+  function activateCustom() {
+    if (view !== "custom") return
+    if (customSelection >= customSwitchRow) {
+      setupSettings.randomDefaultOnInstall = !setupSettings.randomDefaultOnInstall
+      return
+    }
+    var row = customRows[customSelection]
+    if (!row) return
+    if (row.kind === "selectOnly") { selectCustomTheme(); return }
+    executeCustomRow(row)
+  }
+
+  function executeCustomRow(row) {
+    if (actionRunning) return
+    var theme = customThemeName
+    if (theme === "") return
+    // The switch remembers whether to pick a random default once the install
+    // finishes; the chain is applied in `actionProc.onExited`.
+    pendingCustomRandomDefault = setupSettings.randomDefaultOnInstall ? theme : ""
+    if (row.kind === "full") runAction(["install", theme])
+    else if (row.kind === "collection")
+      runAction(["install", theme, "--collection", String(row.collection)])
+    else if (row.kind === "shuffle")
+      runAction(["random-install", theme, String(setupSettings.shuffleCount)])
+  }
+
+  // Footer "Install": runs the highlighted choice (same as Enter on the card).
+  function executeCustomInstall() {
+    if (view !== "custom" || actionRunning) return
+    if (customSelection >= customSwitchRow) return
+    var row = customRows[customSelection]
+    if (!row) return
+    if (row.kind === "selectOnly") { selectCustomTheme(); return }
+    if (!customCanInstall) return
+    executeCustomRow(row)
+  }
+
+  // Footer "Uninstall": removes the highlighted scope — the whole theme on Full
+  // collections, just the collection otherwise.
+  function executeCustomRemove() {
+    if (view !== "custom" || actionRunning) return
+    if (!customCanRemove) return
+    var row = customSelectedRow
+    if (!row || customThemeName === "") return
+    busy = true
+    if (row.kind === "collection") {
+      setStatus("Removing " + row.label + "…")
+      runAction(["remove", customThemeName, "--collection", String(row.collection)])
+    } else {
+      setStatus("Removing all of " + customThemeName + "…")
+      runAction(["remove", customThemeName])
+    }
+  }
+
+  // End-of-install random default (the custom screen's switch). Only the
+  // configured theme is touched: when it is the running one the background is
+  // set live, otherwise the pick is remembered per theme and the file is made
+  // sure to land on disk — exactly like `actionToggleDefault`, so a random
+  // default on another theme never replaces the current desktop background.
+  function applyCustomRandomDefault(theme) {
+    if (theme === "" || customCatalogModel.count === 0) return
+    var item = customCatalogModel.get(Math.floor(Math.random() * customCatalogModel.count))
+    if (!item) return
+    if (customThemeIsActive) {
+      busy = true
+      setStatus("Setting a random default for " + Model.ucfirst(theme) + "…")
+      runAction(["set-default", theme, item.filename, item.url])
+      return
+    }
+    setupSettings.setThemeDefault(theme, item.filename, item.url)
+    if (String(item.installed) !== "1") {
+      busy = true
+      setStatus("Installing " + item.name + "…")
+      runAction(["install", theme, item.filename])
+    } else {
+      setStatus("Default for " + Model.ucfirst(theme)
+        + " set — applies when you switch to it")
+    }
+  }
+
+  // "Select only": leave for the wallpapers grid of the configured theme.
+  function selectCustomTheme() {
+    for (var i = 0; i < activeThemesModel.count; i++) {
+      if (activeThemesModel.get(i).name === customThemeName) {
+        selectTheme(i)
+        // Esc from the grid must come back here, state preserved.
+        wallpaperReturnCustom = true
+        return
+      }
+    }
+  }
+
+  // `b`: like Select only, but when a collection card is highlighted the grid
+  // opens already narrowed to that collection.
+  function browseCustom() {
+    if (view !== "custom" || actionRunning) return
+    var row = customSelectedRow
+    var collection = (row && row.kind === "collection") ? String(row.collection) : ""
+    for (var i = 0; i < activeThemesModel.count; i++) {
+      if (activeThemesModel.get(i).name === customThemeName) {
+        selectTheme(i)
+        wallpaperReturnCustom = true
+        if (collection !== "") setCollectionFilter(collection)
+        return
+      }
+    }
+  }
+
   // Apply the filter and rebuild the visible list. The index resets to the top
   // so the cursor always sits on a valid row.
   function setThemeFilter(text) {
@@ -782,7 +1169,7 @@ Item {
     cursorActive = true
     refreshDetailShown()
     if (activeThemesModel.count > 0)
-      Qt.callLater(function() { themesList.positionViewAtIndex(0, ListView.Beginning) })
+      Qt.callLater(function() { themesView.listView.positionViewAtIndex(0, ListView.Beginning) })
   }
 
   function setWallpaperFilter(text) {
@@ -793,7 +1180,7 @@ Item {
     selectedIndex = 0
     cursorActive = true
     if (activeWallpapersModel.count > 0)
-      Qt.callLater(function() { grid.positionViewAtIndex(0, GridView.Beginning) })
+      Qt.callLater(function() { wallpapersView.grid.positionViewAtIndex(0, GridView.Beginning) })
   }
 
   // Narrow the grid to one collection ("" = all). Shares the rebuild/cursor
@@ -806,7 +1193,7 @@ Item {
     selectedIndex = 0
     cursorActive = true
     if (activeWallpapersModel.count > 0)
-      Qt.callLater(function() { grid.positionViewAtIndex(0, GridView.Beginning) })
+      Qt.callLater(function() { wallpapersView.grid.positionViewAtIndex(0, GridView.Beginning) })
   }
 
   // The dataset carries a readable `title` ("Tokyo Night"); the tiles show it
@@ -815,6 +1202,8 @@ Item {
     if (index < 0 || index >= activeThemesModel.count) return
     var item = activeThemesModel.get(index)
     lastThemeIndex = index
+    // Entered from the theme list: Esc goes back there (not to custom install).
+    wallpaperReturnCustom = false
     // Drop the previous theme's rows first: the wallpapers GridView delegates
     // survive the trip through the themes view, so leaving them alive while
     // `themeName` changes makes them re-resolve their local file path against
@@ -823,6 +1212,7 @@ Item {
     wallpaperFilterText = ""
     collectionFilter = ""
     filterFocus = -1
+    themeFocus = -1
     // Checks belong to the theme being left.
     clearWallpaperSelection()
     themeName = item.name
@@ -864,13 +1254,24 @@ Item {
     // Remember the wallpaper cursor so re-entering this theme resumes here.
     if (themeName !== "") wallpaperCursorByTheme[themeName] = selectedIndex
     filterFocus = -1
+    themeFocus = -1
     searching = false
+    // Entered from the custom-install screen ("Select only"): go back there with
+    // its state intact, restoring the theme cursor it had.
+    if (wallpaperReturnCustom) {
+      wallpaperReturnCustom = false
+      selectedIndex = Math.max(0, Math.min(activeThemesModel.count - 1, lastThemeIndex))
+      cursorActive = true
+      view = "custom"
+      setStatus("")
+      return
+    }
     view = "themes"
     selectedIndex = Math.max(0, Math.min(activeThemesModel.count - 1, lastThemeIndex))
     cursorActive = true
     setStatus("")
     if (activeThemesModel.count > 0)
-      Qt.callLater(function() { themesList.positionViewAtIndex(root.selectedIndex, ListView.Contain) })
+      Qt.callLater(function() { themesView.listView.positionViewAtIndex(root.selectedIndex, ListView.Contain) })
   }
 
   // Help screen: opened from the hero Help button on any screen (or `?` on the
@@ -882,37 +1283,41 @@ Item {
   property string setupReturnView: "themes"
 
   function openHelp() {
-    helpReturnView = (view === "wallpapers" || view === "preview") ? view : "themes"
+    if (view === "help") return
+    // Back always retraces the origin screen (themes, wallpapers, preview,
+    // custom install or setup).
+    helpReturnView = view
     view = "help"
     cursorActive = true
     setStatus("")
   }
 
   function closeHelp() {
-    if (helpReturnView === "preview" || helpReturnView === "wallpapers") {
-      view = helpReturnView
+    var target = helpReturnView
+    if (target === "themes") {
+      // Coming back from the themes list: keep the cursor exactly where it was
+      // (not `lastThemeIndex`, which is the last theme that was *opened*).
+      view = "themes"
       cursorActive = true
+      selectedIndex = Math.max(0, Math.min(activeThemesModel.count - 1, selectedIndex))
       setStatus("")
-      if (helpReturnView === "wallpapers")
-        Qt.callLater(function() { grid.positionViewAtIndex(root.selectedIndex, GridView.Contain) })
+      if (activeThemesModel.count > 0)
+        Qt.callLater(function() { themesView.listView.positionViewAtIndex(root.selectedIndex, ListView.Contain) })
       return
     }
-    // Coming back from the themes list: keep the cursor exactly where it was
-    // (not `lastThemeIndex`, which is the last theme that was *opened*).
-    view = "themes"
+    view = target
     cursorActive = true
-    selectedIndex = Math.max(0, Math.min(activeThemesModel.count - 1, selectedIndex))
     setStatus("")
-    if (activeThemesModel.count > 0)
-      Qt.callLater(function() { themesList.positionViewAtIndex(root.selectedIndex, ListView.Contain) })
+    if (target === "wallpapers")
+      Qt.callLater(function() { wallpapersView.grid.positionViewAtIndex(root.selectedIndex, GridView.Contain) })
   }
 
   // Setup screen: a placeholder screen like Help but empty. Reached with `s`
   // on any screen or from the setup buttons; Esc / Back returns to the origin.
   function openSetup() {
     if (view === "setup") return
-    setupReturnView = (view === "wallpapers" || view === "preview" || view === "help")
-      ? view : "themes"
+    // Back retraces whatever screen opened it (custom install included).
+    setupReturnView = view
     view = "setup"
     cursorActive = true
     setStatus("")
@@ -924,7 +1329,7 @@ Item {
     cursorActive = true
     setStatus("")
     if (setupReturnView === "wallpapers")
-      Qt.callLater(function() { grid.positionViewAtIndex(root.selectedIndex, GridView.Contain) })
+      Qt.callLater(function() { wallpapersView.grid.positionViewAtIndex(root.selectedIndex, GridView.Contain) })
   }
 
   // Open Setup on the Download section: the storage-limit banner links here.
@@ -938,17 +1343,19 @@ Item {
   function showThemes() {
     view = "themes"
     cursorActive = true
+    themeFocus = -1
     selectedIndex = Math.max(0, Math.min(activeThemesModel.count - 1,
       helpReturnView === "themes" ? selectedIndex : lastThemeIndex))
     setStatus("")
     if (activeThemesModel.count > 0)
-      Qt.callLater(function() { themesList.positionViewAtIndex(root.selectedIndex, ListView.Contain) })
+      Qt.callLater(function() { themesView.listView.positionViewAtIndex(root.selectedIndex, ListView.Contain) })
   }
 
   function refresh() {
     if (actionRunning) return
     if (view === "themes") loadThemes()
     else if (view === "wallpapers" || view === "preview") loadWallpapers()
+    else if (view === "custom") loadCustomCatalog()
   }
 
   // ---- cursor state machine -------------------------------------------------
@@ -961,8 +1368,8 @@ Item {
   }
 
   function positionActive(index) {
-    if (view === "themes") themesList.positionViewAtIndex(index, ListView.Contain)
-    else grid.positionViewAtIndex(index, GridView.Contain)
+    if (view === "themes") themesView.listView.positionViewAtIndex(index, ListView.Contain)
+    else wallpapersView.grid.positionViewAtIndex(index, GridView.Contain)
   }
 
   function stepCursor(step) {
@@ -990,7 +1397,17 @@ Item {
       previewNext(dx !== 0 ? dx : dy)
       return
     }
+    if (view === "custom") {
+      moveCustomCursor(dy !== 0 ? dy : dx)
+      return
+    }
     if (view === "themes") {
+      // The action row owns Left/Right; Up/Down leave it for the list.
+      if (themeFocus >= 0) {
+        if (dx !== 0) moveThemeAction(dx > 0 ? 1 : -1)
+        else if (dy !== 0) leaveThemeActions()
+        return
+      }
       var step = dy !== 0 ? dy : dx
       // Up from the first row moves the focus into the search field.
       if (step < 0 && selectedIndex === 0) {
@@ -1003,7 +1420,7 @@ Item {
 
     // The filter row owns the arrows while it is focused (and not typing — the
     // search editor handles its own keys through the card fallback): Left/Right
-    // walk the controls, Down drops back to the grid.
+    // walk the controls, Down drops back to the wallpapersView.grid.
     if (filterRowFocused && !searching) {
       if (dx !== 0) {
         moveFilterField(dx > 0 ? 1 : -1)
@@ -1014,11 +1431,11 @@ Item {
     }
 
     // Up from the first row moves the focus into the filter row (search field).
-    if (dy < 0 && selectedIndex < grid.colCount) {
+    if (dy < 0 && selectedIndex < wallpapersView.grid.colCount) {
       enterFilterRow(1)
       return
     }
-    stepCursor(dx !== 0 ? dx : dy * grid.colCount)
+    stepCursor(dx !== 0 ? dx : dy * wallpapersView.grid.colCount)
   }
 
   // PageUp/PageDown: jump a whole visible page of tiles (rows on screen ×
@@ -1040,13 +1457,17 @@ Item {
       previewNext(dir)
       return
     }
+    if (view === "custom") {
+      moveCustomCursor(dir * 3)
+      return
+    }
     if (view === "themes") {
-      var rows = Math.max(1, Math.floor(themesList.height / root.themeRowHeight))
+      var rows = Math.max(1, Math.floor(themesView.listView.height / root.themeRowHeight))
       stepCursor(dir * rows)
       return
     }
 
-    var g = grid
+    var g = wallpapersView.grid
     var visibleRows = Math.max(1, Math.floor(g.height / g.cellHeight))
     stepCursor(dir * visibleRows * g.colCount)
   }
@@ -1059,10 +1480,14 @@ Item {
       return
     }
     if (view === "help") helpView.activateSelection()
-    else if (view === "themes") selectTheme(selectedIndex)
+    else if (view === "themes") {
+      if (themeFocus >= 0) activateThemeAction()
+      else selectTheme(selectedIndex)
+    }
+    else if (view === "custom") activateCustom()
     else if (view === "wallpapers") {
       if (filterRowFocused && !searching) {
-        if (filterFocus === 0) collectionDropdown.open()
+        if (filterFocus === 0) wallpapersView.collectionDropdown.open()
         else if (filterFocus === 1) searching = true
         else if (filterFocus === 2) selectAllWallpapers()
         else if (filterFocus === 3) clearWallpaperSelection()
@@ -1111,6 +1536,14 @@ Item {
       closeHelp()
       return
     }
+    // Custom install is a leaf screen: Esc returns to the theme list.
+    if (view === "custom") {
+      closeCustomInstall()
+      return
+    }
+    // The themes action row is a lateral area (Tab), not a nested level, so Esc
+    // means the same as on the list: clear an active filter, else close. Tab /
+    // Down return to the list.
     // The filter row is a step back to the grid (the filter is kept); the
     // search editor handles its own Esc through the card fallback.
     if (filterRowFocused) {
@@ -1170,6 +1603,14 @@ Item {
       else if (text === "d" || text === "D") helpView.openDatabase()
       return
     }
+    // The custom-install screen is driven by the cursor state machine
+    // (arrows/Enter/Tab); `i` runs the highlighted choice like Enter, `b`
+    // browses the theme's grid (narrowed to the highlighted collection).
+    if (view === "custom") {
+      if (text === "i" || text === "I") executeCustomInstall()
+      else if (text === "b" || text === "B") browseCustom()
+      return
+    }
     if (view === "themes") {
       var themeAction = Model.themeTextAction(text)
       if (themeAction === "browse") {
@@ -1182,9 +1623,9 @@ Item {
         triggerAddSource()
         return
       }
-      // Custom Install is always active, like its button.
+      // Custom Install opens the dedicated screen.
       if (themeAction === "custom") {
-        triggerSetup()
+        openCustomInstall()
         return
       }
       if (themeAction === "help") {
@@ -1214,6 +1655,8 @@ Item {
     // Mouse back on the grid drops the filter-row focus (never while typing:
     // hovering a tile must not steal the search editor).
     if (filterFocus >= 0 && !searching) filterFocus = -1
+    // Same for the themes action row: hovering a theme row returns to the list.
+    if (view === "themes") themeFocus = -1
     selectedIndex = index
   }
 
@@ -1222,13 +1665,6 @@ Item {
   function triggerAddSource() {
     addSourceSoon = true
     addSourceReset.restart()
-  }
-
-  // Custom Install placeholder: same 3s COMING SOON feedback. Kept clickable
-  // even while an operation runs.
-  function triggerSetup() {
-    setupSoon = true
-    setupReset.restart()
   }
 
   // ---- wallpaper multi-select ----------------------------------------------
@@ -1346,7 +1782,7 @@ Item {
     selectedIndex = Math.max(0, Math.min(activeWallpapersModel.count - 1, selectedIndex))
     // Deferred: the GridView only becomes visible on the view change, so
     // scrolling in the same frame reads stale geometry and lands nowhere.
-    Qt.callLater(function() { grid.positionViewAtIndex(root.selectedIndex, GridView.Contain) })
+    Qt.callLater(function() { wallpapersView.grid.positionViewAtIndex(root.selectedIndex, GridView.Contain) })
   }
 
   function previewNext(delta) {
@@ -1457,14 +1893,6 @@ Item {
     busy = true
     setStatus("Installing all of " + theme.name + "…")
     runAction(["install", theme.name])
-  }
-
-  function actionRandomDefault() {
-    var theme = selectedTheme
-    if (!theme) return
-    busy = true
-    setStatus("Setting a random default for " + theme.name + "…")
-    runAction(["random-default", theme.name])
   }
 
   // Install a shuffled sample of the selected theme's wallpapers. The count
@@ -1579,11 +2007,17 @@ Item {
     // The in-memory catalog belongs to `themeName`: skip actions on other themes.
     if (String(args[1]) !== themeName) return
     if (cmd === "install") {
-      if (args.length > 2) {
+      if (args.length > 2 && String(args[2]) === "--collection") {
+        // Bulk collection install: the custom-install screen reloads its own
+        // catalog, so there is no per-filename patch to apply here.
+      } else if (args.length > 2) {
         for (var i = 2; i < args.length; i++) setWallpaperInstalled(String(args[i]), "1")
       } else setAllWallpapersInstalled("1")
     } else if (cmd === "remove") {
-      if (args.length > 2) {
+      if (args.length > 2 && String(args[2]) === "--collection") {
+        // Bulk collection remove: the custom-install screen reloads its own
+        // catalog, so there is no per-filename patch to apply here.
+      } else if (args.length > 2) {
         for (var j = 2; j < args.length; j++) setWallpaperInstalled(String(args[j]), "0")
       } else setAllWallpapersInstalled("0")
     } else if (cmd === "set-default") {
@@ -1822,8 +2256,8 @@ Item {
     hoverGate.restart()
     // The collection popup is a separate window: close it when the wallpapers
     // screen is left, or it would stay floating over the other views.
-    if (view !== "wallpapers" && collectionDropdown && collectionDropdown.popupOpen)
-      collectionDropdown.close()
+    if (view !== "wallpapers" && wallpapersView.collectionDropdown && wallpapersView.collectionDropdown.popupOpen)
+      wallpapersView.collectionDropdown.close()
   }
   // A prewarmed neighbour may make the full image available: upgrade the detail
   // pane from the small preview without waiting for the next selection.
@@ -1893,7 +2327,7 @@ Item {
         root.busy = false
         root.setStatus(Model.themesStatus(themesModel.count))
         if (root.activeThemesModel.count > 0)
-          Qt.callLater(function() { themesList.positionViewAtIndex(root.selectedIndex, ListView.Contain) })
+          Qt.callLater(function() { themesView.listView.positionViewAtIndex(root.selectedIndex, ListView.Contain) })
       }
     }
     onExited: {
@@ -1943,7 +2377,7 @@ Item {
         root.busy = false
         root.setStatus(Model.catalogStatus(wallpapersModel.count, root.themeName))
         if (root.activeWallpapersModel.count > 0)
-          Qt.callLater(function() { grid.positionViewAtIndex(root.selectedIndex, GridView.Contain) })
+          Qt.callLater(function() { wallpapersView.grid.positionViewAtIndex(root.selectedIndex, GridView.Contain) })
       }
     }
     onExited: {
@@ -1961,6 +2395,40 @@ Item {
           : "Error loading catalog")
       }
     }
+  }
+
+  // ---- custom install catalog -----------------------------------------------
+  // Same request-stamp pattern as `catalogProc`, on its own model so the
+  // custom-install screen never touches the wallpapers grid.
+  Process {
+    id: customCatalogProc
+    property int requestedSerial: 0
+    property string requestedTheme: ""
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        if (customCatalogProc.requestedSerial !== root.customSerial
+            || customCatalogProc.requestedTheme !== root.customThemeName)
+          return
+        customCatalogModel.clear()
+        var rows = Model.parseCatalog(text)
+        for (var i = 0; i < rows.length; i++) customCatalogModel.append(rows[i])
+        root.customRevision++
+        root.customLoading = false
+        // Resolve the 3x3 previews once, now, so they are not swapped later.
+        var previews = []
+        for (var k = 0; k < customCatalogModel.count && previews.length < 9; k++) {
+          var prow = customCatalogModel.get(k)
+          if (!prow || !prow.preview) continue
+          var purl = String(prow.preview)
+          var plocal = root.imagePathByUrl[purl]
+          previews.push(plocal ? String(plocal) : purl)
+        }
+        root.customPreviews = previews
+        root.prefetchCustomPreviews()
+      }
+    }
+    onExited: if (root.customLoading) root.customLoading = false
   }
 
   // ---- action result --------------------------------------------------------
@@ -1996,6 +2464,17 @@ Item {
       }
       root.actionTheme = ""
       root.lastAction = []
+      // Custom install: refresh the option counts and, when the switch asked for
+      // it, chain a random default now that the process is free.
+      var randomDefaultTheme = root.pendingCustomRandomDefault
+      root.pendingCustomRandomDefault = ""
+      // Reload even when cancelled: files installed before Esc are on disk, so
+      // the card counts must catch up without leaving the screen.
+      if (root.view === "custom") root.loadCustomCatalog()
+      // The switch applies after an install whether it finished or was stopped
+      // with Esc; `applyCustomRandomDefault` only touches the configured theme.
+      if (randomDefaultTheme !== "")
+        root.applyCustomRandomDefault(randomDefaultTheme)
     }
   }
 
@@ -2143,13 +2622,6 @@ Item {
     onTriggered: root.flushProgress()
   }
 
-  // Reverts the custom "Custom Install" button's COMING SOON label.
-  Timer {
-    id: setupReset
-    interval: 3000
-    onTriggered: root.setupSoon = false
-  }
-
   // ===========================================================================
   PanelWindow {
     id: panel
@@ -2189,10 +2661,10 @@ Item {
       MouseArea { anchors.fill: parent; onClicked: {} }
 
       // Delete is not part of the canonical key set (PanelKeyCatcher maps x/X
-      // to `deleteRequested`, the global close); PageUp/PageDown are not mapped
-      // either. Both bubble up here. Backspace is handled only inside a search
-      // (filter editing); outside one it does nothing. While a search is active
-      // the catcher is blocked and this handler owns every key.
+      // to `deleteRequested`, the global close); PageUp/PageDown and F1 are not
+      // mapped either. All bubble up here. Backspace is handled only inside a
+      // search (filter editing); outside one it does nothing. While a search is
+      // active the catcher is blocked and this handler owns every key.
       Keys.onPressed: function(event) {
         if (root.searching) {
           if (event.key === Qt.Key_Escape) {
@@ -2240,7 +2712,12 @@ Item {
           }
           return
         }
-        if (event.key === Qt.Key_Delete) {
+        if (event.key === Qt.Key_F1) {
+          // GUI habit: F1 is the classic Help key. Same target as `?`, ignored
+          // while an action runs.
+          if (!root.actionRunning) root.openHelp()
+          event.accepted = true
+        } else if (event.key === Qt.Key_Delete) {
           root.actionRemove()
           event.accepted = true
         } else if (event.key === Qt.Key_PageDown) {
@@ -2272,7 +2749,7 @@ Item {
         // Same while a dropdown popup is open (Setup interval / collections),
         // so its list gets the arrows / Enter / Esc.
         blocked: root.searching || setupSettings.dropdownOpen
-          || collectionDropdown.popupOpen
+          || wallpapersView.collectionDropdown.popupOpen
 
         onMoveRequested: function(dx, dy) { root.moveCursor(dx, dy) }
         // Enter also fires `activateRequested`, so the flag drops that second
@@ -2294,217 +2771,70 @@ Item {
         onDeleteRequested: root.requestClose()
         onTextKey: function(text) { root.handleTextKey(text) }
         onTabRequested: function(direction) {
+          // Only Esc is accepted while an action runs.
+          if (root.actionRunning) return
           if (root.view === "setup") setupSettings.cycleArea(direction)
+          else if (root.view === "themes") {
+            // Tab toggles between the theme list and the detail action row.
+            if (root.themeFocus < 0) root.enterThemeActions()
+            else root.leaveThemeActions()
+          }
+          else if (root.view === "custom") {
+            // Tab jumps between the option list and the trailing switch.
+            root.customSelection = root.customSelection >= root.customSwitchRow
+              ? 0 : root.customSwitchRow
+          }
           else if (root.filterRowFocused) root.moveFilterField(direction)
-          else if ((root.view === "themes" || root.view === "wallpapers")
-            && !root.searching) root.startSearch()
+          else if (root.view === "wallpapers" && !root.searching) root.startSearch()
         }
 
         // ---- hero -----------------------------------------------------------
-        Component {
-          id: heroIcon
-
-          HeroLogo {
-            glyph: root.view === "themes" ? "󰸌"
-              : (root.view === "help" ? "󰘥"
-                : (root.view === "setup" ? "󰒓" : ""))
-            source: root.logoPath
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-          }
-        }
-
-        Component {
-          id: heroActions
-
-          Row {
-            spacing: Style.spacing.controlGap
-
-            Button {
-              visible: root.dev
-              text: "DEV"
-              iconText: "\uf121"
-              bordered: true
-              foreground: root.accent
-              accent: root.accent
-              fontFamily: root.fontFamily
-            }
-
-            // Auto-save feedback: first in the row so showing/hiding it never
-            // shifts the pill and the buttons that follow.
-            Rectangle {
-              visible: root.view === "setup" && setupSettings.saved
-              width: savedHeroText.implicitWidth + Style.space(24)
-              height: refreshButton.implicitHeight
-              radius: Style.cornerRadius
-              color: Util.alpha(root.accent, 0.16)
-
-              Text {
-                id: savedHeroText
-
-                anchors.centerIn: parent
-                textFormat: Text.PlainText
-                text: "Saved"
-                color: root.accent
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-              }
-            }
-
-            // Global store: total wallpapers and installed count across every
-            // theme. Also shown in the preview header (see `previewActions`).
-            StorePill {
-              visible: root.view !== "help"
-              controlHeight: refreshButton.implicitHeight
-              wallpapers: root.globalCounts.wallpapers
-              installed: root.globalCounts.installed
-              limitReason: root.storageLimitReached && root.view !== "setup"
-                ? root.storageLimitReason : ""
-              foreground: root.foreground
-              accent: root.accent
-              fontFamily: root.fontFamily
-              onLimitActivated: root.openSetupDownload()
-            }
-
-            Button {
-              visible: root.view === "themes"
-              // Frozen while an action runs, like the preview's actions.
-              enabled: !actionRunning
-              opacity: enabled ? 1 : 0.4
-              text: "Help"
-              iconText: "󰘥"
-              bordered: true
-              foreground: root.foreground
-              accent: root.accent
-              fontFamily: root.fontFamily
-              onClicked: root.openHelp()
-            }
-
-            // On Help: jump straight back to the theme list, before GitHub.
-            Button {
-              visible: root.view === "help"
-              enabled: !actionRunning
-              opacity: enabled ? 1 : 0.4
-              text: "Wallpaper manager"
-              iconText: "󰸌"
-              bordered: true
-              foreground: root.foreground
-              accent: root.accent
-              fontFamily: root.fontFamily
-              onClicked: root.showThemes()
-            }
-
-            Button {
-              visible: root.view === "themes" || root.view === "help"
-                || root.view === "setup"
-              // Frozen while an action runs, like the preview's actions.
-              enabled: !actionRunning
-              opacity: enabled ? 1 : 0.4
-              text: "GitHub"
-              iconText: "\uf09b"
-              bordered: true
-              foreground: root.foreground
-              accent: root.accent
-              fontFamily: root.fontFamily
-              // Hide the overlay so the browser does not open behind it.
-              onClicked: { Qt.openUrlExternally(root.pluginRepoUrl); root.close() }
-            }
-
-            // Releases: same target as the Help "Changelog" resource
-            // (config.links.releases). Help screen only.
-            Button {
-              visible: root.view === "help"
-              enabled: !actionRunning
-              opacity: enabled ? 1 : 0.4
-              text: "Releases"
-              iconText: "󰓹"
-              bordered: true
-              foreground: root.foreground
-              accent: root.accent
-              fontFamily: root.fontFamily
-              onClicked: { Qt.openUrlExternally(root.pluginLinks.releases); root.close() }
-            }
-
-            Button {
-              id: refreshButton
-
-              visible: root.view !== "help" && root.view !== "setup"
-              enabled: !actionRunning
-              opacity: enabled ? 1 : 0.4
-              text: "Refresh"
-              iconText: "󰑓"
-              bordered: true
-              foreground: root.foreground
-              accent: root.accent
-              fontFamily: root.fontFamily
-              onClicked: root.refresh()
-            }
-
-            Button {
-              visible: root.view === "wallpapers" || root.view === "help"
-                || root.view === "setup"
-              // Frozen while an action runs, like the preview's actions.
-              enabled: !actionRunning
-              opacity: enabled ? 1 : 0.4
-              text: "Back"
-              iconText: "󰁍"
-              bordered: true
-              foreground: root.foreground
-              accent: root.accent
-              fontFamily: root.fontFamily
-              onClicked: root.view === "help"
-                ? root.closeHelp()
-                : (root.view === "setup" ? root.closeSetup() : root.goBack())
-            }
-
-            Button {
-              // Frozen while an action runs, like the preview's actions.
-              enabled: !actionRunning
-              opacity: enabled ? 1 : 0.4
-              text: "Close"
-              iconText: "✕"
-              bordered: true
-              foreground: root.foreground
-              accent: root.accent
-              fontFamily: root.fontFamily
-              onClicked: root.close()
-            }
-          }
-        }
-
-        PanelHero {
-          id: hero
+        HeroBar {
+          id: heroBar
 
           visible: root.view !== "preview"
           anchors.top: parent.top
           anchors.left: parent.left
           anchors.right: parent.right
           height: root.heroHeight
+          view: root.view
+          themeName: root.themeName
+          versionedName: root.versionedName
+          logoPath: root.logoPath
+          dev: root.dev
+          actionRunning: root.actionRunning
+          saved: setupSettings.saved
+          wallpapers: root.globalCounts.wallpapers
+          installed: root.globalCounts.installed
+          storageLimitReached: root.storageLimitReached
+          storageLimitReason: root.storageLimitReason
           foreground: root.foreground
+          accent: root.accent
           fontFamily: root.fontFamily
-          iconComponent: heroIcon
-          trailingControl: heroActions
-          title: (root.view === "help"
-            ? "Guide & support"
+          onRefreshRequested: root.refresh()
+          onBackRequested: root.view === "help"
+            ? root.closeHelp()
             : (root.view === "setup"
-              ? "Setup & options"
-              : (root.view === "themes"
-                ? "Theme selection"
-                : ("Theme / " + Model.ucfirst(root.themeName))))).toUpperCase()
-          detail: ""
-          meta: root.view === "help"
-            ? root.versionedName
-            : (root.view === "setup"
-              ? root.versionedName
-              : (root.view === "themes"
-                ? root.versionedName
-                : "browse and manage wallpapers"))
+              ? root.closeSetup()
+              : (root.view === "custom" ? root.closeCustomInstall() : root.goBack()))
+          onCloseRequested: root.close()
+          onHelpRequested: root.openHelp()
+          onReleasesRequested: {
+            Qt.openUrlExternally(root.pluginLinks.releases)
+            root.close()
+          }
+          onGithubRequested: {
+            Qt.openUrlExternally(root.pluginRepoUrl)
+            root.close()
+          }
+          onShowThemesRequested: root.showThemes()
+          onLimitRequested: root.openSetupDownload()
         }
 
         PanelSeparator {
           id: heroRule
           visible: root.view !== "preview"
-          anchors.top: hero.bottom
+          anchors.top: heroBar.bottom
           anchors.topMargin: Style.space(14)
           // Full card width: cancel the content padding so the rule reaches the
           // border on both sides.
@@ -2518,613 +2848,36 @@ Item {
         // Left: vertical list of themes. Right: large preview with the theme
         // palette, description and bulk actions. One `selectedIndex` drives the
         // list highlight and the detail pane for mouse and keyboard alike.
-        Item {
+        ThemeSelectionView {
           id: themesView
 
           visible: root.view === "themes"
           anchors.top: heroRule.bottom
           anchors.left: parent.left
+          anchors.right: parent.right
           // Full-bleed on the right: cancel the content padding so the detail
           // image touches the border (the master list keeps its own margins).
-          anchors.right: parent.right
           anchors.rightMargin: -card.rightPadding
-          anchors.bottom: footer.top
-
-          Row {
-            id: themesRow
-
-            anchors.fill: parent
-            spacing: 0
-
-            // ---- master: theme list
-            Item {
-              id: themeListPane
-
-              width: Math.max(Style.space(210),
-                Math.floor((themesRow.width - themesRow.spacing) * 0.26))
-              height: parent.height
-
-              SearchField {
-                id: searchBar
-
-                anchors.top: parent.top
-                anchors.topMargin: Style.space(12)
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.rightMargin: root.contentMargin
-                text: root.filterText
-                placeholder: "Search themes…"
-                active: root.searching
-                foreground: root.foreground
-                accent: root.accent
-                fontFamily: root.fontFamily
-                onActivated: root.startSearch()
-                onCleared: root.setThemeFilter("")
-              }
-
-              ListView {
-                id: themesList
-
-                anchors.top: searchBar.bottom
-                anchors.topMargin: Style.space(10)
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.rightMargin: root.contentMargin
-                anchors.bottom: addSource.top
-                anchors.bottomMargin: root.contentSpacing
-                clip: true
-                spacing: Style.space(4)
-                model: root.activeThemesModel
-
-                delegate: Item {
-                  id: themeRow
-                  required property int index
-                  required property var model
-
-                  // Mouse hover only lights the plate up; it never moves the
-                  // current theme. Clicking confirms the selection.
-                  property bool hovered: false
-
-                  width: themesList.width
-                  height: root.themeRowHeight
-
-                  // Dark row plate, slightly lifted off the card, as in the
-                  // mockup. The CursorSurface paints the cursor/selected fill on
-                  // top of it.
-                  Rectangle {
-                    anchors.fill: parent
-                    radius: Style.cornerRadius
-                    // Hover lightens the plate only; the CursorSurface still
-                    // paints the actual cursor/selected fill on top.
-                    color: themeRow.hovered
-                      ? Style.hoverFillFor(root.foreground, root.accent)
-                      : Util.alpha(root.foreground, 0.05)
-                  }
-
-                  CursorSurface {
-                    id: themeRowCard
-
-                    anchors.fill: parent
-                    foreground: root.foreground
-                    accent: root.accent
-                    hasCursor: root.cursorActive && root.view === "themes"
-                      && root.selectedIndex === themeRow.index
-
-                    RoundedImage {
-                      id: themeRowThumb
-
-                      anchors.left: parent.left
-                      anchors.leftMargin: Style.space(6)
-                      anchors.verticalCenter: parent.verticalCenter
-                      width: Style.space(72)
-                      height: Style.space(48)
-                      inset: Style.space(2)
-                      source: themeRow.model.preview
-                    }
-
-                    Column {
-                      anchors.left: themeRowThumb.right
-                      anchors.leftMargin: Style.space(10)
-                      anchors.right: themeDot.left
-                      anchors.rightMargin: Style.space(10)
-                      anchors.verticalCenter: parent.verticalCenter
-                      spacing: Style.space(2)
-
-                      Text {
-                        width: parent.width
-                        textFormat: Text.PlainText
-                        text: Model.themeLabel(themeRow.model)
-                        color: root.foreground
-                        font.family: root.fontFamily
-                        font.pixelSize: Style.font.subtitle
-                        font.bold: true
-                        font.letterSpacing: 1.2
-                        elide: Text.ElideRight
-                      }
-
-                      Text {
-                        width: parent.width
-                        textFormat: Text.PlainText
-                        text: Model.themeStatusLabel(themeRow.model)
-                        color: root.dim
-                        font.family: root.fontFamily
-                        font.pixelSize: Style.font.bodySmall
-                        elide: Text.ElideRight
-                      }
-                    }
-
-                    Rectangle {
-                      id: themeDot
-
-                      anchors.right: parent.right
-                      anchors.rightMargin: Style.space(12)
-                      anchors.verticalCenter: parent.verticalCenter
-                      width: Style.space(9)
-                      height: width
-                      radius: width / 2
-                      color: {
-                        if (root.busy && root.actionTheme === themeRow.model.name)
-                          return root.statusInstalling
-                        var state = Model.themeState(themeRow.model)
-                        if (state === "installed") return root.statusInstalled
-                        if (state === "partial") return root.statusInstalling
-                        return Util.alpha(root.foreground, 0.25)
-                      }
-                    }
-
-                    // Accent ring on the selected row: same treatment as the
-                    // wallpaper tiles (the kit's cursor border reads faint).
-                    BorderSurface {
-                      anchors.fill: parent
-                      color: "transparent"
-                      radius: Style.cornerRadius
-                      borderSpec: themeRowCard.hasCursor
-                        ? Border.flat(root.accent, Style.space(2))
-                        : Border.none()
-                    }
-
-                    HoverHandler {
-                      cursorShape: Qt.PointingHandCursor
-                      onHoveredChanged: themeRow.hovered = hovered
-                    }
-
-                    // Click confirms the current theme; hover only lights the
-                    // row up. Double click enters the wallpaper grid, same as
-                    // Enter/Space or the detail "Browse" button.
-                    TapHandler {
-                      onTapped: root.takeCursor(themeRow.index)
-                      onDoubleTapped: {
-                        root.takeCursor(themeRow.index)
-                        root.selectTheme(themeRow.index)
-                      }
-                    }
-                  }
-                }
-              }
-
-              Text {
-                anchors.top: searchBar.bottom
-                anchors.topMargin: Style.space(24)
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.rightMargin: root.contentMargin
-                visible: root.filterText !== "" && root.activeThemesModel.count === 0
-                textFormat: Text.PlainText
-                text: "No matches for “" + root.filterText + "”"
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                horizontalAlignment: Text.AlignHCenter
-                elide: Text.ElideRight
-              }
-
-              // Placeholder for multiple remote sources; wired when the script
-              // learns to manage more than the single configured repo.
-              Item {
-                id: addSource
-
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.rightMargin: root.contentMargin
-                anchors.bottom: parent.bottom
-                anchors.bottomMargin: Style.space(24)
-                height: root.actionButtonHeight
-
-                // Dotted rounded outline (Rectangle borders cannot dash).
-                Shape {
-                  id: addSourceOutline
-                  anchors.fill: parent
-
-                  readonly property real r: Math.max(0, Style.cornerRadius)
-                  readonly property real w: width - addSourceOutlinePath.strokeWidth
-                  readonly property real h: height - addSourceOutlinePath.strokeWidth
-                  readonly property real inset: addSourceOutlinePath.strokeWidth / 2
-
-                  ShapePath {
-                    id: addSourceOutlinePath
-                    strokeColor: root.dim
-                    strokeWidth: 1
-                    fillColor: "transparent"
-                    strokeStyle: ShapePath.DashLine
-                    dashPattern: [3, 3]
-                    capStyle: ShapePath.FlatCap
-
-                    startX: addSourceOutline.inset + addSourceOutline.r
-                    startY: addSourceOutline.inset
-                    PathLine {
-                      x: addSourceOutline.inset + addSourceOutline.w - addSourceOutline.r
-                      y: addSourceOutline.inset
-                    }
-                    PathArc {
-                      x: addSourceOutline.inset + addSourceOutline.w
-                      y: addSourceOutline.inset + addSourceOutline.r
-                      radiusX: addSourceOutline.r
-                      radiusY: addSourceOutline.r
-                    }
-                    PathLine {
-                      x: addSourceOutline.inset + addSourceOutline.w
-                      y: addSourceOutline.inset + addSourceOutline.h - addSourceOutline.r
-                    }
-                    PathArc {
-                      x: addSourceOutline.inset + addSourceOutline.w - addSourceOutline.r
-                      y: addSourceOutline.inset + addSourceOutline.h
-                      radiusX: addSourceOutline.r
-                      radiusY: addSourceOutline.r
-                    }
-                    PathLine {
-                      x: addSourceOutline.inset + addSourceOutline.r
-                      y: addSourceOutline.inset + addSourceOutline.h
-                    }
-                    PathArc {
-                      x: addSourceOutline.inset
-                      y: addSourceOutline.inset + addSourceOutline.h - addSourceOutline.r
-                      radiusX: addSourceOutline.r
-                      radiusY: addSourceOutline.r
-                    }
-                    PathLine {
-                      x: addSourceOutline.inset
-                      y: addSourceOutline.inset + addSourceOutline.r
-                    }
-                    PathArc {
-                      x: addSourceOutline.inset + addSourceOutline.r
-                      y: addSourceOutline.inset
-                      radiusX: addSourceOutline.r
-                      radiusY: addSourceOutline.r
-                    }
-                  }
-                }
-
-                Text {
-                  anchors.centerIn: parent
-                  textFormat: Text.PlainText
-                  text: root.addSourceSoon ? "COMING SOON (◕‿◕)" : "+ Add remote source"
-                  color: root.addSourceSoon ? root.accent : root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                }
-
-                HoverHandler { cursorShape: Qt.PointingHandCursor }
-                TapHandler {
-                  onTapped: root.triggerAddSource()
-                }
-
-                Timer {
-                  id: addSourceReset
-                  interval: 3000
-                  onTriggered: root.addSourceSoon = false
-                }
-              }
-
-              // Right rule of the master column, with the content padded off it.
-              Rectangle {
-                anchors.top: parent.top
-                anchors.bottom: parent.bottom
-                anchors.right: parent.right
-                width: 1
-                color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12)
-              }
-            }
-
-              // ---- detail: preview + palette + actions
-            Item {
-              id: themeDetail
-
-              width: themesRow.width - themeListPane.width - themesRow.spacing
-              height: parent.height
-              clip: true
-
-              // Double click on the large preview opens the theme's wallpapers,
-              // exactly like the "Browse" button.
-              TapHandler {
-                onDoubleTapped: root.selectTheme(root.selectedIndex)
-              }
-
-              // Full-bleed preview: no radius, no padding, the whole cell is
-              // the image (the cell edges are the section rules). Two layers:
-              // the backdrop keeps the previous frame visible while the front
-              // one decodes, so moving through themes never flashes black.
-              Image {
-                id: detailImageBack
-
-                anchors.fill: parent
-                fillMode: Image.PreserveAspectCrop
-                asynchronous: true
-                cache: true
-                source: root.detailBackdrop
-                sourceSize: Qt.size(Math.max(1, Math.ceil(width * 2)),
-                  Math.max(1, Math.ceil(height * 2)))
-              }
-
-              Image {
-                id: detailImage
-
-                anchors.fill: parent
-                fillMode: Image.PreserveAspectCrop
-                asynchronous: true
-                cache: true
-                // Cached local file once resolved (small remote `preview` only
-                // on the first paint). `sourceSize` caps the decode to ~2× the
-                // pane, so the pixmap cache is not evicted by a full 2K frame.
-                source: root.detailImageShown
-                sourceSize: Qt.size(Math.max(1, Math.ceil(width * 2)),
-                  Math.max(1, Math.ceil(height * 2)))
-                onStatusChanged: if (status === Image.Ready && source !== "")
-                  root.detailBackdrop = source
-              }
-
-              // Dark gradient so the palette, name and description stay legible
-              // over the wallpaper.
-              Rectangle {
-                anchors.fill: parent
-                gradient: Gradient {
-                  GradientStop { position: 0.0; color: Util.alpha(root.background, 0.0) }
-                  GradientStop { position: 0.45; color: Util.alpha(root.background, 0.3) }
-                  GradientStop { position: 0.75; color: Util.alpha(root.background, 0.85) }
-                  GradientStop { position: 1.0; color: root.background }
-                }
-              }
-
-              Column {
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
-                anchors.leftMargin: Style.space(22)
-                anchors.rightMargin: Style.space(22)
-                anchors.bottomMargin: Style.space(24)
-                spacing: Style.space(22)
-
-                // Exact ink boxes: `TextMetrics.tightBoundingRect` gives the real
-                // glyph extents, so each block is trimmed to what is actually
-                // drawn. Every gap in the column is then exactly `spacing` — a
-                // flex `space-y`, independent of font bearings.
-                FontMetrics { id: titleMetrics; font: titleText.font }
-                FontMetrics { id: bodyMetrics; font: descriptionText.font }
-                TextMetrics { id: titleInk; font: titleText.font; text: titleText.text }
-                TextMetrics { id: descInk; font: descriptionText.font; text: descriptionText.text }
-
-                Row {
-                  id: paletteRow
-                  spacing: Style.space(6)
-                  // No palette in the dataset -> no swatches and no gap.
-                  visible: paletteRepeater.count > 0
-
-                  Repeater {
-                    id: paletteRepeater
-                    model: Model.paletteList(root.selectedTheme)
-
-                    delegate: Rectangle {
-                      width: Style.space(26)
-                      height: width
-                      radius: Math.max(2, Style.cornerRadius - Style.space(2))
-                      color: modelData
-                      // subtle outline so the theme's dark neutrals (background,
-                      // muted) stay visible on the wallpaper/scrim.
-                      border.width: Math.max(1, Style.normalBorderWidth)
-                      border.color: Util.alpha(root.foreground, 0.25)
-                    }
-                  }
-                }
-
-                Item {
-                  id: titleBlock
-                  width: parent.width
-                  height: titleInk.tightBoundingRect.height
-
-                  Text {
-                    id: titleText
-                    width: parent.width
-                    // pull the line box up so the ink top sits at the block top
-                    y: -(titleMetrics.ascent + titleInk.tightBoundingRect.y)
-                    textFormat: Text.PlainText
-                    text: Model.themeLabel(root.selectedTheme)
-                    color: root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.displayLarge
-                    font.bold: true
-                    elide: Text.ElideRight
-                    lineHeightMode: Text.FixedHeight
-                    lineHeight: titleMetrics.ascent + titleMetrics.descent
-                  }
-                }
-
-                Item {
-                  id: descriptionBlock
-
-                  width: parent.width
-                  // Internal line pitch stays comfortable (1.4×); the block is
-                  // trimmed to the real ink, so the outer half-leading is gone.
-                  readonly property real lineBox: Math.round(Style.font.body * 1.4)
-                  readonly property real leading: lineBox - (bodyMetrics.ascent + bodyMetrics.descent)
-                  readonly property real lineCount: descriptionText.lineCount
-                  height: Math.max(0, (lineCount - 1) * lineBox + descInk.tightBoundingRect.height)
-
-                  Text {
-                    id: descriptionText
-
-                    // pull the line box up so the first line's ink top sits at
-                    // the block top
-                    y: -(bodyMetrics.ascent + descriptionBlock.leading / 2
-                      + descInk.tightBoundingRect.y)
-                    width: parent.width
-                    textFormat: Text.PlainText
-                    text: {
-                      var theme = root.selectedTheme
-                      if (!theme) return ""
-                      var bits = []
-                      if (theme.description) bits.push(theme.description)
-                      bits.push(theme.collections
-                        + (theme.collections === 1 ? " collection" : " collections"))
-                      bits.push(theme.count
-                        + (theme.count === 1 ? " wallpaper" : " wallpapers"))
-                      bits.push(theme.installed + " installed locally")
-                      return bits.join(" · ")
-                    }
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-                    lineHeightMode: Text.FixedHeight
-                    lineHeight: descriptionBlock.lineBox
-                    wrapMode: Text.WordWrap
-                    maximumLineCount: 3
-                    elide: Text.ElideRight
-                  }
-                }
-
-                Item {
-                  width: parent.width
-                  height: detailActions.height
-
-                  Row {
-                    id: detailActions
-                    anchors.left: parent.left
-                    anchors.top: parent.top
-                    spacing: Style.spacing.controlGap
-
-                    Button {
-                      text: "Browse " + (root.selectedTheme ? root.selectedTheme.count : "")
-                      iconText: "󰉖"
-                      height: root.actionButtonHeight
-                      bordered: false
-                      background: Util.alpha(root.foreground, 0.12)
-                      foreground: root.foreground
-                      accent: root.accent
-                      fontFamily: root.fontFamily
-                      onClicked: root.selectTheme(root.selectedIndex)
-                    }
-
-                    Button {
-                      visible: root.selectedThemePresent
-                      enabled: !root.actionRunning && !root.selectedThemeFull
-                        && !root.storageLimitReached
-                      opacity: enabled ? 1 : 0.4
-                      text: "Install (ALL)"
-                      iconText: "󰮏"
-                      height: root.actionButtonHeight
-                      bordered: true
-                      foreground: root.foreground
-                      accent: root.accent
-                      fontFamily: root.fontFamily
-                      onClicked: root.actionInstallTheme()
-                    }
-
-                    Button {
-                      visible: root.selectedThemePresent
-                      enabled: !root.actionRunning && !root.selectedThemeFull
-                        && !root.storageLimitReached
-                      opacity: enabled ? 1 : 0.4
-                      text: "Shuffle (" + setupSettings.shuffleCount + ")"
-                      iconText: "󰮏"
-                      height: root.actionButtonHeight
-                      bordered: true
-                      foreground: root.foreground
-                      accent: root.accent
-                      fontFamily: root.fontFamily
-                      onClicked: root.actionRandomInstall()
-                    }
-
-                    Button {
-                      visible: root.selectedThemePresent
-                      enabled: !root.actionRunning && !root.selectedThemeEmpty
-                      opacity: enabled ? 1 : 0.4
-                      text: "Uninstall"
-                      iconText: "󰱢"
-                      height: root.actionButtonHeight
-                      bordered: true
-                      foreground: root.foreground
-                      accent: root.accent
-                      fontFamily: root.fontFamily
-                      onClicked: root.actionRemoveThemeAll()
-                    }
-
-                    // Custom Install placeholder for the current theme, always
-                    // clickable (also while an operation runs): for now it only
-                    // flashes COMING SOON.
-                    Button {
-                      text: root.setupSoon ? "COMING SOON (◕‿◕)" : "Custom Install"
-                      iconText: "󰒓"
-                      height: root.actionButtonHeight
-                      bordered: true
-                      foreground: root.setupSoon ? root.accent : root.foreground
-                      accent: root.accent
-                      fontFamily: root.fontFamily
-                      onClicked: root.triggerSetup()
-                    }
-
-                    // The Omarchy theme is not installed: installing its
-                    // wallpapers is impossible, so show a non-interactive
-                    // info badge (no hover, no tooltip, no action).
-                    BorderSurface {
-                      visible: !root.selectedThemePresent
-                      width: badgeRow.implicitWidth + leftPadding + rightPadding
-                      height: root.actionButtonHeight
-                      radius: Style.cornerRadius
-                      color: "transparent"
-                      borderSpec: Border.controlSpec("normal", root.foreground, root.accent)
-                      leftPadding: Style.spacing.controlPaddingX
-                      rightPadding: Style.spacing.controlPaddingX
-
-                      Row {
-                        id: badgeRow
-                        anchors.centerIn: parent
-                        spacing: Style.spacing.controlGap
-
-                        Text {
-                          textFormat: Text.PlainText
-                          text: "󰀪"
-                          color: root.foreground
-                          font.family: root.fontFamily
-                          font.pixelSize: Style.font.icon
-                          anchors.verticalCenter: parent.verticalCenter
-                        }
-
-                        Text {
-                          textFormat: Text.PlainText
-                          text: "Theme not found"
-                          color: root.foreground
-                          font.family: root.fontFamily
-                          font.pixelSize: Style.font.body
-                          anchors.verticalCenter: parent.verticalCenter
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-
-          // Running overlay: covers the whole themes body (sidebar + detail) so
-          // a running bulk install/remove freezes navigation; only Esc cancels.
-          RunningOverlay {
-            anchors.fill: parent
-            z: 6
-            running: root.actionRunning
-            label: root.actionLabel
-            foreground: root.foreground
-            background: root.background
-            accent: root.accent
-            fontFamily: root.fontFamily
-          }
+          anchors.bottom: actionFooter.top
+          manager: root
+          shuffleCount: setupSettings.shuffleCount
+        }
+
+        // ---- custom install view --------------------------------------------
+        // Previews + theme info on the left, the install choices on the right.
+        // The panel owns the catalog load and the actions.
+        CustomInstallView {
+          id: customView
+
+          visible: root.view === "custom"
+          anchors.top: heroRule.bottom
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.bottom: actionFooter.top
+          // Full-bleed on the left: cancel the card padding so the previews
+          // grid starts right after the border.
+          anchors.leftMargin: -card.leftPadding
+          manager: root
         }
 
         // ---- help view ------------------------------------------------------
@@ -3139,7 +2892,7 @@ Item {
           anchors.top: heroRule.bottom
           anchors.left: parent.left
           anchors.right: parent.right
-          anchors.bottom: footer.top
+          anchors.bottom: actionFooter.top
           helpRoot: root.helpRoot
           links: {
             var l = root.pluginLinks
@@ -3155,7 +2908,7 @@ Item {
           index: root.helpIndex
           // Same master-pane width as the themes screen, so the two sidebars
           // line up exactly.
-          sidebarWidth: themeListPane.width
+          sidebarWidth: themesView.paneWidth
           foreground: root.foreground
           background: root.background
           accent: root.accent
@@ -3176,7 +2929,7 @@ Item {
           anchors.top: heroRule.bottom
           anchors.left: parent.left
           anchors.right: parent.right
-          anchors.bottom: footer.top
+          anchors.bottom: actionFooter.top
 
           SetupView {
             id: setupSettings
@@ -3190,7 +2943,7 @@ Item {
             roadmap: root.roadmapData
             featureLabel: root.helpIndex && root.helpIndex.feature
               ? root.helpIndex.feature.title : ""
-            sidebarWidth: themeListPane.width
+            sidebarWidth: themesView.paneWidth
             foreground: root.foreground
             background: root.background
             accent: root.accent
@@ -3206,1468 +2959,80 @@ Item {
         }
 
         // ---- wallpapers view: search + grid ---------------------------------
-        Item {
-          id: wallpapersSearchRow
+        WallpapersView {
+          id: wallpapersView
 
           visible: root.view === "wallpapers"
           anchors.top: heroRule.bottom
-          anchors.topMargin: root.contentSpacing
+          anchors.bottom: actionFooter.top
           anchors.left: parent.left
           anchors.right: parent.right
-          height: Math.max(wallpapersSearch.height, selectionActions.implicitHeight,
-            collectionDropdown.height)
-
-          // Collection picker: narrows the grid to one collection of the open
-          // theme, "All collections" by default.
-          Dropdown {
-            id: collectionDropdown
-
-            anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
-            // Same width as a grid tile below, so the picker lines up with the
-            // first column.
-            width: Math.max(Style.space(120), grid.cellWidth - root.tileGap * 2)
-            options: root.collectionOptions
-            value: root.collectionFilter
-            foreground: root.foreground
-            background: root.background
-            accent: root.accent
-            fontFamily: root.fontFamily
-            hasCursor: root.view === "wallpapers" && root.filterFocus === 0
-            onChanged: function(v) {
-              if (!root.searching) root.filterFocus = 0
-              root.setCollectionFilter(v)
-            }
-            // Taking the keyboard focus to open the popup (click or Enter) also
-            // lands the row focus on the picker.
-            onPopupOpenChanged: if (popupOpen && !root.searching) root.filterFocus = 0
-          }
-
-          // Accent ring on the focused filter-row control, same treatment as the
-          // grid tiles and the Setup sidebar.
-          BorderSurface {
-            anchors.fill: collectionDropdown
-            color: "transparent"
-            radius: Style.cornerRadius
-            borderSpec: Border.flat(root.accent, Math.max(1, Style.normalBorderWidth))
-            visible: root.view === "wallpapers" && root.filterFocus === 0
-          }
-
-          // Selection helpers, reachable by keyboard (Left/Right from the
-          // search field, Enter/Space to fire).
-          Row {
-            id: selectionActions
-
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: Style.spacing.controlGap
-
-            Button {
-              text: "Select all"
-              bordered: true
-              foreground: root.foreground
-              accent: root.accent
-              fontFamily: root.fontFamily
-              onClicked: {
-                if (!root.searching) root.filterFocus = 2
-                root.selectAllWallpapers()
-              }
-
-              BorderSurface {
-                anchors.fill: parent
-                color: "transparent"
-                radius: Style.cornerRadius
-                borderSpec: Border.flat(root.accent, Math.max(1, Style.normalBorderWidth))
-                visible: root.view === "wallpapers" && root.filterFocus === 2
-              }
-            }
-
-            Button {
-              text: "Clear"
-              bordered: true
-              foreground: root.foreground
-              accent: root.accent
-              fontFamily: root.fontFamily
-              onClicked: {
-                if (!root.searching) root.filterFocus = 3
-                root.clearWallpaperSelection()
-              }
-
-              BorderSurface {
-                anchors.fill: parent
-                color: "transparent"
-                radius: Style.cornerRadius
-                borderSpec: Border.flat(root.accent, Math.max(1, Style.normalBorderWidth))
-                visible: root.view === "wallpapers" && root.filterFocus === 3
-              }
-            }
-          }
-
-          SearchField {
-            id: wallpapersSearch
-
-            anchors.left: collectionDropdown.right
-            anchors.leftMargin: Style.space(12)
-            anchors.right: selectionActions.left
-            anchors.rightMargin: Style.space(12)
-            anchors.verticalCenter: parent.verticalCenter
-            text: root.wallpaperFilterText
-            placeholder: "Search wallpapers…"
-            active: root.searching
-            foreground: root.foreground
-            accent: root.accent
-            fontFamily: root.fontFamily
-            onActivated: root.startSearch()
-            onCleared: root.setWallpaperFilter("")
-          }
-        }
-
-        // Rule between the search row and the grid. Same `contentSpacing` above
-        // and below, so the search field sits centered between the hero rule and
-        // this one.
-        PanelSeparator {
-          id: wallpapersSearchRule
-
-          visible: root.view === "wallpapers"
-          anchors.top: wallpapersSearchRow.bottom
-          anchors.topMargin: root.contentSpacing
-          anchors.left: parent.left
-          anchors.leftMargin: -card.leftPadding
-          width: card.width - card.borderLeft - card.borderRight
-          foreground: root.foreground
-        }
-
-        GridView {
-          id: grid
-
-          visible: root.view === "wallpapers"
-          anchors.top: wallpapersSearchRule.bottom
-          anchors.topMargin: root.contentSpacing
-          anchors.left: parent.left
-          anchors.right: parent.right
-          // Cancel the outer `tileGap` so the first and last tiles line up with
-          // the content edges of the rows above instead of sitting slightly
-          // inside them.
-          anchors.leftMargin: -root.tileGap
-          anchors.rightMargin: -root.tileGap
-          anchors.bottom: footer.top
-          anchors.bottomMargin: root.contentSpacing
-          model: root.activeWallpapersModel
-          clip: true
-
-          // Grid adapts to the card width: as many columns as fit while keeping
-          // each tile at least ~190px wide (five columns on a regular screen).
-          // Column count comes from the parent width so the negative margins
-          // above cannot add a column.
-          readonly property int columnsHint: Math.max(2, Math.floor(parent.width / root.minTileWidth))
-          readonly property int colCount: Math.max(1, Math.floor(width / cellWidth))
-          cellWidth: Math.floor(width / columnsHint)
-          // Thumbnail is 16:9 and fills the card; code + name overlay it, so no
-          // extra strip is added and no space is wasted.
-          cellHeight: Math.floor((cellWidth - root.tileGap * 2 - root.tileInset * 2) * 9 / 16)
-            + root.tileInset * 2 + root.tileGap * 2
-
-          delegate: Item {
-            id: tile
-            required property int index
-            required property var model
-
-            width: grid.cellWidth
-            height: grid.cellHeight
-
-            CursorSurface {
-              id: tileCard
-
-              anchors.fill: parent
-              anchors.margins: root.tileGap
-              foreground: root.foreground
-              accent: root.accent
-              bordered: true
-              hasCursor: root.cursorActive && root.view === "wallpapers" && root.selectedIndex === tile.index
-              // Persistent state: this is the open theme's default background
-              // (live for the running theme, remembered otherwise).
-              current: root.isThemeDefault(tile.model)
-
-              RoundedImage {
-                id: preview
-                anchors.fill: parent
-                anchors.margins: root.tileInset
-                inset: root.tileInset
-                // Local file when already installed (instant), reduced remote
-                // preview otherwise; fall back to the full-res URL if a preview
-                // is missing. GridView only creates visible delegates, so
-                // nearby tiles load lazily as you scroll.
-                source: String(tile.model.installed) === "1"
-                  ? Util.fileUrl(root.backgroundsDir + "/" + root.themeName + "/" + tile.model.filename)
-                  : (tile.model.preview !== "" ? tile.model.preview : tile.model.url)
-              }
-
-              // Overlay label: translucent band at the bottom of the image so the
-              // code + name stay readable without stealing a row from the grid.
-              Rectangle {
-                id: labelBar
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
-                anchors.margins: root.tileInset
-                height: tileLabels.implicitHeight + Style.space(10)
-                color: Util.alpha(root.background, 0.7)
-                bottomLeftRadius: Math.max(0, Style.cornerRadius - root.tileInset)
-                bottomRightRadius: Math.max(0, Style.cornerRadius - root.tileInset)
-
-                Row {
-                  id: tileLabels
-                  anchors.verticalCenter: parent.verticalCenter
-                  anchors.left: parent.left
-                  anchors.leftMargin: Style.space(8)
-                  anchors.right: parent.right
-                  anchors.rightMargin: Style.space(8)
-                  spacing: Style.space(6)
-
-                  Text {
-                    id: tileCode
-                    textFormat: Text.PlainText
-                    text: tile.model.code
-                    color: root.accent
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    font.bold: true
-                  }
-
-                  Text {
-                    textFormat: Text.PlainText
-                    // Datasets mix cases (country names vs lowercase captions):
-                    // title-case each word so the grid reads consistently.
-                    text: Model.titleCase(tile.model.name)
-                    color: root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    elide: Text.ElideRight
-                    width: Math.max(0, tileLabels.width - tileCode.width - tileLabels.spacing)
-                  }
-                }
-              }
-
-              // Installed disc, top-right of the thumbnail: same state as the
-              // preview's, scaled down with the tile (accent when on disk, dim
-              // otherwise).
-              Rectangle {
-                readonly property int disc: Math.round(Math.max(Style.space(9),
-                  Math.min(Style.space(16), preview.width * 0.075)))
-                readonly property int ring: Math.round(disc * 0.22)
-
-                anchors.top: parent.top
-                anchors.topMargin: root.tileInset + Style.space(8)
-                anchors.right: parent.right
-                anchors.rightMargin: root.tileInset + Style.space(8)
-                width: disc
-                height: disc
-                radius: disc / 2
-                color: Util.alpha(root.background, 0.55)
-
-                Rectangle {
-                  x: parent.ring
-                  y: parent.ring
-                  width: parent.disc - parent.ring * 2
-                  height: width
-                  radius: width / 2
-                  color: String(tile.model.installed) === "1"
-                    ? root.statusInstalled
-                    : Util.alpha(root.foreground, 0.4)
-                }
-              }
-
-              // Selection checkbox, top-left of the thumbnail (the installed
-              // disc is top-right, the DEFAULT pill centered). Shown on the
-              // cursor tile so the mouse can reach it, and kept visible while
-              // checked. Clicking it toggles the check (see the tile TapHandler);
-              // Space does the same from the keyboard.
-              Item {
-                id: checkbox
-
-                readonly property bool checked: root.isWallpaperChecked(tile.model.filename)
-
-                visible: checked || tileCard.hasCursor
-                anchors.top: parent.top
-                anchors.topMargin: root.tileInset + Style.space(8)
-                anchors.left: parent.left
-                anchors.leftMargin: root.tileInset + Style.space(8)
-                width: Math.round(Math.max(Style.space(18),
-                  Math.min(Style.space(26), preview.width * 0.09)))
-                height: width
-
-                Rectangle {
-                  anchors.fill: parent
-                  radius: Math.max(2, Style.space(5))
-                  color: checkbox.checked
-                    ? root.accent
-                    : Util.alpha("#000000", 0.55)
-                  border.width: Math.max(1, Style.normalBorderWidth)
-                  border.color: checkbox.checked
-                    ? root.accent
-                    : Util.alpha(root.foreground, 0.75)
-
-                  Text {
-                    anchors.centerIn: parent
-                    visible: checkbox.checked
-                    text: "✓"
-                    color: root.background
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.bodySmall
-                    font.bold: true
-                  }
-                }
-              }
-
-              // "DEFAULT" pill, centered on the thumbnail, on the theme's
-              // default wallpaper (dark fill so the accent reads on any image).
-              // The corners stay free for the selection checkbox.
-              Pill {
-                visible: root.isThemeDefault(tile.model)
-                anchors.centerIn: parent
-                width: implicitWidth
-                height: implicitHeight
-                label: "DEFAULT"
-                glyph: "✓"
-                tint: root.accent
-                fill: Util.alpha("#000000", 0.65)
-                fontFamily: root.fontFamily
-                hPadding: Style.space(12)
-                vPadding: Style.space(6)
-              }
-
-              // Accent ring on the active tile. The kit's hover-cursor border is
-              // theme-tuned and reads poorly on a busy thumbnail, so selection
-              // follows the shell's own image-picker treatment (accent border at
-              // full opacity, slightly thicker) instead of the faint menu state.
-              BorderSurface {
-                anchors.fill: parent
-                color: "transparent"
-                radius: Style.cornerRadius
-                borderSpec: tileCard.hasCursor
-                  ? Border.flat(root.accent, Style.space(2))
-                  : Border.none()
-              }
-
-              HoverHandler {
-                cursorShape: Qt.PointingHandCursor
-                onHoveredChanged: if (hovered && root.hoverArmed) root.takeCursor(tile.index)
-              }
-
-              // A click opens the fullscreen preview, exactly like Enter: the
-              // tile is a doorway, not a toggle. "Set default" therefore lives
-              // in the preview (double click on the image), because a single
-              // click here already switches view and no second tap can land.
-              // A click that lands on the checkbox toggles the check instead.
-              TapHandler {
-                onTapped: function(eventPoint) {
-                  var p = eventPoint.position
-                  if (checkbox.visible
-                      && p.x >= checkbox.x && p.x <= checkbox.x + checkbox.width
-                      && p.y >= checkbox.y && p.y <= checkbox.y + checkbox.height) {
-                    root.toggleWallpaperCheck(tile.model.filename)
-                    return
-                  }
-                  root.takeCursor(tile.index)
-                  root.showPreview()
-                }
-              }
-            }
-          }
+          manager: root
+          ruleX: -card.leftPadding
+          ruleWidth: card.width - card.borderLeft - card.borderRight
         }
 
         // ---- footer: actions + status ---------------------------------------
         // No footer bar: a separator, borderless controls on the flat surface
         // and a dim caption for status, as in the first-party panels.
-        Column {
-          id: footer
+        ActionFooter {
+          id: actionFooter
 
+          visible: true
           // Kept above `previewView` (z: 10) so its controls stay clickable on
           // the fullscreen preview.
-          visible: true
           z: 11
           anchors.left: parent.left
           anchors.right: parent.right
           anchors.bottom: parent.bottom
           anchors.bottomMargin: -root.footerOverlap
-          spacing: root.footerSpacing
-
-          // Wrapped so the rule can bleed past the footer's own padding to the
-          // card edges (a Column would force its x back to 0).
-          Item {
-            width: parent.width
-            height: 1
-
-            PanelSeparator {
-              x: -card.leftPadding
-              width: card.width - card.borderLeft - card.borderRight
-              foreground: root.foreground
-            }
+          view: root.view
+          foreground: root.foreground
+          accent: root.accent
+          urgent: root.urgent
+          statusInstalled: root.statusInstalled
+          fontFamily: root.fontFamily
+          actionRunning: root.actionRunning
+          installedCount: root.themeCounts.installed
+          availableCount: root.themeCounts.available
+          progressTheme: root.progressTheme
+          checkedCount: root.checkedCount
+          storageLimitReached: root.storageLimitReached
+          currentInstalled: root.currentInstalled
+          sidebarWidth: themesView.paneWidth
+          customPaneWidth: customView.paneWidth - card.leftPadding
+          customInstallEnabled: root.customCanInstall
+          customRemoveEnabled: root.customCanRemove
+          ruleX: -card.leftPadding
+          ruleWidth: card.width - card.borderLeft - card.borderRight
+          setupDropdownOpen: setupSettings.dropdownOpen
+          setupEditing: setupSettings.editing
+          footerSpacing: root.footerSpacing
+          onInstallRequested: root.actionInstall()
+          onRemoveRequested: root.actionRemove()
+          onHelpRequested: root.openHelp()
+          onSetupRequested: root.openSetup()
+          onDatabaseRequested: helpView.openDatabase()
+          onCustomInstallRequested: root.executeCustomInstall()
+          onCustomRemoveRequested: root.executeCustomRemove()
+          onOpenRepoRequested: {
+            Qt.openUrlExternally(root.pluginRepoUrl)
+            root.close()
           }
-
-          // Themes footer: installed/available summary on the left, progress of
-          // the selected theme in the middle, key hints on the right.
-          Item {
-            id: themesFooterRow
-
-            visible: root.view === "themes"
-            width: parent.width
-            height: Math.max(setupButton.implicitHeight,
-              themesSummary.implicitHeight, themeProgress.implicitHeight,
-              themesHints.implicitHeight)
-
-            // Settings: setup of the plugin. Placeholder for now (no action),
-            // but it also gives the themes footer the same height as the other
-            // two, which carry buttons.
-            Button {
-              id: setupButton
-
-              anchors.left: parent.left
-              anchors.verticalCenter: parent.verticalCenter
-              // Frozen (and dimmed) while an action runs, like the rest of the
-              // footer controls.
-              enabled: !actionRunning
-              opacity: enabled ? 1 : 0.4
-              text: "Setup"
-              iconText: "󰒓"
-              bordered: true
-              foreground: root.foreground
-              accent: root.accent
-              fontFamily: root.fontFamily
-              onClicked: root.openSetup()
-            }
-
-            // Installed/available summary, right-aligned against the sidebar
-            // rule so it lines up with the detail zone's content.
-            Row {
-              id: themesSummary
-
-              anchors.right: themesSidebarRule.left
-              anchors.rightMargin: Style.space(22)
-              anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(8)
-
-              Rectangle {
-                anchors.verticalCenter: parent.verticalCenter
-                width: Style.space(8)
-                height: width
-                radius: width / 2
-                color: root.statusInstalled
-              }
-
-              Text {
-                anchors.verticalCenter: parent.verticalCenter
-                textFormat: Text.PlainText
-                text: root.themeCounts.installed + " installed · "
-                  + root.themeCounts.available + " available"
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-            }
-
-            ThemeProgress {
-              id: themeProgress
-
-              // Aligned with the detail buttons above and stretched across the
-              // whole detail zone, up to the key-hints divider.
-              anchors.left: parent.left
-              anchors.leftMargin: themeListPane.width + Style.space(22)
-              anchors.right: hintsRule.left
-              anchors.rightMargin: Style.space(22)
-              anchors.verticalCenter: parent.verticalCenter
-
-              theme: root.progressTheme
-              busy: root.actionRunning
-              foreground: root.foreground
-              accent: root.accent
-              fontFamily: root.fontFamily
-            }
-
-            Text {
-              id: themesHints
-
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              textFormat: Text.StyledText
-              // `&nbsp;` (not plain spaces: StyledText collapses runs of them).
-              text: actionRunning
-                ? root.keyHint("esc", "stop")
-                : root.keyHint("enter", "browse")
-                  + "&nbsp;&nbsp;" + root.keyHint("i", "install")
-                  + "&nbsp;&nbsp;" + root.keyHint("/", "search")
-                  + "&nbsp;&nbsp;" + root.keyHint("esc", "close")
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-
-            // Vertical rules, as in the original mockup: the first continues
-            // the master list's right border into the footer, the second
-            // separates the progress from the key hints.
-            Rectangle {
-              id: themesSidebarRule
-
-              anchors.top: parent.top
-              anchors.bottom: parent.bottom
-              x: themeListPane.width - 1
-              width: 1
-              color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12)
-            }
-
-            Rectangle {
-              id: hintsRule
-
-              anchors.top: parent.top
-              anchors.bottom: parent.bottom
-              anchors.right: themesHints.left
-              anchors.rightMargin: Style.space(20)
-              width: 1
-              color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12)
-            }
-          }
-
-          // Wallpapers footer mirrors the themes one: three sections on a single
-          // row — Install/Uninstall on the left, the open theme's progress in the
-          // middle, the key hints on the right.
-          Item {
-            id: actionRow
-            visible: root.view === "wallpapers"
-            width: parent.width
-            height: Math.max(primaryActions.implicitHeight,
-              wallpapersProgress.implicitHeight, wallpapersHints.implicitHeight)
-
-            Row {
-              id: primaryActions
-              anchors.left: parent.left
-              anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.spacing.controlGap
-
-              // Help, before the actions (the wallpapers header carries none).
-              Button {
-                enabled: !actionRunning
-                opacity: enabled ? 1 : 0.4
-                text: "Help"
-                iconText: "󰘥"
-                bordered: true
-                foreground: root.foreground
-                accent: root.accent
-                fontFamily: root.fontFamily
-                onClicked: root.openHelp()
-              }
-
-              Button {
-                // A batch install is bulk: disabled while a storage cap is
-                // reached (one wallpaper at a time stays available).
-                enabled: !actionRunning && !(root.storageLimitReached && root.checkedCount > 1)
-                opacity: enabled ? 1 : 0.4
-                text: "Install"
-                iconText: "󰮏"
-                bordered: true
-                foreground: root.foreground
-                accent: root.accent
-                fontFamily: root.fontFamily
-                onClicked: root.actionInstall()
-              }
-
-              Button {
-                enabled: !actionRunning
-                opacity: enabled ? 1 : 0.4
-                text: "Uninstall"
-                iconText: "󰩺"
-                bordered: true
-                foreground: root.foreground
-                accent: root.accent
-                fontFamily: root.fontFamily
-                onClicked: root.actionRemove()
-              }
-            }
-
-            // First rule: same x as the themes screen's master/detail divider,
-            // so the Install/Uninstall section spans the sidebar's width.
-            Rectangle {
-              id: wallpapersSidebarRule
-
-              z: 2
-              anchors.top: parent.top
-              anchors.bottom: parent.bottom
-              x: themeListPane.width - 1
-              width: 1
-              color: Qt.rgba(root.foreground.r, root.foreground.g,
-                root.foreground.b, 0.12)
-            }
-
-            ThemeProgress {
-              id: wallpapersProgress
-
-              anchors.left: wallpapersSidebarRule.right
-              anchors.leftMargin: Style.space(22)
-              anchors.right: wallpapersBulkRule.left
-              anchors.rightMargin: Style.space(22)
-              anchors.verticalCenter: parent.verticalCenter
-              theme: root.progressTheme
-              busy: root.actionRunning
-              foreground: root.foreground
-              accent: root.accent
-              fontFamily: root.fontFamily
-            }
-
-            // Second rule, between the progress and the key hints.
-            Rectangle {
-              id: wallpapersBulkRule
-
-              z: 2
-              anchors.top: parent.top
-              anchors.bottom: parent.bottom
-              anchors.right: wallpapersHints.left
-              anchors.rightMargin: Style.space(20)
-              width: 1
-              color: Qt.rgba(root.foreground.r, root.foreground.g,
-                root.foreground.b, 0.12)
-            }
-
-            Text {
-              id: wallpapersHints
-
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              textFormat: Text.StyledText
-              // `&nbsp;` (not plain spaces: StyledText collapses runs of them).
-              text: root.actionRunning
-                ? root.keyHint("esc", "stop")
-                : root.keyHint("enter", "browse")
-                  + "&nbsp;&nbsp;" + root.keyHint("space", "select")
-                  + "&nbsp;&nbsp;" + root.keyHint("i", "install")
-                  + "&nbsp;&nbsp;" + root.keyHint("/", "search")
-                  + "&nbsp;&nbsp;" + root.keyHint("esc", "back")
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-          }
-
-          // Preview footer: Install / Download original on the left, the open
-          // theme's progress in the middle, the key hints on the right.
-          Item {
-            id: previewFooterRow
-
-            visible: root.view === "preview"
-            width: parent.width
-            height: Math.max(previewPrimaryActions.implicitHeight,
-              previewProgress.implicitHeight, previewHints.implicitHeight)
-
-            Row {
-              id: previewPrimaryActions
-
-              anchors.left: parent.left
-              anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.spacing.controlGap
-
-              // Help, before the actions (the big preview's only Help button:
-              // the header carries none).
-              Button {
-                enabled: !actionRunning
-                opacity: enabled ? 1 : 0.4
-                text: "Help"
-                iconText: "󰘥"
-                bordered: true
-                foreground: root.foreground
-                accent: root.accent
-                fontFamily: root.fontFamily
-                onClicked: root.openHelp()
-              }
-
-              Button {
-                id: previewInstall
-
-                enabled: !actionRunning && !root.currentInstalled
-                opacity: enabled ? 1 : 0.4
-                text: "Install"
-                iconText: "󰮏"
-                bordered: true
-                foreground: root.foreground
-                accent: root.accent
-                fontFamily: root.fontFamily
-                onClicked: root.actionInstall()
-              }
-
-              // Same label and theme-red tint as the themes screen's Uninstall;
-              // `Color.urgent` is the theme's red (color1), not a fixed danger.
-              // The border is forced to urgent too (the kit's normal border
-              // would use `foreground` at a low alpha).
-              Button {
-                text: "Uninstall"
-                iconText: "󰩺"
-                enabled: !actionRunning && root.currentInstalled
-                opacity: enabled ? 1 : 0.4
-                bordered: true
-                foreground: root.urgent
-                accent: root.urgent
-                borderSpec: Border.flat(root.urgent, Math.max(1, Style.normalBorderWidth))
-                fontFamily: root.fontFamily
-                onClicked: root.actionRemove()
-              }
-            }
-
-            ThemeProgress {
-              id: previewProgress
-
-              anchors.left: previewSidebarRule.right
-              anchors.leftMargin: Style.space(22)
-              anchors.right: previewHints.left
-              anchors.rightMargin: Style.space(34)
-              anchors.verticalCenter: parent.verticalCenter
-              theme: root.progressTheme
-              busy: root.actionRunning
-              foreground: root.foreground
-              accent: root.accent
-              fontFamily: root.fontFamily
-            }
-
-            // First rule: same x as the themes screen's master/detail divider,
-            // so the Install/Uninstall section spans the sidebar's width.
-            Rectangle {
-              id: previewSidebarRule
-
-              z: 2
-              anchors.top: parent.top
-              anchors.bottom: parent.bottom
-              x: themeListPane.width - 1
-              width: 1
-              color: Qt.rgba(root.foreground.r, root.foreground.g,
-                root.foreground.b, 0.12)
-            }
-
-            Rectangle {
-              z: 2
-              anchors.top: parent.top
-              anchors.bottom: parent.bottom
-              anchors.left: previewProgress.right
-              anchors.leftMargin: Style.space(14)
-              width: 1
-              color: Qt.rgba(root.foreground.r, root.foreground.g,
-                root.foreground.b, 0.12)
-            }
-
-            Text {
-              id: previewHints
-
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              textFormat: Text.StyledText
-              // `&nbsp;` (not plain spaces: StyledText collapses runs of them).
-              text: root.keyHint("enter", "install")
-                + "&nbsp;&nbsp;" + root.keyHint("d", "default")
-                + "&nbsp;&nbsp;" + root.keyHint("u", "uninstall")
-                + "&nbsp;&nbsp;" + root.keyHint("esc", "back")
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-          }
-
-          // Help footer: Setup placeholder plus a direct link to the version
-          // dataset, then the same master/detail divider as the other screens.
-          Item {
-            id: helpFooterRow
-
-            visible: root.view === "help"
-            width: parent.width
-            height: Math.max(helpFooterActions.implicitHeight,
-              helpHints.implicitHeight)
-
-            Row {
-              id: helpFooterActions
-
-              anchors.left: parent.left
-              anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.spacing.controlGap
-
-              // Same placeholder button as the themes footer, so the help footer
-              // keeps the same height as the other screens.
-              Button {
-                id: helpFooterButton
-
-                enabled: !actionRunning
-                opacity: enabled ? 1 : 0.4
-                text: "Setup"
-                iconText: "󰒓"
-                bordered: true
-                foreground: root.foreground
-                accent: root.accent
-                fontFamily: root.fontFamily
-                onClicked: root.openSetup()
-              }
-
-              // Direct link to the version dataset (derived from `base`).
-              Button {
-                enabled: !actionRunning
-                opacity: enabled ? 1 : 0.4
-                text: "Archive RAW"
-                iconText: "󰆼"
-                bordered: true
-                foreground: root.foreground
-                accent: root.accent
-                fontFamily: root.fontFamily
-                onClicked: helpView.openDatabase()
-              }
-
-              // Star the project on GitHub. There is no direct "star" URL, so
-              // this opens the repo (URL from config.links).
-              Button {
-                enabled: !actionRunning
-                opacity: enabled ? 1 : 0.4
-                text: "Star"
-                iconText: "󰓎"
-                bordered: true
-                foreground: root.foreground
-                accent: root.accent
-                fontFamily: root.fontFamily
-                onClicked: {
-                  Qt.openUrlExternally(root.pluginRepoUrl)
-                  root.close()
-                }
-              }
-            }
-
-            // The master/detail divider used by every other footer, continuing
-            // the Help sidebar border.
-            Rectangle {
-              id: helpSidebarRule
-
-              z: 2
-              anchors.top: parent.top
-              anchors.bottom: parent.bottom
-              x: themeListPane.width - 1
-              width: 1
-              color: Qt.rgba(root.foreground.r, root.foreground.g,
-                root.foreground.b, 0.12)
-            }
-
-            Text {
-              id: helpHints
-
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              textFormat: Text.StyledText
-              text: root.keyHint("enter", "open")
-                + "&nbsp;&nbsp;" + root.keyHint("arrows", "move")
-                + "&nbsp;&nbsp;" + root.keyHint("pgup/pgdn", "scroll")
-                + "&nbsp;&nbsp;" + root.keyHint("p", "propose")
-                + "&nbsp;&nbsp;" + root.keyHint("d", "database")
-                + "&nbsp;&nbsp;" + root.keyHint("esc", "back")
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-          }
-
-          // Setup footer: the Help/links group on the left and the keyboard
-          // hints on the right, mirroring the Help footer. "Restore defaults"
-          // lives in the right (SECTIONS) sidebar and the auto-save flash in the
-          // section content.
-          Item {
-            id: setupFooterRow
-
-            visible: root.view === "setup"
-            width: parent.width
-            height: Math.max(setupFooterLeft.implicitHeight,
-              setupHints.implicitHeight)
-
-            // Same left group as the Help footer, with Help in place of Setup.
-            Row {
-              id: setupFooterLeft
-
-              anchors.left: parent.left
-              anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.spacing.controlGap
-
-              Button {
-                enabled: !actionRunning
-                opacity: enabled ? 1 : 0.4
-                text: "Help "
-                iconText: "󰘥"
-                bordered: true
-                foreground: root.foreground
-                accent: root.accent
-                fontFamily: root.fontFamily
-                onClicked: root.openHelp()
-              }
-
-              Button {
-                enabled: !actionRunning
-                opacity: enabled ? 1 : 0.4
-                text: "Archive RAW"
-                iconText: "󰆼"
-                bordered: true
-                foreground: root.foreground
-                accent: root.accent
-                fontFamily: root.fontFamily
-                onClicked: helpView.openDatabase()
-              }
-
-              Button {
-                enabled: !actionRunning
-                opacity: enabled ? 1 : 0.4
-                text: "Star"
-                iconText: "󰓎"
-                bordered: true
-                foreground: root.foreground
-                accent: root.accent
-                fontFamily: root.fontFamily
-                onClicked: {
-                  Qt.openUrlExternally(root.pluginRepoUrl)
-                  root.close()
-                }
-              }
-            }
-
-            // The master/detail divider used by every other footer, continuing
-            // the sidebar border.
-            Rectangle {
-              z: 2
-              anchors.top: parent.top
-              anchors.bottom: parent.bottom
-              x: themeListPane.width - 1
-              width: 1
-              color: Qt.rgba(root.foreground.r, root.foreground.g,
-                root.foreground.b, 0.12)
-            }
-
-            Text {
-              id: setupHints
-
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              textFormat: Text.StyledText
-              text: setupSettings.dropdownOpen
-                ? root.keyHint("arrows", "move")
-                  + "&nbsp;&nbsp;" + root.keyHint("enter", "select")
-                  + "&nbsp;&nbsp;" + root.keyHint("esc", "close")
-                : setupSettings.editing
-                  ? root.keyHint("arrows", "change")
-                    + "&nbsp;&nbsp;" + root.keyHint("enter", "confirm")
-                    + "&nbsp;&nbsp;" + root.keyHint("esc", "cancel")
-                  : root.keyHint("enter", "open")
-                  + "&nbsp;&nbsp;" + root.keyHint("arrows", "move")
-                  + "&nbsp;&nbsp;" + root.keyHint("d", "defaults")
-                  + "&nbsp;&nbsp;" + root.keyHint("?", "help")
-                  + "&nbsp;&nbsp;" + root.keyHint("q", "close")
-                  + "&nbsp;&nbsp;" + root.keyHint("esc", "back")
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-          }
-
         }
 
         // ---- fullscreen preview ---------------------------------------------
-        Item {
+        PreviewView {
           id: previewView
 
           visible: root.view === "preview"
           anchors.fill: parent
           z: 10
-
-          // last source that failed to load, so the hero meta can report it
-          property string failedSource: ""
-
-          // target wallpaper, preloaded in background while the current one
-          // stays up. Remote images come from the disk cache once resolved, so
-          // stepping through the preview no longer re-downloads the 2K original.
-          readonly property string nextSource: {
-            var item = root.currentItem()
-            if (!item) return ""
-            if (String(item.installed) === "1")
-              return Util.fileUrl(root.backgroundsDir + "/" + root.themeName + "/" + item.filename)
-            var cached = root.cachedImagePath(item.url)
-            if (cached !== "") return Util.fileUrl(cached)
-            return item.url
-          }
-
-          // true only when the visible image is the one of the selected item,
-          // so the title never pairs a name with the previous resolution
-          readonly property bool shown: previewImage.status === Image.Ready
-            && String(previewImage.source) === String(nextSource)
-
-          readonly property bool failed: failedSource !== ""
-            && String(failedSource) === String(nextSource)
-
-          // true when an event point falls inside the full-bleed image frame;
-          // used to route taps (image → set default, header → back)
-          function onImage(point) {
-            var p = previewView.mapToItem(previewImageFrame, point.position.x, point.position.y)
-            return p.x >= 0 && p.y >= 0
-              && p.x <= previewImageFrame.width && p.y <= previewImageFrame.height
-          }
-
-          Component {
-            id: previewIcon
-
-            HeroLogo {
-              glyph: ""
-              source: root.logoPath
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-            }
-          }
-
-          Component {
-            id: previewActions
-
-            Row {
-              spacing: Style.spacing.controlGap
-
-              Button {
-                visible: root.dev
-                text: "DEV"
-                iconText: "\uf121"
-                bordered: true
-                foreground: root.accent
-                accent: root.accent
-                fontFamily: root.fontFamily
-              }
-
-              // Global store, same pill as the themes/wallpapers header.
-              StorePill {
-                controlHeight: previewDownloadButton.implicitHeight
-                wallpapers: root.globalCounts.wallpapers
-                installed: root.globalCounts.installed
-                limitReason: root.storageLimitReached ? root.storageLimitReason : ""
-                foreground: root.foreground
-                accent: root.accent
-                fontFamily: root.fontFamily
-                onLimitActivated: root.openSetupDownload()
-              }
-
-              // Real image info ("2K | 2560x1440 | 0.3 MB"), standard colours,
-              // styled like the store pill on the themes screen.
-              BorderSurface {
-                id: previewInfoPill
-
-                visible: root.currentResolution !== "" || root.currentDimensions !== ""
-                  || root.currentSize !== ""
-                height: previewDownloadButton.implicitHeight
-                width: infoRow.implicitWidth + leftPadding + rightPadding
-                radius: Style.cornerRadius
-                color: "transparent"
-                borderSpec: Border.controlSpec("normal", root.foreground, root.accent)
-                leftPadding: Style.spacing.controlPaddingX
-                rightPadding: Style.spacing.controlPaddingX
-
-                Row {
-                  id: infoRow
-                  anchors.centerIn: parent
-                  spacing: Style.space(10)
-
-                  Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    textFormat: Text.PlainText
-                    visible: root.currentResolution !== ""
-                    text: root.currentResolution
-                    color: root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.bodySmall
-                  }
-
-                  Rectangle {
-                    visible: root.currentResolution !== "" && root.currentDimensions !== ""
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: Math.max(1, Style.normalBorderWidth)
-                    height: infoRow.implicitHeight
-                    color: Util.alpha(root.foreground, 0.25)
-                  }
-
-                  Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    textFormat: Text.PlainText
-                    visible: root.currentDimensions !== ""
-                    text: root.currentDimensions
-                    color: root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.bodySmall
-                  }
-
-                  Rectangle {
-                    visible: root.currentSize !== ""
-                      && (root.currentResolution !== "" || root.currentDimensions !== "")
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: Math.max(1, Style.normalBorderWidth)
-                    height: infoRow.implicitHeight
-                    color: Util.alpha(root.foreground, 0.25)
-                  }
-
-                  Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    textFormat: Text.PlainText
-                    visible: root.currentSize !== ""
-                    text: root.currentSize
-                    color: root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.bodySmall
-                  }
-                }
-              }
-
-              Button {
-                id: previewDownloadButton
-
-                enabled: !actionRunning
-                opacity: enabled ? 1 : 0.4
-                text: "Download"
-                iconText: "󰇚"
-                bordered: true
-                foreground: root.foreground
-                accent: root.accent
-                fontFamily: root.fontFamily
-                onClicked: root.actionDownloadOriginal()
-              }
-
-              Button {
-                enabled: !actionRunning
-                opacity: enabled ? 1 : 0.4
-                text: "Back"
-                iconText: "󰁍"
-                bordered: true
-                foreground: root.foreground
-                accent: root.accent
-                fontFamily: root.fontFamily
-                onClicked: root.closePreview()
-              }
-
-              Button {
-                enabled: !actionRunning
-                opacity: enabled ? 1 : 0.4
-                text: "Close"
-                iconText: "✕"
-                bordered: true
-                foreground: root.foreground
-                accent: root.accent
-                fontFamily: root.fontFamily
-                onClicked: root.close()
-              }
-            }
-          }
-
-          PanelHero {
-            id: previewHero
-
-            anchors.top: parent.top
-            anchors.left: parent.left
-            anchors.right: parent.right
-            height: root.heroHeight
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            iconComponent: previewIcon
-            trailingControl: previewActions
-            // "Theme / Catppuccin / Preview": the file name below already
-            // identifies the wallpaper, so the title stays short.
-            title: ("Theme / " + Model.ucfirst(root.themeName) + " / Preview").toUpperCase()
-            // Second line: just the file name, middle-elided so the extension
-            // and resolution at the end stay readable; resolution and size live
-            // in the info pill on the right.
-            meta: {
-              var item = root.currentItem()
-              if (!item) return ""
-              if (previewView.failed) return "failed to load"
-              return Model.elideMiddle(item.filename, root.fileNameMaxChars)
-            }
-          }
-
-          PanelSeparator {
-            id: previewRule
-            anchors.top: previewHero.bottom
-            // Same gap as `heroRule`, so the preview header reads as tall as the
-            // other screens'.
-            anchors.topMargin: Style.space(14)
-            // Full card width, like the hero rule.
-            anchors.left: parent.left
-            anchors.leftMargin: -card.leftPadding
-            width: card.width - card.borderLeft - card.borderRight
-            foreground: root.foreground
-          }
-
-          Item {
-            id: previewImageFrame
-
-            // Attached to the rule above and the footer rule below: the image
-            // fills the space between them.
-            anchors.top: previewRule.bottom
-            // Full-bleed but inside the border: cancel only the card padding so
-            // the image touches the border's inner edge, which stays visible.
-            anchors.left: parent.left
-            anchors.leftMargin: -card.leftPadding
-            anchors.right: parent.right
-            anchors.rightMargin: -card.rightPadding
-            // Footer is a sibling of `previewView`, so it cannot be an anchor
-            // target: reserve its height above the bottom instead, cancelling
-            // the footer's own overlap so the image stays glued to its rule.
-            anchors.bottom: parent.bottom
-            anchors.bottomMargin: footer.height - root.footerOverlap
-            clip: true
-
-            Image {
-              id: previewImage
-
-              anchors.fill: parent
-              fillMode: Image.PreserveAspectCrop
-              asynchronous: true
-              cache: true
-              opacity: status === Image.Ready ? 1 : 0
-              Behavior on opacity { NumberAnimation { duration: 180 } }
-            }
-
-            // Installed disc, top-right of the image: accent when on disk, dim
-            // otherwise. Right margin matches the card padding so it lines up
-            // with the header/footer controls.
-            Rectangle {
-              // Ring width is subtracted on all sides, so the inner dot is
-              // exactly centred whatever the spacing scale rounds to.
-              readonly property int disc: Math.round(Style.space(18))
-              readonly property int ring: Math.round(Style.space(4))
-
-              anchors.top: parent.top
-              anchors.topMargin: Style.space(12)
-              anchors.right: parent.right
-              anchors.rightMargin: card.rightPadding
-              width: disc
-              height: disc
-              radius: disc / 2
-              color: Util.alpha(root.background, 0.55)
-
-              Rectangle {
-                x: parent.ring
-                y: parent.ring
-                width: parent.disc - parent.ring * 2
-                height: width
-                radius: width / 2
-                color: root.currentInstalled
-                  ? root.statusInstalled
-                  : Util.alpha(root.foreground, 0.4)
-              }
-            }
-
-            // "DEFAULT" pill, top-left over the image. Dark fill so the accent
-            // text reads over any wallpaper (the plain outline alone washed out
-            // on bright images).
-            Pill {
-              id: previewDefaultPill
-
-              visible: root.currentIsDefault
-              anchors.top: parent.top
-              anchors.topMargin: Style.space(12)
-              anchors.left: parent.left
-              anchors.leftMargin: card.leftPadding
-              width: implicitWidth
-              height: implicitHeight
-              label: "DEFAULT"
-              glyph: "✓"
-              tint: root.accent
-              fill: Util.alpha("#000000", 0.65)
-              fontFamily: root.fontFamily
-            }
-
-            // Destination path of the open wallpaper, bottom-left of the image.
-            // Theme background fill (not pure black) with a border; vertically
-            // centred with the filmstrip on the right. Shown whether or not the
-            // file is installed.
-            BorderSurface {
-              id: previewPathPill
-
-              anchors.left: parent.left
-              anchors.leftMargin: root.overlayInset
-              anchors.bottom: parent.bottom
-              anchors.bottomMargin: root.overlayInset
-              readonly property int padLeft: Style.space(14)
-              readonly property int padRight: Style.space(32)
-
-              width: Math.min(pathText.implicitWidth + padLeft + padRight,
-                parent.width - card.leftPadding - Style.space(12))
-              // Same height as the filmstrip on the right, so the two overlays
-              // read as one row; the path itself stays vertically centred.
-              height: previewStrip.height
-              radius: Style.cornerRadius
-              color: Util.alpha(root.background, root.overlayFillAlpha)
-              borderSpec: Border.flat(Util.alpha(root.foreground, 0.22),
-                Math.max(1, Style.normalBorderWidth))
-
-              Text {
-                id: pathText
-
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.leftMargin: parent.padLeft
-                anchors.rightMargin: parent.padRight
-                anchors.verticalCenter: parent.verticalCenter
-                textFormat: Text.PlainText
-                // Same middle-elision as the header: the directory head and the
-                // file tail stay readable at any length.
-                text: Model.elideMiddle(root.currentInstallPath, root.pathMaxChars)
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                font.letterSpacing: -0.8
-                elide: Text.ElideMiddle
-              }
-            }
-
-          }
-
-          // Running overlay: opaque scrim over the image with an accent
-          // spinner and a pulsing caption while an action runs.
-          RunningOverlay {
-            anchors.fill: previewImageFrame
-            z: 6
-            running: root.actionRunning
-            label: root.actionLabel
-            foreground: root.foreground
-            background: root.background
-            accent: root.accent
-            fontFamily: root.fontFamily
-          }
-
-          // Thumbnail navigator: a filmstrip of neighbouring wallpapers that
-          // follows the selection (arrows / h/l) and sits bottom-right of the
-          // image. Clicking a cell jumps to it.
-          BorderSurface {
-            id: previewStrip
-
-            readonly property real cellW: Style.space(64)
-            readonly property real cellH: Math.round(cellW * 9 / 16)
-            readonly property int visibleCells: 7
-
-            anchors.right: parent.right
-            // The strip lives in the padded content area, so no lateral margin:
-            // its right edge lines up with the footer controls and the grids.
-            anchors.rightMargin: 0
-            anchors.bottom: parent.bottom
-            // Lifted so the strip's bottom edge lines up with the path pill's.
-            anchors.bottomMargin: footer.height - root.footerOverlap
-              + root.overlayInset
-            width: visibleCells * cellW + (visibleCells - 1) * previewStripList.spacing
-              + contentLeftInset + contentRightInset
-            height: cellH + contentTopInset + contentBottomInset
-            radius: Style.cornerRadius
-            color: Util.alpha(root.background, root.overlayFillAlpha)
-            borderSpec: Border.flat(Util.alpha(root.foreground, 0.18),
-              Math.max(1, Style.normalBorderWidth))
-            padding: Style.space(6)
-
-            ListView {
-              id: previewStripList
-
-              anchors.fill: parent
-              anchors.leftMargin: previewStrip.contentLeftInset
-              anchors.rightMargin: previewStrip.contentRightInset
-              anchors.topMargin: previewStrip.contentTopInset
-              anchors.bottomMargin: previewStrip.contentBottomInset
-              orientation: ListView.Horizontal
-              spacing: Style.space(4)
-              clip: true
-              model: root.activeWallpapersModel
-              currentIndex: root.selectedIndex
-              // Scroll the strip ourselves so the current cell is centred but
-              // the ends stay flush: first cell at the left edge, last at the
-              // right edge, with no blank gutter.
-              highlightFollowsCurrentItem: false
-
-              readonly property real cellStep: previewStrip.cellW + spacing
-
-              function positionStrip() {
-                var maxX = Math.max(0, contentWidth - width)
-                var target = currentIndex * cellStep + previewStrip.cellW / 2 - width / 2
-                contentX = Math.max(0, Math.min(maxX, target))
-              }
-
-              onCurrentIndexChanged: positionStrip()
-              onContentWidthChanged: positionStrip()
-              onWidthChanged: positionStrip()
-
-              Behavior on contentX {
-                NumberAnimation { duration: 150; easing.type: Easing.OutCubic }
-              }
-
-              delegate: Item {
-                id: stripCell
-
-                required property int index
-                required property var model
-
-                width: previewStrip.cellW
-                height: previewStrip.cellH
-
-                RoundedImage {
-                  anchors.fill: parent
-                  anchors.margins: Style.space(2)
-                  inset: Style.space(2)
-                  source: String(stripCell.model.installed) === "1"
-                    ? Util.fileUrl(root.backgroundsDir + "/" + root.themeName
-                      + "/" + stripCell.model.filename)
-                    : (stripCell.model.preview !== ""
-                      ? stripCell.model.preview : stripCell.model.url)
-                }
-
-                BorderSurface {
-                  anchors.fill: parent
-                  color: "transparent"
-                  radius: Style.cornerRadius
-                  borderSpec: previewStripList.currentIndex === stripCell.index
-                    ? Border.flat(root.accent, Math.max(1, Style.normalBorderWidth))
-                    : Border.none()
-                }
-
-                HoverHandler { cursorShape: Qt.PointingHandCursor }
-                TapHandler {
-                  onTapped: {
-                    if (!root.actionRunning) root.takeCursor(stripCell.index)
-                  }
-                }
-              }
-            }
-          }
-
-          // hidden preloader: fetches the target wallpaper in the background and
-          // swaps it onto the visible image only when it is fully loaded, so the
-          // previous wallpaper never disappears while the next one downloads.
-          Image {
-            id: nextImage
-            visible: false
-            asynchronous: true
-            cache: true
-            source: previewView.nextSource
-            onStatusChanged: {
-              if (status === Image.Ready) {
-                previewImage.source = nextImage.source
-              } else if (status === Image.Error) {
-                // Keep the previous wallpaper on screen — that is the point of
-                // the double buffer. Clearing `previewImage.source` here left a
-                // blank frame with no feedback at all; the failure is reported
-                // in the hero meta line instead.
-                previewView.failedSource = String(nextImage.source)
-              }
-            }
-          }
-
-          // No spinner: wallpapers resolve in well under 400ms here, so any
-          // rotating glyph either blinked for a frame or had to be delayed into
-          // uselessness. Loading feedback is the hero meta line
-          // (`LOADING <file>` / `FAILED TO LOAD <file>`), which is instant.
-
-          TapHandler {
-            // One handler, two gestures, split by region so they cannot fight:
-            // a tap outside the wallpaper goes back, while on the wallpaper the
-            // single tap is inert (it is the first half of the double tap) and
-            // the double tap sets the theme default.
-            onTapped: (point, button) => {
-              if (root.actionRunning) return
-              if (!previewView.onImage(point)) root.closePreview()
-            }
-            onDoubleTapped: (point, button) => {
-              if (root.actionRunning) return
-              if (previewView.onImage(point)) root.actionToggleDefault()
-            }
-          }
+          manager: root
+          cardLeftPadding: card.leftPadding
+          cardRightPadding: card.rightPadding
+          ruleWidth: card.width - card.borderLeft - card.borderRight
+          footerHeight: actionFooter.height
         }
       }
     }

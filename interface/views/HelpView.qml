@@ -3,6 +3,8 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
+import "../components"
+import "../sections"
 import "../js/Model.js" as Model
 
 // Help screen: a three-column layout inside the card body. Left is the index

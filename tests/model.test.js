@@ -148,6 +148,42 @@ test("collectionOptions lists unique sorted collections with All first", () => {
   ]);
 });
 
+test("wallpaperTotals sums count, installed, size and dominant resolution", () => {
+  const rows = [
+    { collection: "shelters", installed: "1", sizeBytes: 100, resolution: "2K" },
+    { collection: "countries", installed: "0", sizeBytes: 200, resolution: "4K" },
+    { collection: "countries", installed: "1", sizeBytes: 300, resolution: "2K" },
+    { collection: "", installed: "0", sizeBytes: 50, resolution: "2K" }
+  ];
+  assert.deepEqual(Model.wallpaperTotals(rows), {
+    count: 4,
+    installed: 2,
+    sizeBytes: 650,
+    resolution: "2K"
+  });
+  assert.deepEqual(Model.wallpaperTotals(null), {
+    count: 0,
+    installed: 0,
+    sizeBytes: 0,
+    resolution: ""
+  });
+});
+
+test("collectionSummary aggregates per collection, sorted, ignoring blanks", () => {
+  const rows = [
+    { collection: "shelters", installed: "1", sizeBytes: 100, resolution: "2K" },
+    { collection: "countries", installed: "0", sizeBytes: 200, resolution: "4K" },
+    { collection: "countries", installed: "1", sizeBytes: 300, resolution: "2K" },
+    { collection: "countries", installed: "0", sizeBytes: 400, resolution: "2K" },
+    { collection: "", installed: "0", sizeBytes: 50, resolution: "2K" }
+  ];
+  assert.deepEqual(Model.collectionSummary(rows), [
+    { name: "countries", label: "Countries", count: 3, installed: 1, sizeBytes: 900, resolution: "2K" },
+    { name: "shelters", label: "Shelters", count: 1, installed: 1, sizeBytes: 100, resolution: "2K" }
+  ]);
+  assert.deepEqual(Model.collectionSummary(null), []);
+});
+
 test("formatPercent floors whole percents and keeps sub-1% decimals", () => {
   assert.equal(Model.formatPercent(0), "0%");
   assert.equal(Model.formatPercent(1), "100%");

@@ -1,6 +1,7 @@
 import QtQuick
 import qs.Commons
 import qs.Ui
+import "../components"
 
 // Roadmap column shared by Help and Setup: the roadmap title, subtitle and
 // upcoming items, with an optional "Propose a feature" action pinned at the

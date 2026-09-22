@@ -105,8 +105,10 @@ Commands:
   limits                            Current local usage as TSV (files, bytes)
   catalog <theme> <catalog-url>     Wallpapers of a theme as TSV
   install <theme> [selector...]     Install all wallpapers, or every one matching a selector
+  install <theme> --collection <name>  Install one collection (caps apply, like install all)
   random-install <theme> [count]    Install <count> (default 5) random wallpapers
   remove <theme> [selector...]      Remove all wallpapers, or every one matching a selector
+  remove <theme> --collection <name>   Remove one collection
   set-default <theme> <filename> <url>  Download if needed + set as current background
   unset-default <theme> <filename>  Clear it as background, back to the theme default
   random-default <theme>            Set a random wallpaper of the theme as current background
@@ -467,7 +469,28 @@ cmd_limits() {
 cmd_install() {
   local theme="$1"
   shift
-  SELECTORS=("$@")
+  # `--collection <name>` installs a single collection as a bulk action, so the
+  # caps apply. Any other argument is a manual selector (exact filename, etc.):
+  # the user is choosing it explicitly, so the caps are bypassed.
+  local collection=""
+  local -a selectors=()
+  while (( $# > 0 )); do
+    case "$1" in
+      --collection)
+        collection="${2:-}"
+        if [[ -z $collection ]]; then
+          echo "--collection needs a collection name." >&2
+          return 1
+        fi
+        shift 2
+        ;;
+      *)
+        selectors+=("$1")
+        shift
+        ;;
+    esac
+  done
+  SELECTORS=("${selectors[@]}")
   local catalog
   ensure_datasets || {
     echo "Failed to fetch datasets." >&2
@@ -488,10 +511,11 @@ cmd_install() {
   catalog="$(cat -- "$DATASETS_DIR/$theme/catalog.json")"
 
   local -a sel_url=() sel_dest=() sel_sha=()
-  local filename id name code url sha size
-  # The caps apply only to the bulk "install all" (no selectors): manual
-  # single/multi selections are always honoured, since the user is choosing
-  # them explicitly. Already-installed files do not consume budget.
+  local filename id name code url sha size row_collection matched
+  # The caps apply to bulk installs: "install all" (no selectors) and a whole
+  # collection (`--collection`). Manual single/multi selections are always
+  # honoured, since the user is choosing them explicitly. Already-installed
+  # files do not consume budget.
   local cap_active=0 remaining=0 bytes_remaining=0 skipped=0
   if (( ${#SELECTORS[@]} == 0 )); then
     cap_active=1
@@ -500,8 +524,14 @@ cmd_install() {
     bytes_remaining=$(( MAX_DISK_BYTES - $(count_local_bytes) ))
     (( bytes_remaining < 0 )) && bytes_remaining=0
   fi
-  while IFS=$'\t' read -r filename id name code url sha size; do
-    if matches_any_selector "$id" "$name" "$code" "$filename"; then
+  while IFS=$'\t' read -r filename id name code url sha size row_collection; do
+    matched=0
+    if [[ -n $collection ]]; then
+      [[ "$row_collection" == "$collection" ]] && matched=1
+    elif matches_any_selector "$id" "$name" "$code" "$filename"; then
+      matched=1
+    fi
+    if (( matched )); then
       if ! is_allowed_image "$filename"; then
         echo "Skipping '$filename': not an allowed image (webp/jpg/jpeg/png)." >&2
         continue
@@ -518,7 +548,7 @@ cmd_install() {
       sel_dest+=("$DEST_BASE/$theme/$filename")
       sel_sha+=("$sha")
     fi
-  done < <(jq -r '.wallpapers[] | [.filename, .id, .name, .code, .url, .sha256, (.size_bytes // 0)] | @tsv' <<<"$catalog")
+  done < <(jq -r '.wallpapers[] | [.filename, .id, .name, .code, .url, .sha256, (.size_bytes // 0), (.collection // "")] | @tsv' <<<"$catalog")
 
   if (( skipped > 0 )); then
     echo "Local file limit reached ($MAX_LOCAL_FILES): skipped $skipped wallpaper(s)." >&2
@@ -529,7 +559,11 @@ cmd_install() {
       echo "Local file limit reached ($MAX_LOCAL_FILES): nothing new to install." >&2
       return 0
     fi
-    echo "No wallpaper matching the selection in theme '$theme'." >&2
+    if [[ -n $collection ]]; then
+      echo "No wallpaper in collection '$collection' of theme '$theme'." >&2
+    else
+      echo "No wallpaper matching the selection in theme '$theme'." >&2
+    fi
     return 1
   fi
 
@@ -562,7 +596,27 @@ cmd_install() {
 cmd_remove() {
   local theme="$1"
   shift
-  SELECTORS=("$@")
+  # `--collection <name>` removes a single collection; any other argument is a
+  # manual selector (id/name/code/filename), same matching as `cmd_install`.
+  local collection=""
+  local -a selectors=()
+  while (( $# > 0 )); do
+    case "$1" in
+      --collection)
+        collection="${2:-}"
+        if [[ -z $collection ]]; then
+          echo "--collection needs a collection name." >&2
+          return 1
+        fi
+        shift 2
+        ;;
+      *)
+        selectors+=("$1")
+        shift
+        ;;
+    esac
+  done
+  SELECTORS=("${selectors[@]}")
   local dest="$DEST_BASE/$theme"
   if [[ ! -d $dest ]]; then
     echo "No wallpapers installed for theme '$theme'." >&2
@@ -579,12 +633,18 @@ cmd_remove() {
   fi
 
   local -A to_remove=()
-  local filename id name code
-  while IFS=$'\t' read -r filename id name code; do
-    if matches_any_selector "$id" "$name" "$code" "$filename"; then
+  local filename id name code row_collection matched
+  while IFS=$'\t' read -r filename id name code row_collection; do
+    matched=0
+    if [[ -n $collection ]]; then
+      [[ "$row_collection" == "$collection" ]] && matched=1
+    elif matches_any_selector "$id" "$name" "$code" "$filename"; then
+      matched=1
+    fi
+    if (( matched )); then
       to_remove["$filename"]=1
     fi
-  done < <(jq -r '.wallpapers[] | [.filename, .id, .name, .code] | @tsv' <<<"$catalog")
+  done < <(jq -r '.wallpapers[] | [.filename, .id, .name, .code, (.collection // "")] | @tsv' <<<"$catalog")
 
   local f base removed=0 total
   total="$(find "$dest" -maxdepth 1 -type f ! -name '*.tmp' 2>/dev/null | wc -l)" || true
