@@ -33,7 +33,7 @@ and installs wallpapers natively into the active theme.
 
 ## Requirements
 
-- Omarchy Linux `0.4.0` or newer (Quickshell).
+- Omarchy Linux `4.0.4` or newer (Quickshell).
 - Packages: `curl` and `jq` (installed by default in Omarchy).
 - The Omarchy wallpaper tools shipped with the desktop.
 
