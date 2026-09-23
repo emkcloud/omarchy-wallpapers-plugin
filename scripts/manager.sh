@@ -5,12 +5,32 @@
 # install/remove/set-default dei wallpaper nel tema Omarchy locale.
 #
 # La base CloudFront (un path versionato, es.
-# https://content.emkcloud.com/wallpapers/1.1.0) viene letta da config.json:
+# https://content.emkcloud.com/wallpapers/1.2.0) viene letta da config.json:
 # da lì si scarica `datasets/datasets.json`, che contiene già tutti gli URL
 # assoluti versionati (cataloghi, preview, immagini). Nessun rebase: cambiare
 # la base in config è sufficiente a passare a una nuova snapshot.
 
 set -euo pipefail
+
+# Pre-generate the native wallpaper picker's thumbnails for an install dir.
+# `omarchy-theme-bg-switcher` builds every missing thumbnail before it opens,
+# so a few hundred freshly-installed files make it crawl. Warm them with
+# Omarchy's own CLI in a detached process: the action returns at once and the
+# warm outlives the plugin (and the Esc that cancelled the install). The theme
+# currently running is passed too, so the rows cache matches the one the picker
+# will read. Silent no-op when the helper is unavailable (older/newer Omarchy).
+WARM_THEME=""
+warm_thumbnails() {
+  local dir="${1:-}"
+  [[ -n $dir && -d $dir ]] || return 0
+  local current="$HOME/.local/state/omarchy/current/theme/backgrounds"
+  if command -v omarchy-menu-images >/dev/null 2>&1; then
+    setsid --fork omarchy-menu-images --cache-only "$current" "$dir" \
+      </dev/null >/dev/null 2>&1 &
+  elif command -v omarchy-theme-bg-cache >/dev/null 2>&1; then
+    setsid --fork omarchy-theme-bg-cache </dev/null >/dev/null 2>&1 &
+  fi
+}
 
 # When the UI cancels an operation (Esc), kill the in-flight downloads and
 # clear the partial `.tmp` files they leave behind. `download_one` runs curl as
@@ -29,6 +49,11 @@ cleanup_children() {
   if [[ -n ${CACHE_BASE:-} && -d ${CACHE_BASE:-} ]]; then
     find "$CACHE_BASE" -name '.tmp.*' -type f -delete 2>/dev/null || true
   fi
+  # Warm the native picker's thumbnails for the files already on disk: an
+  # install stopped at, say, 150/350 must still cache those 150.
+  if [[ -n ${WARM_THEME:-} ]]; then
+    warm_thumbnails "${DEST_BASE:-$HOME/.config/omarchy/backgrounds}/$WARM_THEME"
+  fi
   exit 130
 }
 trap cleanup_children INT TERM
@@ -37,7 +62,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && p
 PLUGIN_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
 CONFIG_FILE="$PLUGIN_ROOT/config/config.json"
-DEFAULT_BASE="https://content.emkcloud.com/wallpapers/1.1.0"
+DEFAULT_BASE="https://content.emkcloud.com/wallpapers/1.2.0"
 DEFAULT_DATASETS="datasets"
 
 BASE="$DEFAULT_BASE"
@@ -317,12 +342,6 @@ matches_any_selector() {
   return 1
 }
 
-# Cached wallpaper switcher thumbnails are stale after install/remove.
-refresh_bg_cache() {
-  command -v omarchy-theme-bg-cache >/dev/null 2>&1 || return 0
-  omarchy-theme-bg-cache >/dev/null 2>&1 || true
-}
-
 # If the current background link dangles (its file was removed), fall back to
 # the theme's own default background.
 reset_dangling_background() {
@@ -383,9 +402,12 @@ download_one() {
 
 # Machine-readable progress on stdout, consumed by the QML footer bar:
 #   PROGRESS <theme> <installed-on-disk> <operation-total>
-# `installed-on-disk` is the definitive count (same metric as `cmd_themes`), so
-# the bar is correct even for partial themes and random installs. `.tmp` files
-# from in-flight downloads are excluded.
+# `installed-on-disk` is the definitive theme-wide count (same metric as
+# `cmd_themes`), so the footer bar tracks the whole theme (250 -> 500 when a
+# second 250-wallpaper collection lands) and stays correct for partial themes
+# and random installs. `operation-total` is how many files this run touches, so
+# the "Downloading N wallpapers…" caption describes the current phase, not the
+# theme's whole size. `.tmp` files from in-flight downloads are excluded.
 emit_progress() {
   local theme="$1" total="$2" n
   n="$(find "$DEST_BASE/$theme" -maxdepth 1 -type f ! -name '*.tmp' 2>/dev/null | wc -l)" || true
@@ -469,6 +491,8 @@ cmd_limits() {
 cmd_install() {
   local theme="$1"
   shift
+  # Let the cancel trap warm whatever landed if Esc interrupts the download.
+  WARM_THEME="$theme"
   # `--collection <name>` installs a single collection as a bulk action, so the
   # caps apply. Any other argument is a manual selector (exact filename, etc.):
   # the user is choosing it explicitly, so the caps are bypassed.
@@ -583,7 +607,8 @@ cmd_install() {
     emit_progress "$theme" "$total"
   done
 
-  refresh_bg_cache
+  WARM_THEME=""
+  warm_thumbnails "$DEST_BASE/$theme"
   if [[ -s $fail_file ]]; then
     cat "$fail_file" >&2
     rm -f -- "$fail_file"
@@ -663,7 +688,8 @@ cmd_remove() {
   fi
 
   reset_dangling_background
-  refresh_bg_cache
+  # No thumbnail warm here: removal only deletes files, and the picker drops its
+  # rows cache on its own because the directory mtime changed.
   echo "Removed $removed wallpaper(s) from theme '$theme'."
 }
 
@@ -689,6 +715,8 @@ cmd_set_default() {
     fetch "$url" -o "$path"
   fi
   omarchy-theme-bg-set "$path"
+  # A downloaded default is a new file the native picker has to thumbnail.
+  warm_thumbnails "$DEST_BASE/$theme"
 }
 
 # Toggle a wallpaper off the default: only when it currently is the background,
@@ -736,6 +764,8 @@ cmd_random_default() {
 # "Random install (5)" button on the themes detail pane.
 cmd_random_install() {
   local theme="$1" count="${2:-5}"
+  # Let the cancel trap warm whatever landed if Esc interrupts the download.
+  WARM_THEME="$theme"
   ensure_datasets || {
     echo "Failed to fetch datasets." >&2
     return 1
@@ -808,7 +838,8 @@ cmd_random_install() {
     emit_progress "$theme" "$total"
   done
 
-  refresh_bg_cache
+  WARM_THEME=""
+  warm_thumbnails "$DEST_BASE/$theme"
   if [[ -s $fail_file ]]; then
     cat "$fail_file" >&2
     rm -f -- "$fail_file"

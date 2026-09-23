@@ -58,7 +58,7 @@ set-default), theme by theme.
 - `config/` — plugin config, kept out of the repo root.
 - `config/config.json` — plugin config, read by both `manager.sh` and the QML.
   - `base` — the versioned CloudFront base of the wallpaper snapshot, e.g.
-    `https://content.emkcloud.com/wallpapers/1.1.0`. `manager.sh` downloads
+    `https://content.emkcloud.com/wallpapers/1.2.0`. `manager.sh` downloads
     `datasets/datasets.json` from `<base>/datasets/datasets.json`; that JSON
     already carries every absolute URL (catalogs, previews, images) under the
     same versioned base, so there is no rebase. Bump `base` and push to roll a
@@ -472,15 +472,16 @@ applied when the user switches to that theme (see *Setup → per-theme default*)
   `flock` on the script side) and prefetches the ±3 neighbours via `prewarm`,
   which prints `url<TAB>path` per warmed image; QML records them in
   `imagePathByUrl` so navigating to a neighbour loads the local file instead of
-  the remote URL. The directory is per plugin id (`WALLPAPER_MANAGER_ID`, set
-  from `manifest.id`), so the official and developer installs never share files.
+  the remote URL. The directory is per plugin id (`WALLPAPER_MANAGER_ID`, the
+  install directory name, derived from `pluginRoot`), so the official and
+  developer installs never share files.
 - **`manager.sh` command surface**:
 
   | command | args | stdout (TSV) |
   |---|---|---|
   | `themes` | — | `name  title  catalogUrl  collections  count  preview  installed  palette  description  image  present` (`preview` = card thumbnail, `image` = 2K for the detail pane; `palette` = comma-separated hex, read straight from the dataset — no hardcoded fallback; `present` = the Omarchy theme exists locally) |
   | `catalog` | `<theme> <catalog-url>` | `filename  name  code  url  sha256  installed  isDefault  preview  sizeBytes  collection  resolution  width  height` (local catalog; the URL arg is only a fallback) |
-  | `install` | `<theme> [selector...]` / `<theme> --collection <name>` | human text; no selector = all (caps apply), each selector matches id/name/code/filename (the QML passes one filename per checked wallpaper); `--collection` installs one collection as a bulk action (caps apply too). Streams `PROGRESS\t<theme>\t<installed>\t<total>` lines while it runs |
+  | `install` | `<theme> [selector...]` / `<theme> --collection <name>` | human text; no selector = all (caps apply), each selector matches id/name/code/filename (the QML passes one filename per checked wallpaper); `--collection` installs one collection as a bulk action (caps apply too). Streams `PROGRESS\t<theme>\t<installed>\t<total>` lines while it runs (`installed` = theme-wide count, drives the footer bar; `total` = files this run touches, drives the "Downloading N wallpapers…" caption) |
   | `random-install` | `<theme> [count]` | human text; installs `<count>` random wallpapers (default 5). Same `PROGRESS` stream |
   | `remove` | `<theme> [selector...]` / `<theme> --collection <name>` | human text; same selector matching (any of them), or one collection via `--collection`. Same `PROGRESS` stream (count decreases) |
   | `set-default` | `<theme> <filename> <url>` | human text; downloads if missing then `omarchy-theme-bg-set` |
@@ -492,6 +493,18 @@ applied when the user switches to that theme (see *Setup → per-theme default*)
 
   (`installed` / `isDefault` are `"0"`/`"1"`; `manager.sh` prints the default
   column as `current`, the QML model names it `isDefault`.)
+- **Native picker thumbnail warm**: the native Omarchy wallpaper picker
+  (`omarchy-theme-bg-switcher` → `omarchy-menu-images`) builds every missing
+  thumbnail before it opens, so a few hundred freshly-installed files make it
+  crawl. After `install` / `random-install` (and a `set-default` that downloads
+  a file) `warm_thumbnails` pre-generates them with
+  `omarchy-menu-images --cache-only <current theme dir> <install dir>` in a
+  detached `setsid --fork` process: the action returns at once and the warm
+  outlives the plugin. `cleanup_children` (the Esc trap) fires the same warm for
+  `WARM_THEME` before exiting, so a cancelled install still caches the files
+  that already landed. Removal does not warm (it only deletes; the picker drops
+  its rows cache on the directory mtime). Silent no-op when the helper is
+  missing (older/newer Omarchy).
 - **Image guard**: only files whose extension is in the allowlist
   (`ALLOWED_IMAGE_EXTS`: `webp`, `jpg`, `jpeg`, `png`, case-insensitive) are
   installed. `is_allowed_image` is checked in `download_one` (install /
@@ -517,7 +530,11 @@ applied when the user switches to that theme (see *Setup → per-theme default*)
   finishes, and Esc cancels the running process. `runAction` records the theme
   argument in `actionTheme`, so the row badge and the footer progress
   (`progressTheme`) keep showing the theme being worked on even when the user
-  browses another one.
+  browses another one. The footer bar stays **theme-wide** (`installed/count`),
+  so it keeps climbing as a second collection lands; the caption's
+  `actionScopeTotal` (the `PROGRESS` `total`) instead names the running phase,
+  so installing a 250-wallpaper collection of a 500-wallpaper theme reads
+  "Downloading 250 wallpapers…" while the bar climbs 250 -> 500.
 - **Themes search**: `/` (or Tab) opens the search editor; typing filters the
   left list by name/title through `Model.themeMatches`. The list binds to
   `activeThemesModel` — `themesModel` when the filter is empty, else the
@@ -620,6 +637,10 @@ hero also keeps Help / GitHub / "Wallpaper manager".
   chrome) and owns the `rotationProc` / `rotationTimer` that run the rotation.
 - Settings are persisted per plugin id under
   `~/.config/omarchy/<id>/settings.json` (auto-save, debounced; no Save button).
+  The id is the install directory name (`pluginRoot`), **not** the injected
+  `manifest.id`: the shell assigns `manifest` only after the component loads, so
+  reading it made the path fall back to the official id and flip the developer
+  install onto the official settings file during a reload.
   The same object is the source of truth for `scriptCmd`'s env caps. It also
   carries `randomDefaultOnInstall` (the custom-install switch, default on) and
   `themeDefaults` (`<theme> -> { filename, url }`): the default chosen
@@ -665,9 +686,10 @@ collection, `Shuffle (N)`, and `Select only` (go to the wallpapers grid). A
 switch at the bottom, `Set a random wallpaper as default when done`, is
 persisted as `randomDefaultOnInstall` (default on). Arrows walk the rows, a
 single click only selects the card, Enter/Space/`i` (or a double click) run the
-selected card (or toggle the switch), `b` browses the theme's grid — narrowed to
-the highlighted collection when a collection card is selected — Tab jumps to the
-switch and back, Esc returns to the theme list. The footer mirrors the
+selected card (or toggle the switch), `u` uninstalls the highlighted scope like
+the footer button, `b` browses the theme's grid — narrowed to the highlighted
+collection when a collection card is selected — Tab jumps to the switch and
+back, Esc returns to the theme list. The footer mirrors the
 wallpapers one: Help / Install / Uninstall on the left, the theme
 progress in the middle and the key hints on the right. Install is enabled only
 for Full collections / a collection / Shuffle that still has something to
@@ -683,8 +705,23 @@ it has files (`customCanRemove`).
   own request stamp (`customSerial`) so it never disturbs the wallpapers grid's
   `catalogProc`. `customRows` / `customPreviews` rebuild on `customRevision`; the
   nine previews are prewarmed into the disk cache (`prefetchCustomPreviews`), so
-  reopening the screen loads them locally. The loading caption sits outside the
-  centred info block, so it never shifts it when it disappears.
+  reopening the screen loads them locally. The option list is gated on
+  `customCatalogReady` (`customCatalogModel.count > 0`) and a centred caption
+  stands in until the catalog lands: rendering the catalog-independent rows
+  first made the collection cards pop in later and shift the row under the
+  cursor while the user was clicking. `openCustomInstall` clears the model
+  *before* switching the view, so the previous theme's cards never flash.
+- **In-memory catalog cache** (`customCatalogCache`, `theme -> rows[]`): the
+  catalogs are already on disk (see *Dataset cache*), so re-reading one through
+  a process is pure overhead. Both `catalogProc` (the grid) and `customCatalogProc`
+  store their parse, and `catalogPrefetchProc` warms the theme under the themes
+  cursor (on load, arrow and hover) in the background, one theme at a time
+  (`pendingCustomPrefetch` keeps only the last). `openCustomInstall` serves a
+  cached parse synchronously via `applyCustomCatalog`, so Custom Install opens
+  with no "Loading catalog…" at all; only a cold theme spawns the process. The
+  cache is invalidated for a theme whenever an action (`actionProc`) or a
+  per-theme default apply (`themeDefaultProc`) can have changed its installed
+  flags, so it can never go stale.
 - Cards come from `Model.wallpaperTotals` (whole theme) and
   `Model.collectionSummary` (one entry per collection); sizes use
   `Model.formatSize`. The resolution shown is the collection's dominant one,
@@ -704,10 +741,11 @@ it has files (`customCanRemove`).
   per theme (`themeDefaults`) and making sure the file is on disk, exactly like
   `actionToggleDefault`, so it never replaces the current desktop background.
 - Keyboard: `moveCursor` / `pageCursor` / `activateCursor` / `dismissCursor`
-  handle the `"custom"` branch; `handleTextKey` handles `i` (install) and `b`
-  (browse) and otherwise returns early (the globals `q`, `s`, `?` / F1 still
-  apply). The `RunningOverlay` freezes the screen while an action runs (only Esc
-  cancels).
+  handle the `"custom"` branch; `handleTextKey` handles `i` (install), `u`
+  (uninstall, the footer action and a no-op when the scope has nothing
+  installed) and `b` (browse) and otherwise returns early (the globals `q`, `s`,
+  `?` / F1 still apply). The `RunningOverlay` freezes the screen while an action
+  runs (only Esc cancels).
 
 ## Conventions
 
@@ -901,8 +939,9 @@ refuses to delete anything without the `.dev-wrapper` marker.
 > into `~/.config/omarchy/plugins/<id>/` instead of symlinking.)
 
 The dataset and image caches are keyed by plugin id
-(`WALLPAPER_MANAGER_ID`, passed by the QML), so the official and dev installs
-never share files and neither writes inside the watched plugin directory.
+(`WALLPAPER_MANAGER_ID`, passed by the QML; the install directory name), so the
+official and dev installs never share files and neither writes inside the
+watched plugin directory.
 
 Automatic rotation is the exception: it changes the current Omarchy theme's
 background, which is shared state. While testing it on the developer install,

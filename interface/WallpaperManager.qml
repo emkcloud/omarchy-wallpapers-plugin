@@ -162,13 +162,12 @@ Item {
     ? String(pluginLinks.repo) : "https://github.com/emkcloud/omarchy-wallpapers-plugin"
 
   // Setup screen settings: persisted per plugin id under the user config, so
-  // the official and developer installs never share them.
+  // the official and developer installs never share them. `pluginId` is known
+  // from the install directory itself, so the path is stable from creation and
+  // never depends on when the shell injects the manifest (which is what used to
+  // make a reload flip one install onto the other's settings file).
   readonly property string settingsDir: Quickshell.env("HOME") + "/.config/omarchy/" + pluginId
-  // Empty until the manifest is injected: the fallback id would point at the
-  // official settings file and its (failed) load would lock the Setup defaults
-  // before the real developer path is known.
-  readonly property string settingsPath: manifest && manifest.id
-    ? settingsDir + "/settings.json" : ""
+  readonly property string settingsPath: settingsDir + "/settings.json"
 
   // ---- view state -----------------------------------------------------------
   readonly property string stateHome: Quickshell.env("HOME") + "/.local/state"
@@ -246,6 +245,12 @@ Item {
   // row can flag the "installing" state and the footer keeps showing its
   // progress even while the user browses another theme.
   property string actionTheme: ""
+  // How many wallpapers the running operation touches, so the "Downloading N
+  // wallpapers…" caption describes the current phase (a 250-wallpaper
+  // collection) instead of the theme's whole size (500). The footer bar stays
+  // theme-wide (`installed/count`). 0 means "no info yet": fall back to the
+  // theme's own count.
+  property int actionScopeTotal: 0
   // Arguments of the running/last action, so `onExited` can apply its effect to
   // the in-memory catalog instead of reloading the whole thing.
   property var lastAction: []
@@ -286,10 +291,22 @@ Item {
   // Big remote images are downloaded once by `manager.sh image` into
   // ~/.cache/omarchy/<pluginId>/ and then loaded from disk, so switching
   // selection never re-downloads or re-decodes the 2K original. The id comes
-  // from the injected manifest, so the official and developer installs keep
+  // from the install directory, so the official and developer installs keep
   // separate caches.
-  readonly property string pluginId: manifest && manifest.id
-    ? String(manifest.id) : "emkcloud.wallpaper-manager"
+  //
+  // The directory name is the plugin id (`~/.config/omarchy/plugins/<id>`), and
+  // `pluginRoot` is derived from this file's own location, so it is known
+  // immediately. Reading it from the injected `manifest` instead was wrong: the
+  // shell assigns `manifest` only after the component loads, so during a reload
+  // `pluginId` briefly fell back to the official id and pointed the developer
+  // install at the official settings file and cache. The manifest id stays as
+  // the fallback for a layout that does not name the directory after the id.
+  readonly property string pluginId: {
+    var root = String(pluginRoot || "").replace(/\/+$/, "")
+    var name = root !== "" ? root.split("/").pop() : ""
+    if (name !== "") return name
+    return manifest && manifest.id ? String(manifest.id) : "emkcloud.wallpaper-manager"
+  }
   // Version from the injected manifest and the "name + version" label shown in
   // the themes and Setup hero metas.
   readonly property string pluginVersion: manifest && manifest.version
@@ -317,6 +334,7 @@ Item {
   // during an install. Buffer the latest value and flush on a timer instead.
   property string pendingProgressTheme: ""
   property int pendingProgressInstalled: -1
+  property int pendingProgressScopeTotal: -1
 
   // Cursor model (see Ui/CursorSurface.qml): mouse hover and keyboard share a
   // single cursor. Items derive their visuals from `hasCursor`, never from
@@ -341,12 +359,26 @@ Item {
   property string customThemeCatalogUrl: ""
   property bool customThemePresent: false
   property bool customLoading: false
+  // True once the catalog has rows to build the option cards from. The screen
+  // hides the list until then, so it never renders a partial set (just Full /
+  // Shuffle / Select only) that then shifts under the cursor when the
+  // collections stream in.
+  readonly property bool customCatalogReady: customCatalogModel.count > 0
   // Cursor over the option rows (0..N-1) plus the trailing switch row (N).
   property int customSelection: 0
   // Bumped when the custom catalog (re)loads: `customRows` re-reads the model.
   property int customRevision: 0
   // Request stamp, so a superseded catalog load is discarded.
   property int customSerial: 0
+  // Parsed catalog rows per theme (`theme -> rows[]`), filled by both the
+  // wallpapers grid and the custom screen (and by the idle prefetch). The
+  // catalogs are already cached on disk, so re-reading them through a process
+  // is pure overhead: this keeps the last parse in memory and lets the custom
+  // screen open instantly. Invalidated for a theme whenever an action touches
+  // it, so the installed flags can never go stale.
+  property var customCatalogCache: ({})
+  // Theme queued for the idle catalog prefetch ("" = none).
+  property string pendingCustomPrefetch: ""
   // Theme queued for a random default once a custom install finishes ("" = none).
   property string pendingCustomRandomDefault: ""
 
@@ -539,7 +571,10 @@ Item {
     if (cmd === "random-install")
       return "Shuffling in " + setupSettings.shuffleCount + " wallpapers…"
     var theme = actionTheme !== "" ? themeByName(actionTheme) : selectedTheme
-    var count = theme ? (theme.count || 0) : 0
+    // Prefer the running scope (a collection / a selection) over the theme's
+    // whole count, so "Downloading 250 wallpapers…" and not 500.
+    var count = (actionRunning && actionScopeTotal > 0)
+      ? actionScopeTotal : (theme ? (theme.count || 0) : 0)
     return count > 0 ? "Downloading " + count + " wallpapers…" : "Downloading…"
   }
 
@@ -1019,14 +1054,21 @@ Item {
     customThemePresent = selectedThemePresent
     customSelection = 0
     customLoading = true
+    // Clear before switching the view: otherwise the screen briefly renders the
+    // previous theme's cards (ready = true) before the model empties.
+    customCatalogModel.clear()
+    customPreviews = []
     customRevision++
     view = "custom"
     cursorActive = true
     themeFocus = -1
     setStatus("")
-    customCatalogModel.clear()
-    customPreviews = []
-    loadCustomCatalog()
+    // Serve the cached parse when we have it (the common case: the grid or the
+    // idle prefetch already read this theme); only a cold theme spawns the
+    // process, so a cached open has no "Loading catalog…" flash.
+    var cached = customCatalogCache[theme.name]
+    if (cached) applyCustomCatalog(theme.name, cached)
+    else loadCustomCatalog()
   }
 
   function closeCustomInstall() {
@@ -1043,6 +1085,46 @@ Item {
     customCatalogProc.requestedTheme = customThemeName
     customCatalogProc.command = scriptCmd(["catalog", customThemeName, customThemeCatalogUrl])
     customCatalogProc.running = true
+  }
+
+  // Fill the model and the 3x3 previews from a parsed catalog, and remember it
+  // in `customCatalogCache`. Shared by the process path and the cache-hit path,
+  // so the model and its derived state are built in exactly one place.
+  function applyCustomCatalog(theme, rows) {
+    if (theme === "") return
+    customCatalogCache[theme] = rows
+    if (theme !== customThemeName) return
+    customCatalogModel.clear()
+    for (var i = 0; i < rows.length; i++) customCatalogModel.append(rows[i])
+    customRevision++
+    customLoading = false
+    // Resolve the 3x3 previews once, now, so they are not swapped later.
+    var previews = []
+    for (var k = 0; k < rows.length && previews.length < 9; k++) {
+      var prow = rows[k]
+      if (!prow || !prow.preview) continue
+      var purl = String(prow.preview)
+      var plocal = imagePathByUrl[purl]
+      previews.push(plocal ? String(plocal) : purl)
+    }
+    customPreviews = previews
+    prefetchCustomPreviews()
+  }
+
+  // Idle prefetch: read a theme's catalog into the in-memory cache before the
+  // user opens Custom Install, so the screen has nothing to load. One process
+  // at a time; the last requested theme wins via `pendingCustomPrefetch`.
+  function prefetchCustomCatalog(theme) {
+    if (theme === "" || customCatalogCache[theme]) return
+    var t = themeByName(theme)
+    if (!t || !String(t.catalogUrl)) return
+    if (catalogPrefetchProc.running) {
+      pendingCustomPrefetch = theme
+      return
+    }
+    catalogPrefetchProc.requestedTheme = theme
+    catalogPrefetchProc.command = scriptCmd(["catalog", theme, t.catalogUrl])
+    catalogPrefetchProc.running = true
   }
 
   function moveCustomCursor(dir) {
@@ -1379,6 +1461,10 @@ Item {
     cursorActive = true
     selectedIndex = Model.stepIndex(selectedIndex, step, count)
     positionActive(selectedIndex)
+    // Warm the catalog of the theme under the cursor, so Custom Install opens
+    // without a load.
+    if (view === "themes" && selectedIndex < activeThemesModel.count)
+      prefetchCustomCatalog(activeThemesModel.get(selectedIndex).name)
   }
 
   function moveCursor(dx, dy) {
@@ -1604,10 +1690,13 @@ Item {
       return
     }
     // The custom-install screen is driven by the cursor state machine
-    // (arrows/Enter/Tab); `i` runs the highlighted choice like Enter, `b`
-    // browses the theme's grid (narrowed to the highlighted collection).
+    // (arrows/Enter/Tab); `i` runs the highlighted choice like Enter, `u`
+    // removes the highlighted scope like the footer Uninstall (a no-op when the
+    // row has nothing installed), `b` browses the theme's grid (narrowed to the
+    // highlighted collection).
     if (view === "custom") {
       if (text === "i" || text === "I") executeCustomInstall()
+      else if (text === "u" || text === "U") executeCustomRemove()
       else if (text === "b" || text === "B") browseCustom()
       return
     }
@@ -1658,6 +1747,9 @@ Item {
     // Same for the themes action row: hovering a theme row returns to the list.
     if (view === "themes") themeFocus = -1
     selectedIndex = index
+    // Hovering a theme row warms its catalog for Custom Install.
+    if (view === "themes" && index < activeThemesModel.count)
+      prefetchCustomCatalog(activeThemesModel.get(index).name)
   }
 
   // "Add remote source" placeholder: a click or the `a` key flashes the COMING
@@ -1928,6 +2020,7 @@ Item {
     // Every command takes the theme as its first argument, so the running theme
     // is recorded centrally for the row badge and the footer.
     actionTheme = args.length > 1 ? String(args[1]) : ""
+    actionScopeTotal = 0
     lastAction = args
     actionRunning = true
     actionProc.command = scriptCmd(args)
@@ -1986,6 +2079,10 @@ Item {
     property string applyFilename: ""
     onExited: {
       root.loadLimits()
+      // A per-theme default may have just downloaded a file: drop that theme's
+      // cached parse so the next Custom Install open reads fresh flags.
+      if (themeDefaultProc.applyTheme !== "")
+        delete root.customCatalogCache[themeDefaultProc.applyTheme]
       // The plugin may be open on the theme that just became active: reflect
       // the applied default (and its installed file) without a full reload.
       if (root.themeName !== "" && Model.normalizeSlug(root.themeName)
@@ -2072,10 +2169,11 @@ Item {
   // count and flush it on a timer, so a bulk install does not re-evaluate the
   // whole screen on every downloaded file. `onExited` refreshes from the source
   // of truth once the operation is over.
-  function applyProgress(name, installed) {
+  function applyProgress(name, installed, scopeTotal) {
     if (!name || !isFinite(installed)) return
     pendingProgressTheme = name
     pendingProgressInstalled = installed
+    pendingProgressScopeTotal = isFinite(scopeTotal) ? scopeTotal : -1
     // Throttle, do not debounce: a fast local remove emits every PROGRESS line
     // back-to-back, so a `restart()` here would keep postponing the flush until
     // the process exits (which then drops the buffered value). Start the timer
@@ -2086,9 +2184,12 @@ Item {
   function flushProgress() {
     var name = pendingProgressTheme
     var installed = pendingProgressInstalled
+    var scopeTotal = pendingProgressScopeTotal
     pendingProgressTheme = ""
     pendingProgressInstalled = -1
+    pendingProgressScopeTotal = -1
     if (name === "" || installed < 0) return
+    if (scopeTotal >= 0) actionScopeTotal = scopeTotal
     for (var i = 0; i < themesModel.count; i++) {
       if (themesModel.get(i).name === name) {
         if ((themesModel.get(i).installed || 0) !== installed) {
@@ -2328,6 +2429,10 @@ Item {
         root.setStatus(Model.themesStatus(themesModel.count))
         if (root.activeThemesModel.count > 0)
           Qt.callLater(function() { themesView.listView.positionViewAtIndex(root.selectedIndex, ListView.Contain) })
+        // Warm the selected theme's catalog in the background.
+        if (root.activeThemesModel.count > 0
+            && root.selectedIndex < root.activeThemesModel.count)
+          root.prefetchCustomCatalog(root.activeThemesModel.get(root.selectedIndex).name)
       }
     }
     onExited: {
@@ -2357,6 +2462,9 @@ Item {
           return
         wallpapersModel.clear()
         var rows = Model.parseCatalog(text)
+        // Share the parse with the custom-install screen: opening it for a
+        // theme the user just browsed must not spawn manager.sh again.
+        root.customCatalogCache[catalogProc.requestedTheme] = rows
         for (var i = 0; i < rows.length; i++) wallpapersModel.append(rows[i])
         if (root.wallpaperFilterText !== "" || root.collectionFilter !== "")
           root.rebuildWallpaperDisplay()
@@ -2410,25 +2518,32 @@ Item {
         if (customCatalogProc.requestedSerial !== root.customSerial
             || customCatalogProc.requestedTheme !== root.customThemeName)
           return
-        customCatalogModel.clear()
-        var rows = Model.parseCatalog(text)
-        for (var i = 0; i < rows.length; i++) customCatalogModel.append(rows[i])
-        root.customRevision++
-        root.customLoading = false
-        // Resolve the 3x3 previews once, now, so they are not swapped later.
-        var previews = []
-        for (var k = 0; k < customCatalogModel.count && previews.length < 9; k++) {
-          var prow = customCatalogModel.get(k)
-          if (!prow || !prow.preview) continue
-          var purl = String(prow.preview)
-          var plocal = root.imagePathByUrl[purl]
-          previews.push(plocal ? String(plocal) : purl)
-        }
-        root.customPreviews = previews
-        root.prefetchCustomPreviews()
+        root.applyCustomCatalog(customCatalogProc.requestedTheme,
+          Model.parseCatalog(text))
       }
     }
     onExited: if (root.customLoading) root.customLoading = false
+  }
+
+  // Idle catalog prefetch (one theme at a time): parse a theme into the
+  // in-memory cache without touching the visible model, so Custom Install opens
+  // without spawning manager.sh. The last requested theme wins.
+  Process {
+    id: catalogPrefetchProc
+    property string requestedTheme: ""
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var theme = catalogPrefetchProc.requestedTheme
+        if (theme === "" || root.customCatalogCache[theme]) return
+        root.customCatalogCache[theme] = Model.parseCatalog(text)
+      }
+    }
+    onExited: {
+      var next = root.pendingCustomPrefetch
+      root.pendingCustomPrefetch = ""
+      if (next !== "") root.prefetchCustomCatalog(next)
+    }
   }
 
   // ---- action result --------------------------------------------------------
@@ -2439,11 +2554,15 @@ Item {
         if (line.indexOf("PROGRESS\t") !== 0) return
         var parts = line.split("\t")
         if (parts.length < 3) return
-        root.applyProgress(parts[1], parseInt(parts[2], 10))
+        root.applyProgress(parts[1], parseInt(parts[2], 10),
+          parts.length > 3 ? parseInt(parts[3], 10) : NaN)
       }
     }
     onExited: {
       var cancelled = root.actionCancelled
+      // Captured before the reset below: the action changed this theme's
+      // on-disk state, so its cached parse must be dropped.
+      var actedTheme = root.actionTheme
       root.actionCancelled = false
       root.busy = false
       root.actionRunning = false
@@ -2470,6 +2589,7 @@ Item {
       root.pendingCustomRandomDefault = ""
       // Reload even when cancelled: files installed before Esc are on disk, so
       // the card counts must catch up without leaving the screen.
+      if (actedTheme !== "") delete root.customCatalogCache[actedTheme]
       if (root.view === "custom") root.loadCustomCatalog()
       // The switch applies after an install whether it finished or was stopped
       // with Esc; `applyCustomRandomDefault` only touches the configured theme.

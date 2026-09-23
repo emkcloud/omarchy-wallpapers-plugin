@@ -19,6 +19,7 @@
     {
       "title": "ADVANCED",
       "items": [
+        { "id": "custom-install", "title": "Custom install", "file": "custom-install.md" },
         { "id": "default-wallpaper", "title": "Default wallpaper", "file": "default-wallpaper.md" }
       ]
     }

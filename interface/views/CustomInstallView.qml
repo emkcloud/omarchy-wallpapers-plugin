@@ -173,19 +173,8 @@ Item {
       }
 
       // Status captions live outside the centred info block, so appearing or
-      // disappearing never shifts it.
-      Text {
-        anchors.horizontalCenter: parent.horizontalCenter
-        anchors.bottom: parent.bottom
-        anchors.bottomMargin: manager.contentMargin
-        visible: manager.customLoading
-        textFormat: Text.PlainText
-        text: "Loading catalog…"
-        color: manager.dim
-        font.family: manager.fontFamily
-        font.pixelSize: Style.font.bodySmall
-      }
-
+      // disappearing never shifts it. The catalog-loading caption lives on the
+      // right pane, next to the option cards it gates.
       Text {
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: parent.bottom
@@ -227,6 +216,10 @@ Item {
         anchors.bottomMargin: Style.space(16)
         clip: true
         spacing: Style.space(8)
+        // Hidden until the catalog is in: rendering the list with only the
+        // three catalog-independent cards made the collection cards pop in
+        // later, shifting whatever the user was about to click.
+        visible: manager.customCatalogReady
         model: manager.customRows
         currentIndex: Math.min(manager.customSelection, count - 1)
         onCurrentIndexChanged: if (currentIndex >= 0)
@@ -350,6 +343,19 @@ Item {
             }
           }
         }
+      }
+
+      // Loading caption shown while the catalog is being read, so the pane
+      // never flashes a partial set of option cards.
+      Text {
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.verticalCenter: parent.verticalCenter
+        visible: !manager.customCatalogReady
+        textFormat: Text.PlainText
+        text: manager.customLoading ? "Loading catalog…" : "No wallpapers available."
+        color: manager.dim
+        font.family: manager.fontFamily
+        font.pixelSize: Style.font.bodySmall
       }
 
       // Default-at-end switch, pinned to the bottom of the column.

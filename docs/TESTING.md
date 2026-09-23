@@ -138,10 +138,12 @@ report the rest.
 
 - [ ] The themes detail `Custom Install` button (or `c`) opens the screen: 3×3 previews + theme info on the left, "WHAT TO INSTALL" cards on the right.
 - [ ] The cards are `Full collection`, one `Full <Collection>` per collection, `Shuffle (N)`, `Select only`; each shows count, resolution and estimated size.
+- [ ] The right pane appears complete in one go (no partial 3-card flash, no shifting rows) and, for a theme already warmed, with no "Loading catalog…" caption at all.
 - [ ] Arrows/jk walk the rows, a single click only selects the card, `Enter`/Space/`i` (or a double click) run it, `Tab` jumps to the switch and back, `Esc` / hero Back return to the themes list.
 - [ ] `b` opens the theme's grid (narrowed to the selected collection when a collection card is highlighted); `Esc` there returns to the custom screen with its state.
 - [ ] `s` / `?` from the custom screen open Setup / Help, and `Esc` / Back there return to the custom screen (not the theme list).
 - [ ] `Full collection` / a collection / `Shuffle` run the install with the running overlay; Esc cancels.
+- [ ] A collection install names the **collection** in the caption (`Downloading 250 wallpapers…`), while the footer bar stays **theme-wide** (`NAME · N/500`, climbing as the theme fills up).
 - [ ] With the switch on, an install (finished or stopped with Esc) also sets a random default **of the configured theme only** — live background when it is the running theme, otherwise remembered per theme; the switch state survives close/reopen.
 - [ ] Card counts (`N installed`) refresh on their own after an install, including when stopped with Esc (no need to leave and re-enter).
 - [ ] `Select only` lands on the wallpapers grid of that theme; `Esc` there returns to the custom screen with its state (not to the theme list), while entering a theme from the list returns to the list.
@@ -152,6 +154,8 @@ report the rest.
 - [ ] Every install/remove shows the running overlay (scrim + accent spinner + pulsing caption).
 - [ ] While it runs the hero actions are dimmed and navigation keys are no-ops.
 - [ ] When it finishes, counts / badges / progress update in place, without a manual refresh.
+- [ ] Install a theme's wallpapers into a theme that is **not** the running one, then watch `~/.cache/omarchy/image-selector/*.jpg` grow while the plugin sits idle: the native picker thumbnail warm runs detached after the install.
+- [ ] Stop a bulk install with `Esc` at, say, half: the files already on disk still get their thumbnails (the cancel trap warms `WARM_THEME`), and opening `omarchy-theme-bg-switcher` on that theme is fast.
 
 ## Not covered (yet)
 

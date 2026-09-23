@@ -722,7 +722,8 @@ Column {
       textFormat: Text.StyledText
       text: footer.actionRunning
         ? footer.keyHint("esc", "stop")
-        : footer.keyHint("enter", "install")
+        : footer.keyHint("i", "install")
+          + "&nbsp;&nbsp;" + footer.keyHint("u", "uninstall")
           + "&nbsp;&nbsp;" + footer.keyHint("b", "browse")
           + "&nbsp;&nbsp;" + footer.keyHint("esc", "back")
       color: footer.dim
