@@ -9,6 +9,7 @@ import qs.Commons
 import qs.Ui
 import "views"
 import "sections"
+import "components"
 import "js/Model.js" as Model
 
 Item {
@@ -177,6 +178,11 @@ Item {
   readonly property string backgroundsDir: Quickshell.env("HOME") + "/.config/omarchy/backgrounds"
 
   property bool opened: false
+  // First-run cache warm-up: `manager.sh warm` is running (datasets + catalogs +
+  // previews). While true, opening the overlay shows "Initiating…" instead of an
+  // empty theme list, and `themesPending` remembers that the load is waiting.
+  property bool warming: true
+  property bool themesPending: false
   property string view: "themes"          // "themes" | "wallpapers" | "preview" | "help" | "setup" | "custom"
   property string themeName: ""
   property string themeCatalogUrl: ""
@@ -871,7 +877,17 @@ Item {
     customSelection = 0
     pendingCustomRandomDefault = ""
     wallpaperReturnCustom = false
-    loadThemes()
+    // While the first-run cache warm-up is still running, do not start a
+    // competing `manager.sh themes` (its `ensure_datasets` would download the
+    // same files): show the "Initiating…" overlay and let the warm trigger the
+    // load when it finishes.
+    if (warming) {
+      themesPending = true
+      busy = true
+      setStatus("Initiating…")
+    } else {
+      loadThemes()
+    }
   }
 
   function close() {
@@ -2770,6 +2786,13 @@ Item {
       // reads come straight from the warmed files, then re-warm the queue.
       root.customCatalogCache = ({})
       if (root.activeThemesModel.count > 0) root.prefetchAllCatalogs()
+      // The warm-up is done: release the "Initiating…" state and, if the overlay
+      // was opened while it ran, load the themes now.
+      root.warming = false
+      if (root.opened && root.themesPending) {
+        root.themesPending = false
+        root.loadThemes()
+      }
     }
   }
 
@@ -3430,6 +3453,24 @@ Item {
             if (item) item.forceActiveFocus()
             root.restoreViewScroll()
           }
+        }
+
+        // ---- first-run warm-up overlay --------------------------------------
+        // Covers the body while `manager.sh warm` fetches the datasets and
+        // catalogs for the first time, so opening the overlay before it finishes
+        // shows "Initiating…" instead of an empty theme list.
+        RunningOverlay {
+          anchors.top: heroRule.bottom
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.bottom: actionFooter.top
+          z: 8
+          running: root.opened && root.warming && themesModel.count === 0
+          label: "Initiating…"
+          foreground: root.foreground
+          background: root.background
+          accent: root.accent
+          fontFamily: root.fontFamily
         }
 
         Component {
