@@ -268,22 +268,22 @@ Item {
   // disabled and the themes screen flags it.
   property int localFileCount: 0
   property real localBytes: 0
-  readonly property real maxDiskBytes: setupSettings.maxDiskGb * 1073741824
+  readonly property real maxDiskBytes: settings.maxDiskGb * 1073741824
   // A small headroom: the bulk installer stops when the remaining budget is
   // below the smallest wallpaper, so the used size can sit just under the cap
   // while nothing else fits.
   readonly property real diskLimitSlack: 8 * 1024 * 1024
-  readonly property bool storageLimitReached: localFileCount >= setupSettings.maxLocalFiles
+  readonly property bool storageLimitReached: localFileCount >= settings.maxLocalFiles
     || localBytes + diskLimitSlack >= maxDiskBytes
   // Which cap triggered it, with its value, so the banner is self-explanatory
   // ("Storage limit 1000" vs "Storage limit 3 GB").
   readonly property string storageLimitReason: {
-    var fileHit = localFileCount >= setupSettings.maxLocalFiles
+    var fileHit = localFileCount >= settings.maxLocalFiles
     var diskHit = localBytes + diskLimitSlack >= maxDiskBytes
     if (fileHit && diskHit)
-      return "Storage limit " + setupSettings.maxLocalFiles + " · " + setupSettings.maxDiskGb + " GB"
-    if (fileHit) return "Storage limit " + setupSettings.maxLocalFiles
-    if (diskHit) return "Storage limit " + setupSettings.maxDiskGb + " GB"
+      return "Storage limit " + settings.maxLocalFiles + " · " + settings.maxDiskGb + " GB"
+    if (fileHit) return "Storage limit " + settings.maxLocalFiles
+    if (diskHit) return "Storage limit " + settings.maxDiskGb + " GB"
     return ""
   }
 
@@ -415,6 +415,14 @@ Item {
   readonly property int tileGap: Style.space(4)
   readonly property int tileInset: Math.max(1, Style.normalBorderWidth)
   readonly property string fontFamily: Style.font.menuFamily
+
+  // Persistent settings shared with the Setup screen (see Settings.qml). Kept
+  // here so destroying the Setup screen never loses the values.
+  Settings {
+    id: settings
+    settingsPath: root.settingsPath
+    settingsDir: root.settingsDir
+  }
 
   // The two heroes (grid / fullscreen preview) are pinned to the same height so
   // switching view — or a title that grows a resolution suffix — never shifts
@@ -569,7 +577,7 @@ Item {
       return size !== "" ? "Downloading " + size + "…" : "Downloading…"
     }
     if (cmd === "random-install")
-      return "Shuffling in " + setupSettings.shuffleCount + " wallpapers…"
+      return "Shuffling in " + settings.shuffleCount + " wallpapers…"
     var theme = actionTheme !== "" ? themeByName(actionTheme) : selectedTheme
     // Prefer the running scope (a collection / a selection) over the theme's
     // whole count, so "Downloading 250 wallpapers…" and not 500.
@@ -738,9 +746,9 @@ Item {
   function scriptCmd(args) {
     return ["/usr/bin/env",
       "WALLPAPER_MANAGER_ID=" + pluginId,
-      "WALLPAPER_MANAGER_PARALLEL=" + setupSettings.parallelDownloads,
-      "WALLPAPER_MANAGER_MAX_FILES=" + setupSettings.maxLocalFiles,
-      "WALLPAPER_MANAGER_MAX_DISK_GB=" + setupSettings.maxDiskGb,
+      "WALLPAPER_MANAGER_PARALLEL=" + settings.parallelDownloads,
+      "WALLPAPER_MANAGER_MAX_FILES=" + settings.maxLocalFiles,
+      "WALLPAPER_MANAGER_MAX_DISK_GB=" + settings.maxDiskGb,
       scriptPath].concat(args)
   }
 
@@ -945,9 +953,9 @@ Item {
     }
     rows.push({
       kind: "shuffle",
-      label: "Shuffle (" + setupSettings.shuffleCount + ")",
+      label: "Shuffle (" + settings.shuffleCount + ")",
       hint: "Random sample, same as the themes screen",
-      count: setupSettings.shuffleCount,
+      count: settings.shuffleCount,
       installed: 0,
       sizeBytes: 0,
       resolution: totals.resolution
@@ -1029,8 +1037,8 @@ Item {
     startPrewarm(urls)
   }
   // Setup's default resolution, indicated on the cards (not enforced yet).
-  readonly property string setupResolution: setupSettings.resolution
-  readonly property bool randomDefaultOnInstall: setupSettings.randomDefaultOnInstall
+  readonly property string setupResolution: settings.resolution
+  readonly property bool randomDefaultOnInstall: settings.randomDefaultOnInstall
 
   function takeCustomCursor(index) {
     if (view !== "custom") return
@@ -1039,7 +1047,7 @@ Item {
 
   function toggleRandomDefaultOnInstall() {
     if (view !== "custom") return
-    setupSettings.randomDefaultOnInstall = !setupSettings.randomDefaultOnInstall
+    settings.randomDefaultOnInstall = !settings.randomDefaultOnInstall
   }
 
   function customRowFocused(index) {
@@ -1135,7 +1143,7 @@ Item {
   function activateCustom() {
     if (view !== "custom") return
     if (customSelection >= customSwitchRow) {
-      setupSettings.randomDefaultOnInstall = !setupSettings.randomDefaultOnInstall
+      settings.randomDefaultOnInstall = !settings.randomDefaultOnInstall
       return
     }
     var row = customRows[customSelection]
@@ -1150,12 +1158,12 @@ Item {
     if (theme === "") return
     // The switch remembers whether to pick a random default once the install
     // finishes; the chain is applied in `actionProc.onExited`.
-    pendingCustomRandomDefault = setupSettings.randomDefaultOnInstall ? theme : ""
+    pendingCustomRandomDefault = settings.randomDefaultOnInstall ? theme : ""
     if (row.kind === "full") runAction(["install", theme])
     else if (row.kind === "collection")
       runAction(["install", theme, "--collection", String(row.collection)])
     else if (row.kind === "shuffle")
-      runAction(["random-install", theme, String(setupSettings.shuffleCount)])
+      runAction(["random-install", theme, String(settings.shuffleCount)])
   }
 
   // Footer "Install": runs the highlighted choice (same as Enter on the card).
@@ -1201,7 +1209,7 @@ Item {
       runAction(["set-default", theme, item.filename, item.url])
       return
     }
-    setupSettings.setThemeDefault(theme, item.filename, item.url)
+    settings.setThemeDefault(theme, item.filename, item.url)
     if (String(item.installed) !== "1") {
       busy = true
       setStatus("Installing " + item.name + "…")
@@ -1679,7 +1687,7 @@ Item {
     }
     // The setup screen: `d` restores the defaults; everything else is ignored.
     if (view === "setup") {
-      if (text === "d" || text === "D") setupSettings.restoreDefaults()
+      if (text === "d" || text === "D") settings.restoreDefaults()
       return
     }
     // The help screen: `p` proposes a feature, `d` opens the version dataset;
@@ -1848,8 +1856,8 @@ Item {
   function isThemeDefault(model) {
     if (!model) return false
     if (browsingActiveTheme) return String(model.isDefault) === "1"
-    var rev = setupSettings.themeDefaultsRevision
-    var d = setupSettings.themeDefault(themeName)
+    var rev = settings.themeDefaultsRevision
+    var d = settings.themeDefault(themeName)
     return !!d && String(d.filename) === String(model.filename)
   }
 
@@ -1942,11 +1950,11 @@ Item {
     if (browsingActiveTheme) {
       busy = true
       if (String(item.isDefault) === "1") {
-        setupSettings.clearThemeDefault(themeName)
+        settings.clearThemeDefault(themeName)
         setStatus("Clearing default: " + item.name + "…")
         runAction(["unset-default", themeName, item.filename])
       } else {
-        setupSettings.setThemeDefault(themeName, item.filename, item.url)
+        settings.setThemeDefault(themeName, item.filename, item.url)
         setStatus("Setting default: " + item.name + "…")
         runAction(["set-default", themeName, item.filename, item.url])
       }
@@ -1954,13 +1962,13 @@ Item {
     }
     // Another theme: remember the choice (making sure the file lands on disk)
     // and leave the current background untouched.
-    var remembered = setupSettings.themeDefault(themeName)
+    var remembered = settings.themeDefault(themeName)
     if (remembered && String(remembered.filename) === String(item.filename)) {
-      setupSettings.clearThemeDefault(themeName)
+      settings.clearThemeDefault(themeName)
       setStatus("Default cleared for " + Model.ucfirst(themeName))
       return
     }
-    setupSettings.setThemeDefault(themeName, item.filename, item.url)
+    settings.setThemeDefault(themeName, item.filename, item.url)
     if (String(item.installed) !== "1") {
       busy = true
       setStatus("Installing " + item.name + "…")
@@ -1992,7 +2000,7 @@ Item {
   function actionRandomInstall() {
     var theme = selectedTheme
     if (!theme || storageLimitReached) return
-    var count = Math.max(1, Math.min(50, setupSettings.shuffleCount))
+    var count = Math.max(1, Math.min(50, settings.shuffleCount))
     busy = true
     setStatus("Shuffling in " + count + " wallpapers of " + theme.name + "…")
     runAction(["random-install", theme.name, String(count)])
@@ -2035,8 +2043,8 @@ Item {
   function rotateWallpaper() {
     if (rotationProc.running) return
     var args = ["rotate"]
-    if (setupSettings.rotationAllTheme) args.push("--all")
-    if (setupSettings.rotationRandom) args.push("--random")
+    if (settings.rotationAllTheme) args.push("--all")
+    if (settings.rotationRandom) args.push("--random")
     rotationProc.command = scriptCmd(args)
     rotationProc.running = true
   }
@@ -2053,7 +2061,7 @@ Item {
   }
 
   function applyThemeDefault(theme) {
-    var d = setupSettings.themeDefault(theme)
+    var d = settings.themeDefault(theme)
     if (!d || !d.filename) return
     if (themeDefaultProc.running) {
       pendingThemeDefaultTheme = theme
@@ -2355,10 +2363,15 @@ Item {
     refreshDetailShown()
     hoverArmed = false
     hoverGate.restart()
-    // The collection popup is a separate window: close it when the wallpapers
-    // screen is left, or it would stay floating over the other views.
-    if (view !== "wallpapers" && wallpapersView.collectionDropdown && wallpapersView.collectionDropdown.popupOpen)
+    // Dropdown popups are top-level overlays: they ignore the screen's
+    // `visible`, so leaving the screen would leave them floating over the
+    // next one and holding the keyboard. Close both, then hand focus back.
+    if (view !== "wallpapers" && wallpapersView.collectionDropdown
+        && wallpapersView.collectionDropdown.popupOpen)
       wallpapersView.collectionDropdown.close()
+    if (view !== "setup" && setupSettings.dropdownOpen)
+      setupSettings.closeDropdown()
+    Qt.callLater(function() { keys.forceActiveFocus() })
   }
   // A prewarmed neighbour may make the full image available: upgrade the detail
   // pane from the small preview without waiting for the next selection.
@@ -2729,8 +2742,8 @@ Item {
   // the previous one is still running.
   Timer {
     id: rotationTimer
-    interval: Math.max(1, setupSettings.rotationInterval) * 60000
-    running: setupSettings.rotationEnabled
+    interval: Math.max(1, settings.rotationInterval) * 60000
+    running: settings.rotationEnabled
     repeat: true
     onTriggered: root.rotateWallpaper()
   }
@@ -2867,9 +2880,10 @@ Item {
 
         // Search owns the keyboard entirely: let the card's fallback handle it.
         // Same while a dropdown popup is open (Setup interval / collections),
-        // so its list gets the arrows / Enter / Esc.
+        // so its list gets the arrows / Enter / Esc. The collection popup only
+        // blocks on its own screen: a leaked popup must not freeze navigation.
         blocked: root.searching || setupSettings.dropdownOpen
-          || wallpapersView.collectionDropdown.popupOpen
+          || (root.view === "wallpapers" && wallpapersView.collectionDropdown.popupOpen)
 
         onMoveRequested: function(dx, dy) { root.moveCursor(dx, dy) }
         // Enter also fires `activateRequested`, so the flag drops that second
@@ -2923,7 +2937,7 @@ Item {
           logoPath: root.logoPath
           dev: root.dev
           actionRunning: root.actionRunning
-          saved: setupSettings.saved
+          saved: settings.saved
           wallpapers: root.globalCounts.wallpapers
           installed: root.globalCounts.installed
           storageLimitReached: root.storageLimitReached
@@ -2972,6 +2986,8 @@ Item {
           id: themesView
 
           visible: root.view === "themes"
+          // An inactive screen must be inert: no focus, no clicks, no popups.
+          enabled: root.view === "themes"
           anchors.top: heroRule.bottom
           anchors.left: parent.left
           anchors.right: parent.right
@@ -2980,7 +2996,7 @@ Item {
           anchors.rightMargin: -card.rightPadding
           anchors.bottom: actionFooter.top
           manager: root
-          shuffleCount: setupSettings.shuffleCount
+          shuffleCount: settings.shuffleCount
         }
 
         // ---- custom install view --------------------------------------------
@@ -2990,6 +3006,7 @@ Item {
           id: customView
 
           visible: root.view === "custom"
+          enabled: root.view === "custom"
           anchors.top: heroRule.bottom
           anchors.left: parent.left
           anchors.right: parent.right
@@ -3009,6 +3026,7 @@ Item {
           id: helpView
 
           visible: root.view === "help"
+          enabled: root.view === "help"
           anchors.top: heroRule.bottom
           anchors.left: parent.left
           anchors.right: parent.right
@@ -3046,6 +3064,7 @@ Item {
           id: setupView
 
           visible: root.view === "setup"
+          enabled: root.view === "setup"
           anchors.top: heroRule.bottom
           anchors.left: parent.left
           anchors.right: parent.right
@@ -3055,8 +3074,7 @@ Item {
             id: setupSettings
 
             anchors.fill: parent
-            settingsPath: root.settingsPath
-            settingsDir: root.settingsDir
+            settings: settings
             localFileCount: root.localFileCount
             localBytes: root.localBytes
             rotateBusy: rotationProc.running
@@ -3083,6 +3101,7 @@ Item {
           id: wallpapersView
 
           visible: root.view === "wallpapers"
+          enabled: root.view === "wallpapers"
           anchors.top: heroRule.bottom
           anchors.bottom: actionFooter.top
           anchors.left: parent.left
@@ -3146,6 +3165,7 @@ Item {
           id: previewView
 
           visible: root.view === "preview"
+          enabled: root.view === "preview"
           anchors.fill: parent
           z: 10
           manager: root

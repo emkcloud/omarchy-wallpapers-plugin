@@ -38,57 +38,22 @@ Item {
   readonly property int bodyPadY: Style.space(24)
 
   // ---- settings ------------------------------------------------------------
-  readonly property var defaults: ({
-    resolution: "2k",
-    shuffleCount: 5,
-    parallelDownloads: 8,
-    maxLocalFiles: 2500,
-    maxDiskGb: 3,
-    rotationEnabled: false,
-    rotationInterval: 30,
-    rotationAllTheme: false,
-    rotationRandom: false,
-    randomDefaultOnInstall: true
-  })
+  // Persistent settings object created by the panel. Kept out of this view so
+  // the Setup screen can be destroyed and rebuilt without losing the values.
+  required property var settings
 
-  property string resolution: "2k"
-  property int shuffleCount: 5
-  property int parallelDownloads: 8
-  property int maxLocalFiles: 2500
-  property int maxDiskGb: 3
-  property bool rotationEnabled: false
-  property int rotationInterval: 30
-  // Off: rotate only the plugin's wallpapers. On: every wallpaper of the
-  // selected theme.
-  property bool rotationAllTheme: false
-  property bool rotationRandom: false
-  // Custom-install screen: set a random wallpaper of the theme as the default
-  // when an install launched from there finishes. Persisted here with the other
-  // settings; only surfaced on that screen.
-  property bool randomDefaultOnInstall: true
-  // Per-theme remembered default wallpaper: `<theme> -> { filename, url }`.
-  // Not a row in the UI, but persisted with the other settings so a default
-  // chosen while browsing another theme survives restarts and is applied when
-  // the user switches to that theme. `themeDefaultsRevision` makes the plain
-  // object a tracked dependency for the DEFAULT markers.
-  property var themeDefaults: ({})
-  property int themeDefaultsRevision: 0
   // Injected by the panel: a rotate is in flight, so "Rotate now" is disabled.
   property bool rotateBusy: false
-
-  property bool settingsLoaded: false
-  // Flashes the "Saved" caption after a write.
-  property bool saved: false
 
   // ---- usage (right sidebar) ----------------------------------------------
   // Live local usage injected by the panel, shown against the caps.
   property int localFileCount: 0
   property real localBytes: 0
 
-  readonly property int usageFilePercent: maxLocalFiles > 0
-    ? Math.min(100, Math.round(localFileCount / maxLocalFiles * 100)) : 0
-  readonly property int usageDiskPercent: maxDiskGb > 0
-    ? Math.min(100, Math.round(localBytes / (maxDiskGb * 1073741824) * 100)) : 0
+  readonly property int usageFilePercent: settings.maxLocalFiles > 0
+    ? Math.min(100, Math.round(localFileCount / settings.maxLocalFiles * 100)) : 0
+  readonly property int usageDiskPercent: settings.maxDiskGb > 0
+    ? Math.min(100, Math.round(localBytes / (settings.maxDiskGb * 1073741824) * 100)) : 0
 
   // Uniform bottom margin under every sidebar section title (SECTIONS / USAGE /
   // ACTIONS), so they all breathe the same.
@@ -101,47 +66,7 @@ Item {
   }
 
   // ---- per-theme default wallpaper -----------------------------------------
-  // The wallpaper chosen as a theme's default while browsing a theme that is
-  // not the running one. `setThemeDefault`/`clearThemeDefault` are called by the
-  // panel and persist immediately (debounced).
-  function themeDefault(theme) {
-    var d = themeDefaults[String(theme)]
-    return d && d.filename ? d : null
-  }
-
-  function sanitizeThemeDefaults(raw) {
-    var out = {}
-    if (!raw || typeof raw !== "object") return out
-    for (var k in raw) {
-      var v = raw[k]
-      if (v && typeof v === "object" && typeof v.filename === "string" && v.filename !== "")
-        out[String(k)] = {
-          filename: String(v.filename),
-          url: typeof v.url === "string" ? v.url : ""
-        }
-    }
-    return out
-  }
-
-  function setThemeDefault(theme, filename, url) {
-    if (!settingsLoaded || !theme || !filename) return
-    var next = {}
-    for (var k in themeDefaults) next[k] = themeDefaults[k]
-    next[String(theme)] = { filename: String(filename), url: String(url || "") }
-    themeDefaults = next
-    themeDefaultsRevision++
-    scheduleSave()
-  }
-
-  function clearThemeDefault(theme) {
-    if (!settingsLoaded || !themeDefaults[String(theme)]) return
-    var next = {}
-    for (var k in themeDefaults)
-      if (k !== String(theme)) next[k] = themeDefaults[k]
-    themeDefaults = next
-    themeDefaultsRevision++
-    scheduleSave()
-  }
+  // `themeDefault` / `setThemeDefault` / `clearThemeDefault` live in Settings.
 
   // Shared sidebar caption: uppercase, dim, with the uniform gap below.
   component SectionTitle: Text {
@@ -154,19 +79,6 @@ Item {
     font.letterSpacing: 1.2
     bottomPadding: setup.sectionTitleGap
   }
-
-  // Every change is persisted automatically (debounced); there is no Save
-  // button. `load()` fills the properties before `settingsLoaded` flips, so
-  // these handlers stay no-ops until the initial load has finished.
-  onResolutionChanged: scheduleSave()
-  onShuffleCountChanged: scheduleSave()
-  onParallelDownloadsChanged: scheduleSave()
-  onMaxLocalFilesChanged: scheduleSave()
-  onMaxDiskGbChanged: scheduleSave()
-  onRotationEnabledChanged: scheduleSave()
-  onRotationIntervalChanged: scheduleSave()
-  onRotationAllThemeChanged: scheduleSave()
-  onRotationRandomChanged: scheduleSave()
 
   component FieldHint: Text {
     width: parent ? parent.width : 0
@@ -413,6 +325,12 @@ Item {
   // keyboard so the dropdown's own list handles arrows / Enter / Esc.
   readonly property bool dropdownOpen: intervalField.popupOpen
 
+  // The popup is a top-level overlay: the panel closes it when the Setup
+  // screen is left so it cannot float over the next view.
+  function closeDropdown() {
+    if (intervalField.popupOpen) intervalField.close()
+  }
+
   function isRowFocused(sec, idx) {
     return navArea === "content" && section === sec && contentRow === idx
   }
@@ -469,22 +387,22 @@ Item {
 
   function rowValue(key) {
     switch (key) {
-    case "interval": return rotationInterval
-    case "shuffle": return shuffleCount
-    case "parallel": return parallelDownloads
-    case "maxFiles": return maxLocalFiles
-    case "maxDisk": return maxDiskGb
+    case "interval": return settings.rotationInterval
+    case "shuffle": return settings.shuffleCount
+    case "parallel": return settings.parallelDownloads
+    case "maxFiles": return settings.maxLocalFiles
+    case "maxDisk": return settings.maxDiskGb
     }
     return null
   }
 
   function setRowValue(key, value) {
     switch (key) {
-    case "interval": rotationInterval = value; break
-    case "shuffle": shuffleCount = clampInt(value, 1, 50, shuffleCount); break
-    case "parallel": parallelDownloads = clampInt(value, 1, 12, parallelDownloads); break
-    case "maxFiles": maxLocalFiles = clampInt(value, 1000, 5000, maxLocalFiles); break
-    case "maxDisk": maxDiskGb = clampInt(value, 1, 50, maxDiskGb); break
+    case "interval": settings.rotationInterval = value; break
+    case "shuffle": settings.shuffleCount = settings.clampInt(value, 1, 50, settings.shuffleCount); break
+    case "parallel": settings.parallelDownloads = settings.clampInt(value, 1, 12, settings.parallelDownloads); break
+    case "maxFiles": settings.maxLocalFiles = settings.clampInt(value, 1000, 5000, settings.maxLocalFiles); break
+    case "maxDisk": settings.maxDiskGb = settings.clampInt(value, 1, 50, settings.maxDiskGb); break
     }
   }
 
@@ -511,13 +429,13 @@ Item {
   function adjustRow(dir) {
     switch (navRows[contentRow]) {
     case "shuffle":
-      shuffleCount = clampInt(shuffleCount + dir, 1, 50, shuffleCount); break
+      settings.shuffleCount = settings.clampInt(settings.shuffleCount + dir, 1, 50, settings.shuffleCount); break
     case "parallel":
-      parallelDownloads = clampInt(parallelDownloads + dir, 1, 12, parallelDownloads); break
+      settings.parallelDownloads = settings.clampInt(settings.parallelDownloads + dir, 1, 12, settings.parallelDownloads); break
     case "maxFiles":
-      maxLocalFiles = clampInt(maxLocalFiles + dir * 100, 1000, 5000, maxLocalFiles); break
+      settings.maxLocalFiles = settings.clampInt(settings.maxLocalFiles + dir * 100, 1000, 5000, settings.maxLocalFiles); break
     case "maxDisk":
-      maxDiskGb = clampInt(maxDiskGb + dir, 1, 50, maxDiskGb); break
+      settings.maxDiskGb = settings.clampInt(settings.maxDiskGb + dir, 1, 50, settings.maxDiskGb); break
     case "interval":
       cycleInterval(dir); break
     default:
@@ -527,158 +445,33 @@ Item {
 
   function activateRow() {
     switch (navRows[contentRow]) {
-    case "enabled": rotationEnabled = !rotationEnabled; break
-    case "allTheme": rotationAllTheme = !rotationAllTheme; break
-    case "random": rotationRandom = !rotationRandom; break
+    case "enabled": settings.rotationEnabled = !settings.rotationEnabled; break
+    case "allTheme": settings.rotationAllTheme = !settings.rotationAllTheme; break
+    case "random": settings.rotationRandom = !settings.rotationRandom; break
     case "interval": cycleInterval(1); break
     case "rotateNow":
       if (!rotateBusy) rotateRequested(); break
     case "shuffle":
-      shuffleCount = clampInt(shuffleCount + 1, 1, 50, shuffleCount); break
+      settings.shuffleCount = settings.clampInt(settings.shuffleCount + 1, 1, 50, settings.shuffleCount); break
     case "parallel":
-      parallelDownloads = clampInt(parallelDownloads + 1, 1, 12, parallelDownloads); break
+      settings.parallelDownloads = settings.clampInt(settings.parallelDownloads + 1, 1, 12, settings.parallelDownloads); break
     case "maxFiles":
-      maxLocalFiles = clampInt(maxLocalFiles + 100, 1000, 5000, maxLocalFiles); break
+      settings.maxLocalFiles = settings.clampInt(settings.maxLocalFiles + 100, 1000, 5000, settings.maxLocalFiles); break
     case "maxDisk":
-      maxDiskGb = clampInt(maxDiskGb + 1, 1, 50, maxDiskGb); break
+      settings.maxDiskGb = settings.clampInt(settings.maxDiskGb + 1, 1, 50, settings.maxDiskGb); break
     default:
       break
     }
   }
 
   function cycleInterval(dir) {
-    var i = intervalOptions.indexOf(rotationInterval)
+    var i = settings.intervalOptions.indexOf(settings.rotationInterval)
     if (i < 0) i = 0
-    i = (i + dir + intervalOptions.length) % intervalOptions.length
-    rotationInterval = intervalOptions[i]
+    i = (i + dir + settings.intervalOptions.length) % settings.intervalOptions.length
+    settings.rotationInterval = settings.intervalOptions[i]
   }
 
-  function clampInt(value, lo, hi, fallback) {
-    var n = Number(value)
-    if (!isFinite(n)) return fallback
-    return Math.max(lo, Math.min(hi, Math.round(n)))
-  }
-
-  function load(raw) {
-    if (settingsLoaded) return
-    var parsed = {}
-    try { parsed = raw ? JSON.parse(raw) : {} } catch (e) { parsed = {} }
-    if (!parsed || typeof parsed !== "object") parsed = {}
-
-    // Only 2K is selectable for now (4K/8K are placeholders), so any other
-    // stored value falls back to it.
-    resolution = parsed.resolution === "2k" ? "2k" : defaults.resolution
-    shuffleCount = clampInt(parsed.shuffleCount, 1, 50, defaults.shuffleCount)
-    parallelDownloads = clampInt(parsed.parallelDownloads, 1, 12, defaults.parallelDownloads)
-    maxLocalFiles = clampInt(parsed.maxLocalFiles, 1000, 5000, defaults.maxLocalFiles)
-    maxDiskGb = clampInt(parsed.maxDiskGb, 1, 50, defaults.maxDiskGb)
-    rotationEnabled = parsed.rotationEnabled === true
-    var interval = clampInt(parsed.rotationInterval, 1, 1440, defaults.rotationInterval)
-    rotationInterval = intervalOptions.indexOf(interval) >= 0 ? interval : defaults.rotationInterval
-    rotationAllTheme = parsed.rotationAllTheme === true
-    rotationRandom = parsed.rotationRandom === true
-    randomDefaultOnInstall = parsed.randomDefaultOnInstall !== false
-    themeDefaults = sanitizeThemeDefaults(parsed.themeDefaults)
-
-    settingsLoaded = true
-    saved = false
-  }
-
-  function serialize() {
-    return JSON.stringify({
-      version: 1,
-      resolution: resolution,
-      shuffleCount: shuffleCount,
-      parallelDownloads: parallelDownloads,
-      maxLocalFiles: maxLocalFiles,
-      maxDiskGb: maxDiskGb,
-      rotationEnabled: rotationEnabled,
-      rotationInterval: rotationInterval,
-      rotationAllTheme: rotationAllTheme,
-      rotationRandom: rotationRandom,
-      randomDefaultOnInstall: randomDefaultOnInstall,
-      themeDefaults: themeDefaults
-    }, null, 2) + "\n"
-  }
-
-  // Coalesce a burst of changes into a single write.
-  function scheduleSave() {
-    if (!settingsLoaded) return
-    autosaveTimer.restart()
-  }
-
-  function save() {
-    settingsFile.setText(serialize())
-    saved = true
-    savedReset.restart()
-  }
-
-  function restoreDefaults() {
-    resolution = defaults.resolution
-    shuffleCount = defaults.shuffleCount
-    parallelDownloads = defaults.parallelDownloads
-    maxLocalFiles = defaults.maxLocalFiles
-    maxDiskGb = defaults.maxDiskGb
-    rotationEnabled = defaults.rotationEnabled
-    rotationInterval = defaults.rotationInterval
-    rotationAllTheme = defaults.rotationAllTheme
-    rotationRandom = defaults.rotationRandom
-    randomDefaultOnInstall = defaults.randomDefaultOnInstall
-  }
-
-  readonly property var intervalOptions: [1, 5, 15, 30, 60, 120]
-  readonly property var intervalChoices: [
-    { value: "1", label: "1 minute" },
-    { value: "5", label: "5 minutes" },
-    { value: "15", label: "15 minutes" },
-    { value: "30", label: "30 minutes" },
-    { value: "60", label: "1 hour" },
-    { value: "120", label: "2 hours" }
-  ]
-
-  FileView {
-    id: settingsFile
-
-    path: setup.settingsPath
-    watchChanges: false
-    atomicWrites: true
-    printErrors: false
-    onLoaded: setup.load(text())
-    onLoadFailed: setup.load("")
-  }
-
-  Process {
-    id: mkdirProc
-    command: ["mkdir", "-p", setup.settingsDir]
-  }
-
-  Timer {
-    id: savedReset
-    interval: 2000
-    repeat: false
-    onTriggered: setup.saved = false
-  }
-
-  Timer {
-    id: autosaveTimer
-    interval: 400
-    repeat: false
-    onTriggered: setup.save()
-  }
-
-  // `settingsPath` derives from the injected manifest, which can arrive after
-  // this component is created: the first binding may point at the fallback
-  // (official) path, whose failed load locks `settingsLoaded`. Reload from the
-  // real path as soon as it is known.
-  onSettingsPathChanged: {
-    settingsLoaded = false
-    Qt.callLater(function() { settingsFile.reload() })
-  }
-
-  Component.onCompleted: {
-    if (setup.settingsDir !== "") mkdirProc.running = true
-    Qt.callLater(function() { settingsFile.reload() })
-  }
+  // load / serialize / scheduleSave / save / restoreDefaults live in Settings.
 
   // ---- left: roadmap (same column as Help) ---------------------------------
   Item {
@@ -826,7 +619,7 @@ Item {
           width: parent.width
           label: "Local files"
           usedLabel: setup.grouped(setup.localFileCount)
-          totalLabel: setup.grouped(setup.maxLocalFiles)
+          totalLabel: setup.grouped(settings.maxLocalFiles)
           percent: setup.usageFilePercent
         }
 
@@ -834,7 +627,7 @@ Item {
           width: parent.width
           label: "Disk space"
           usedLabel: (setup.localBytes / 1073741824).toFixed(1)
-          totalLabel: setup.maxDiskGb.toFixed(1) + " GB"
+          totalLabel: settings.maxDiskGb.toFixed(1) + " GB"
           percent: setup.usageDiskPercent
         }
       }
@@ -864,7 +657,7 @@ Item {
         foreground: setup.foreground
         accent: setup.accent
         fontFamily: setup.fontFamily
-        onClicked: setup.restoreDefaults()
+        onClicked: settings.restoreDefaults()
       }
     }
   }
@@ -979,13 +772,13 @@ Item {
                 enabled: modelData.available
                 opacity: enabled ? 1 : 0.4
                 text: modelData.label
-                selected: setup.resolution === modelData.value
+                selected: settings.resolution === modelData.value
                 bordered: true
                 foreground: setup.foreground
                 background: setup.background
                 accent: setup.accent
                 fontFamily: setup.fontFamily
-                onClicked: setup.resolution = modelData.value
+                onClicked: settings.resolution = modelData.value
               }
             }
           }
@@ -1029,11 +822,11 @@ Item {
             anchors.top: parent.top
             from: 1
             to: 50
-            value: setup.shuffleCount
+            value: settings.shuffleCount
             foreground: setup.foreground
             accent: setup.accent
             fontFamily: setup.fontFamily
-            onModified: function(v) { setup.shuffleCount = v }
+            onModified: function(v) { settings.shuffleCount = v }
           }
         }
 
@@ -1075,11 +868,11 @@ Item {
             anchors.top: parent.top
             from: 1
             to: 12
-            value: setup.parallelDownloads
+            value: settings.parallelDownloads
             foreground: setup.foreground
             accent: setup.accent
             fontFamily: setup.fontFamily
-            onModified: function(v) { setup.parallelDownloads = v }
+            onModified: function(v) { settings.parallelDownloads = v }
           }
         }
 
@@ -1121,11 +914,11 @@ Item {
             anchors.top: parent.top
             from: 1000
             to: 5000
-            value: setup.maxLocalFiles
+            value: settings.maxLocalFiles
             foreground: setup.foreground
             accent: setup.accent
             fontFamily: setup.fontFamily
-            onModified: function(v) { setup.maxLocalFiles = v }
+            onModified: function(v) { settings.maxLocalFiles = v }
           }
         }
 
@@ -1167,11 +960,11 @@ Item {
             anchors.top: parent.top
             from: 1
             to: 50
-            value: setup.maxDiskGb
+            value: settings.maxDiskGb
             foreground: setup.foreground
             accent: setup.accent
             fontFamily: setup.fontFamily
-            onModified: function(v) { setup.maxDiskGb = v }
+            onModified: function(v) { settings.maxDiskGb = v }
           }
         }
       }
@@ -1252,14 +1045,14 @@ Item {
 
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
-                checked: setup.rotationEnabled
+                checked: settings.rotationEnabled
                 foreground: setup.foreground
                 accent: setup.accent
-                onToggled: setup.rotationEnabled = !setup.rotationEnabled
+                onToggled: settings.rotationEnabled = !settings.rotationEnabled
               }
             }
 
-            TapHandler { onTapped: setup.rotationEnabled = !setup.rotationEnabled }
+            TapHandler { onTapped: settings.rotationEnabled = !settings.rotationEnabled }
           }
         }
 
@@ -1307,10 +1100,10 @@ Item {
 
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
-              checked: setup.rotationAllTheme
+              checked: settings.rotationAllTheme
               foreground: setup.foreground
               accent: setup.accent
-              onToggled: setup.rotationAllTheme = !setup.rotationAllTheme
+              onToggled: settings.rotationAllTheme = !settings.rotationAllTheme
             }
           }
         }
@@ -1340,7 +1133,7 @@ Item {
             }
 
             FieldHint {
-              text: "Sequential by default: wallpapers advance in the order they appear. When enabled, the next one is chosen at random, so the sequence feels less predictable and more varied over time."
+              text: "Sequential by default: wallpapers advance in the order they appear and resume where they left off after a theme switch. When enabled, the next one is drawn from a shuffled pool that never repeats a wallpaper until all of them have been shown, then a new cycle starts."
             }
           }
 
@@ -1357,10 +1150,10 @@ Item {
 
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
-              checked: setup.rotationRandom
+              checked: settings.rotationRandom
               foreground: setup.foreground
               accent: setup.accent
-              onToggled: setup.rotationRandom = !setup.rotationRandom
+              onToggled: settings.rotationRandom = !settings.rotationRandom
             }
           }
         }
@@ -1402,13 +1195,13 @@ Item {
             anchors.right: parent.right
             anchors.top: parent.top
             width: Style.space(120)
-            options: setup.intervalChoices
-            value: String(setup.rotationInterval)
+            options: settings.intervalChoices
+            value: String(settings.rotationInterval)
             foreground: setup.foreground
             background: setup.background
             accent: setup.accent
             fontFamily: setup.fontFamily
-            onChanged: function(v) { setup.rotationInterval = parseInt(v) }
+            onChanged: function(v) { settings.rotationInterval = parseInt(v) }
           }
         }
 

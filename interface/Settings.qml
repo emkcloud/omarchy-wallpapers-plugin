@@ -1,0 +1,242 @@
+import QtQuick
+import Quickshell
+import Quickshell.Io
+
+// Persistent application settings for the wallpaper manager.
+//
+// Created once by WallpaperManager and shared with the Setup screen. Keeping
+// the values (and the load/save state) here — instead of inside SetupView —
+// means the Setup screen can be destroyed and re-created when the user leaves
+// it without losing anything: reopening it reads the same object.
+//
+// Every change is persisted automatically (debounced) to `settingsPath`; there
+// is no Save button.
+Item {
+  id: settings
+
+  // Where the settings live. The panel sets these from the injected manifest,
+  // so `settingsPath` can arrive after this object is created (the file is
+  // reloaded as soon as it is known — see `onSettingsPathChanged`).
+  property string settingsPath: ""
+  property string settingsDir: ""
+
+  readonly property var defaults: ({
+    resolution: "2k",
+    shuffleCount: 5,
+    parallelDownloads: 8,
+    maxLocalFiles: 2500,
+    maxDiskGb: 3,
+    rotationEnabled: false,
+    rotationInterval: 30,
+    rotationAllTheme: false,
+    rotationRandom: false,
+    randomDefaultOnInstall: true
+  })
+
+  property string resolution: "2k"
+  property int shuffleCount: 5
+  property int parallelDownloads: 8
+  property int maxLocalFiles: 2500
+  property int maxDiskGb: 3
+  property bool rotationEnabled: false
+  property int rotationInterval: 30
+  // Off: rotate only the plugin's wallpapers. On: every wallpaper of the
+  // selected theme.
+  property bool rotationAllTheme: false
+  property bool rotationRandom: false
+  // Custom-install screen: set a random wallpaper of the theme as the default
+  // when an install launched from there finishes.
+  property bool randomDefaultOnInstall: true
+
+  // Per-theme remembered default wallpaper: `<theme> -> { filename, url }`.
+  // Not a row in the UI, but persisted with the other settings so a default
+  // chosen while browsing another theme survives restarts. `themeDefaultsRevision`
+  // makes the plain object a tracked dependency for the DEFAULT markers.
+  property var themeDefaults: ({})
+  property int themeDefaultsRevision: 0
+
+  property bool settingsLoaded: false
+  // Flashes the "Saved" caption after a write.
+  property bool saved: false
+
+  readonly property var intervalOptions: [1, 5, 15, 30, 60, 120]
+  readonly property var intervalChoices: [
+    { value: "1", label: "1 minute" },
+    { value: "5", label: "5 minutes" },
+    { value: "15", label: "15 minutes" },
+    { value: "30", label: "30 minutes" },
+    { value: "60", label: "1 hour" },
+    { value: "120", label: "2 hours" }
+  ]
+
+  // ---- per-theme default wallpaper -----------------------------------------
+  // The wallpaper chosen as a theme's default while browsing a theme that is
+  // not the running one. Called by the panel; persists immediately (debounced).
+  function themeDefault(theme) {
+    var d = themeDefaults[String(theme)]
+    return d && d.filename ? d : null
+  }
+
+  function sanitizeThemeDefaults(raw) {
+    var out = {}
+    if (!raw || typeof raw !== "object") return out
+    for (var k in raw) {
+      var v = raw[k]
+      if (v && typeof v === "object" && typeof v.filename === "string" && v.filename !== "")
+        out[String(k)] = {
+          filename: String(v.filename),
+          url: typeof v.url === "string" ? v.url : ""
+        }
+    }
+    return out
+  }
+
+  function setThemeDefault(theme, filename, url) {
+    if (!settingsLoaded || !theme || !filename) return
+    var next = {}
+    for (var k in themeDefaults) next[k] = themeDefaults[k]
+    next[String(theme)] = { filename: String(filename), url: String(url || "") }
+    themeDefaults = next
+    themeDefaultsRevision++
+    scheduleSave()
+  }
+
+  function clearThemeDefault(theme) {
+    if (!settingsLoaded || !themeDefaults[String(theme)]) return
+    var next = {}
+    for (var k in themeDefaults)
+      if (k !== String(theme)) next[k] = themeDefaults[k]
+    themeDefaults = next
+    themeDefaultsRevision++
+    scheduleSave()
+  }
+
+  function clampInt(value, lo, hi, fallback) {
+    var n = Number(value)
+    if (!isFinite(n)) return fallback
+    return Math.max(lo, Math.min(hi, Math.round(n)))
+  }
+
+  function load(raw) {
+    if (settingsLoaded) return
+    var parsed = {}
+    try { parsed = raw ? JSON.parse(raw) : {} } catch (e) { parsed = {} }
+    if (!parsed || typeof parsed !== "object") parsed = {}
+
+    // Only 2K is selectable for now (4K/8K are placeholders), so any other
+    // stored value falls back to it.
+    resolution = parsed.resolution === "2k" ? "2k" : defaults.resolution
+    shuffleCount = clampInt(parsed.shuffleCount, 1, 50, defaults.shuffleCount)
+    parallelDownloads = clampInt(parsed.parallelDownloads, 1, 12, defaults.parallelDownloads)
+    maxLocalFiles = clampInt(parsed.maxLocalFiles, 1000, 5000, defaults.maxLocalFiles)
+    maxDiskGb = clampInt(parsed.maxDiskGb, 1, 50, defaults.maxDiskGb)
+    rotationEnabled = parsed.rotationEnabled === true
+    var interval = clampInt(parsed.rotationInterval, 1, 1440, defaults.rotationInterval)
+    rotationInterval = intervalOptions.indexOf(interval) >= 0 ? interval : defaults.rotationInterval
+    rotationAllTheme = parsed.rotationAllTheme === true
+    rotationRandom = parsed.rotationRandom === true
+    randomDefaultOnInstall = parsed.randomDefaultOnInstall !== false
+    themeDefaults = sanitizeThemeDefaults(parsed.themeDefaults)
+
+    settingsLoaded = true
+    saved = false
+  }
+
+  function serialize() {
+    return JSON.stringify({
+      version: 1,
+      resolution: resolution,
+      shuffleCount: shuffleCount,
+      parallelDownloads: parallelDownloads,
+      maxLocalFiles: maxLocalFiles,
+      maxDiskGb: maxDiskGb,
+      rotationEnabled: rotationEnabled,
+      rotationInterval: rotationInterval,
+      rotationAllTheme: rotationAllTheme,
+      rotationRandom: rotationRandom,
+      randomDefaultOnInstall: randomDefaultOnInstall,
+      themeDefaults: themeDefaults
+    }, null, 2) + "\n"
+  }
+
+  // Coalesce a burst of changes into a single write.
+  function scheduleSave() {
+    if (!settingsLoaded) return
+    autosaveTimer.restart()
+  }
+
+  function save() {
+    settingsFile.setText(serialize())
+    saved = true
+    savedReset.restart()
+  }
+
+  function restoreDefaults() {
+    resolution = defaults.resolution
+    shuffleCount = defaults.shuffleCount
+    parallelDownloads = defaults.parallelDownloads
+    maxLocalFiles = defaults.maxLocalFiles
+    maxDiskGb = defaults.maxDiskGb
+    rotationEnabled = defaults.rotationEnabled
+    rotationInterval = defaults.rotationInterval
+    rotationAllTheme = defaults.rotationAllTheme
+    rotationRandom = defaults.rotationRandom
+    randomDefaultOnInstall = defaults.randomDefaultOnInstall
+  }
+
+  // Persist on every change (debounced). `load()` fills the properties before
+  // `settingsLoaded` flips, so these are no-ops until the initial load is done.
+  onResolutionChanged: scheduleSave()
+  onShuffleCountChanged: scheduleSave()
+  onParallelDownloadsChanged: scheduleSave()
+  onMaxLocalFilesChanged: scheduleSave()
+  onMaxDiskGbChanged: scheduleSave()
+  onRotationEnabledChanged: scheduleSave()
+  onRotationIntervalChanged: scheduleSave()
+  onRotationAllThemeChanged: scheduleSave()
+  onRotationRandomChanged: scheduleSave()
+
+  FileView {
+    id: settingsFile
+
+    path: settings.settingsPath
+    watchChanges: false
+    atomicWrites: true
+    printErrors: false
+    onLoaded: settings.load(text())
+    onLoadFailed: settings.load("")
+  }
+
+  Process {
+    id: mkdirProc
+    command: ["mkdir", "-p", settings.settingsDir]
+  }
+
+  Timer {
+    id: savedReset
+    interval: 2000
+    repeat: false
+    onTriggered: settings.saved = false
+  }
+
+  Timer {
+    id: autosaveTimer
+    interval: 400
+    repeat: false
+    onTriggered: settings.save()
+  }
+
+  // `settingsPath` derives from the injected manifest, which can arrive after
+  // this object is created: the first binding may point at the fallback
+  // (official) path, whose failed load would lock `settingsLoaded`. Reload from
+  // the real path as soon as it is known.
+  onSettingsPathChanged: {
+    settingsLoaded = false
+    Qt.callLater(function() { settingsFile.reload() })
+  }
+
+  Component.onCompleted: {
+    if (settingsDir !== "") mkdirProc.running = true
+    Qt.callLater(function() { settingsFile.reload() })
+  }
+}
