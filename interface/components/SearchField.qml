@@ -98,11 +98,14 @@ BorderSurface {
     }
   }
 
-  // Clear button: empties the filter but keeps the field focused.
+  // Clear button: empties the filter but keeps the field focused. Shown
+  // whenever there is text, even if the field is not focused: the wallpapers
+  // filter stays applied while the user is back on the grid, and a mouse user
+  // must still be able to clear it.
   Text {
     id: searchClear
 
-    visible: field.active && field.text !== ""
+    visible: field.text !== ""
     anchors.right: parent.right
     anchors.rightMargin: field.contentRightInset
     anchors.verticalCenter: parent.verticalCenter

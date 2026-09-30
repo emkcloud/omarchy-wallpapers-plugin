@@ -284,18 +284,10 @@ Item {
     fontFamily: manager.fontFamily
     iconComponent: previewIcon
     trailingControl: previewActions
-    // "Theme / Catppuccin / Preview": the file name below already
-    // identifies the wallpaper, so the title stays short.
-    title: ("Theme / " + Model.ucfirst(manager.themeName) + " / Preview").toUpperCase()
-    // Second line: just the file name, middle-elided so the extension
-    // and resolution at the end stay readable; resolution and size live
-    // in the info pill on the right.
-    meta: {
-      var item = manager.currentItem()
-      if (!item) return ""
-      if (previewView.failed) return "failed to load"
-      return Model.elideMiddle(item.filename, manager.fileNameMaxChars)
-    }
+    // Full path in the title, the standard subtitle below (matches the other
+    // screens; the file name and resolution live in the info pill on the right).
+    title: (Model.ucfirst(manager.themeName) + " / Preview").toUpperCase()
+    meta: manager.versionedName
   }
 
   PanelSeparator {

@@ -192,6 +192,11 @@ Item {
   property var wallpaperCursorByTheme: ({})
   property int pendingWallpaperIndex: 0
   property bool pendingWallpaperSelect: false
+  // Collection to select once the catalog lands. "Browse" from Custom Install
+  // asks for a collection before the theme's rows exist; applying it later
+  // avoids the dropdown briefly showing the raw value ("countries") and then
+  // swapping to the pretty label ("Countries") — the UI must not self-update.
+  property string pendingCollectionFilter: ""
   // Catalog request guard: a slow `manager.sh catalog` for a theme the user has
   // already left must never repopulate `wallpapersModel`. Every request bumps
   // `catalogSerial`; a result is applied only while its serial and theme still
@@ -209,6 +214,32 @@ Item {
     for (var key in checkedWallpapers) if (checkedWallpapers[key]) n++
     return n
   }
+  // Footer/keys gating on the wallpapers screen: Install is meaningful only when
+  // something in the selection is not installed, Uninstall only when something
+  // is. With no checks, the cursor wallpaper decides. Reactive on the selection
+  // and on the catalog (an action changes `installed` in place). One pass over
+  // the selection, so "Select all" on a big grid stays cheap.
+  readonly property var wallpapersSelectionState: {
+    var rev = selectionRevision + wallpapersRevision
+    var names = checkedCount > 0 ? checkedFilenames() : cursorFilenames()
+    // One pass over the model to build filename -> installed, so a large
+    // selection is not O(selection * model).
+    var installedBy = {}
+    for (var m = 0; m < activeWallpapersModel.count; m++) {
+      var row = activeWallpapersModel.get(m)
+      if (row) installedBy[String(row.filename)] = String(row.installed)
+    }
+    var installable = false
+    var removable = false
+    for (var i = 0; i < names.length; i++) {
+      if (installedBy[names[i]] === "1") removable = true
+      else installable = true
+      if (installable && removable) break
+    }
+    return { installable: installable, removable: removable }
+  }
+  readonly property bool wallpapersCanInstall: wallpapersSelectionState.installable
+  readonly property bool wallpapersCanRemove: wallpapersSelectionState.removable
   // Set while a selection-based install/remove runs: the checks are cleared when
   // it finishes (not before, so the grid keeps showing what was acted on).
   property bool actionClearsChecks: false
@@ -585,6 +616,20 @@ Item {
     var rows = []
     for (var i = 0; i < wallpapersModel.count; i++) rows.push(wallpapersModel.get(i))
     return Model.collectionOptions(rows)
+  }
+
+  // Pretty name of the active collection filter ("" when showing all), so the
+  // hero title can read "Osaka-jade / Countries". Uses the pending filter too:
+  // when entering the wallpapers screen from Custom Install the rows are still
+  // loading, and the title must already show the target collection instead of
+  // rendering the theme alone and then correcting itself.
+  readonly property string collectionLabel: {
+    var active = collectionFilter !== "" ? collectionFilter : pendingCollectionFilter
+    if (active === "") return ""
+    var opts = collectionOptions
+    for (var i = 0; i < opts.length; i++)
+      if (opts[i].value === active) return String(opts[i].label)
+    return Model.ucfirst(active)
   }
 
   // Theme highlighted in the master-detail themes screen. Depends on
@@ -1381,8 +1426,11 @@ Item {
     for (var i = 0; i < activeThemesModel.count; i++) {
       if (activeThemesModel.get(i).name === customThemeName) {
         selectTheme(i)
+        // Set AFTER selecting: the catalog loads asynchronously, so the filter
+        // is read with the rows and the dropdown never shows the raw value
+        // first. `selectTheme` clears the live filter but not this pending one.
+        pendingCollectionFilter = collection
         wallpaperReturnCustom = true
-        if (collection !== "") setCollectionFilter(collection)
         return
       }
     }
@@ -1441,6 +1489,8 @@ Item {
     wallpapersModel.clear()
     wallpaperFilterText = ""
     collectionFilter = ""
+    // Cleared unless the caller set it right after (Browse from Custom Install).
+    pendingCollectionFilter = ""
     filterFocus = -1
     themeFocus = -1
     // Checks belong to the theme being left.
@@ -2031,6 +2081,13 @@ Item {
     return out
   }
 
+  // The single filename under the cursor, as a one-element list, so the action
+  // gates can treat "no checks" and "one check" the same way.
+  function cursorFilenames() {
+    var item = currentItem()
+    return item ? [String(item.filename)] : []
+  }
+
   // Check every row the grid is currently showing (so an active filter narrows
   // "Select all" to the visible results).
   function selectAllWallpapers() {
@@ -2132,6 +2189,8 @@ Item {
 
   function actionInstall() {
     if (actionRunning) return
+    // Same gate as the footer button: nothing to install in the selection.
+    if (view === "wallpapers" && !wallpapersCanInstall) return
     // Any checked wallpaper wins on the grid: install the whole selection (the
     // checks are cleared once it completes). With none checked, install the
     // cursor tile. The preview always acts on its own wallpaper.
@@ -2158,6 +2217,8 @@ Item {
 
   function actionRemove() {
     if (actionRunning) return
+    // Same gate as the footer button: nothing to remove in the selection.
+    if (view === "wallpapers" && !wallpapersCanRemove) return
     var checks = view === "wallpapers" ? checkedFilenames() : []
     if (checks.length > 0) {
       busy = true
@@ -2818,6 +2879,13 @@ Item {
         // theme the user just browsed must not spawn manager.sh again.
         root.customCatalogCache[catalogProc.requestedTheme] = rows
         for (var i = 0; i < rows.length; i++) wallpapersModel.append(rows[i])
+        // Apply a collection requested before the rows existed (Browse from
+        // Custom Install). Done here, with the model populated, so the dropdown
+        // options already contain it and the label never shows a raw value.
+        if (root.pendingCollectionFilter !== "") {
+          root.collectionFilter = root.pendingCollectionFilter
+          root.pendingCollectionFilter = ""
+        }
         if (root.wallpaperFilterText !== "" || root.collectionFilter !== "")
           root.rebuildWallpaperDisplay()
         root.wallpapersRevision++
@@ -3294,6 +3362,7 @@ Item {
           height: root.heroHeight
           view: root.view
           themeName: root.themeName
+          collectionLabel: root.collectionLabel
           versionedName: root.versionedName
           logoPath: root.logoPath
           dev: root.dev
@@ -3482,6 +3551,8 @@ Item {
           availableCount: root.themeCounts.available
           progressTheme: root.progressTheme
           checkedCount: root.checkedCount
+          wallpapersInstallEnabled: root.wallpapersCanInstall
+          wallpapersRemoveEnabled: root.wallpapersCanRemove
           storageLimitReached: root.storageLimitReached
           currentInstalled: root.currentInstalled
           sidebarWidth: root.themePaneWidth

@@ -16,6 +16,9 @@ PanelHero {
 
   property string view: "themes"
   property string themeName: ""
+  // Pretty collection name when the wallpapers screen is filtered to one
+  // collection ("" = all collections), so the title reads "Theme / Collection".
+  property string collectionLabel: ""
   property string versionedName: ""
   property string logoPath: ""
   property bool dev: false
@@ -47,12 +50,11 @@ PanelHero {
         ? "Theme selection"
         : (view === "custom"
           ? "Custom install"
-          : ("Theme / " + Model.ucfirst(themeName)))))).toUpperCase()
+          : (Model.ucfirst(themeName)
+            + (collectionLabel !== "" ? " / " + collectionLabel : "")))))).toUpperCase()
   detail: ""
-  meta: view === "help" || view === "setup" || view === "themes"
-    || view === "custom"
-    ? versionedName
-    : "browse and manage wallpapers"
+  // Every screen shows the same "Wallpaper manager <version>" subtitle.
+  meta: versionedName
 
   Component {
     id: heroIcon

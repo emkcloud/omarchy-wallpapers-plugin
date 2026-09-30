@@ -28,6 +28,10 @@ Column {
   property int checkedCount: 0
   property bool storageLimitReached: false
   property bool currentInstalled: false
+  // Wallpapers screen: whether the current selection (checks, else the cursor
+  // tile) has anything to install / uninstall. Gates the buttons and keys.
+  property bool wallpapersInstallEnabled: true
+  property bool wallpapersRemoveEnabled: true
 
   // x / width of the top rule, computed by the panel so it bleeds to the card
   // edges (the footer itself is inset by the card padding).
@@ -228,8 +232,10 @@ Column {
 
       Button {
         // A batch install is bulk: disabled while a storage cap is reached (one
-        // wallpaper at a time stays available).
+        // wallpaper at a time stays available). Disabled too when nothing in the
+        // selection is left to install.
         enabled: !footer.actionRunning
+          && footer.wallpapersInstallEnabled
           && !(footer.storageLimitReached && footer.checkedCount > 1)
         opacity: enabled ? 1 : 0.4
         text: "Install"
@@ -242,7 +248,8 @@ Column {
       }
 
       Button {
-        enabled: !footer.actionRunning
+        // Disabled when nothing in the selection is installed.
+        enabled: !footer.actionRunning && footer.wallpapersRemoveEnabled
         opacity: enabled ? 1 : 0.4
         text: "Uninstall"
         iconText: "󰩺"
