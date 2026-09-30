@@ -1484,7 +1484,7 @@ Item {
       return
     }
     if (view === "help") {
-      helpView.moveSelection(dy !== 0 ? dy : dx)
+      helpMoveSelection(dy !== 0 ? dy : dx)
       return
     }
     if (view === "preview") {
@@ -1544,7 +1544,8 @@ Item {
     }
     // Help: page through the central topic content.
     if (view === "help") {
-      helpView.scrollPage(dir)
+      // Scrolling the topic body only needs the built view.
+      if (helpView) helpView.scrollPage(dir)
       return
     }
     if (view === "preview") {
@@ -1587,6 +1588,75 @@ Item {
     settings.rotateBusy = busy
   }
 
+  // Help screen keyboard hooks. The cursor state lives in `settings`, so the
+  // move/activate actions are computed from it and the view only mirrors it
+  // back for scrolling; only the URL opening needs the built view.
+  function helpMoveSelection(delta) {
+    var target = settings.setupHelpSelectedFlat + delta
+    helpSelectFlat(target)
+  }
+
+  function helpSelectFlat(target) {
+    var total = helpNavTotal()
+    if (target < 0 || target >= total) return
+    settings.setupHelpSelectedFlat = target
+    // A resource keeps the last topic on screen; only topics load content.
+    var topics = Model.helpFlatItems(root.helpIndex).length
+    if (target >= topics) return
+    settings.setupHelpContentTopic = target
+    var item = Model.helpFlatItems(root.helpIndex)[target]
+    if (item && settings.setupHelpSelectedFile !== item.file)
+      settings.setupHelpSelectedFile = item.file
+  }
+
+  function helpNavTotal() {
+    var topics = Model.helpFlatItems(root.helpIndex).length
+    var resources = root.helpIndex && root.helpIndex.resources
+      ? root.helpIndex.resources.length : 0
+    return topics + resources
+  }
+
+  function helpActivateSelection() {
+    var topics = Model.helpFlatItems(root.helpIndex).length
+    if (settings.setupHelpSelectedFlat >= topics) {
+      if (helpView) helpView.activateSelection()
+      return
+    }
+    helpSelectFlat(settings.setupHelpSelectedFlat)
+  }
+
+  // Resolve a Help resource/feature entry to a URL, so `p` / `d` do not need
+  // the built Help view (only opening the browser window does).
+  function helperLinkUrl(entry) {
+    if (!entry) return ""
+    var l = root.pluginLinks
+    if (entry.link) {
+      if (entry.link === "repo") return l.repo || ""
+      if (entry.link === "donation") return l.donation || ""
+      if (entry.link === "issues") return l.issues || ""
+      if (entry.link === "releases") return l.releases || ""
+      if (entry.link === "database") return root.pluginDatabaseUrl || ""
+    }
+    return String(entry.url || "")
+  }
+
+  function openHelpUrl(url) {
+    if (!url) return
+    Qt.openUrlExternally(String(url))
+    // The overlay sits above a normal browser window: hide it so the page is
+    // not trapped behind the panel.
+    close()
+  }
+
+  function helperFeatureUrl() {
+    var feature = root.helpIndex ? root.helpIndex.feature : null
+    openHelpUrl(helperLinkUrl(feature))
+  }
+
+  function helperDatabaseUrl() {
+    openHelpUrl(root.pluginDatabaseUrl || "")
+  }
+
   function activateCursor() {
     // While an action runs Esc is the only command (it stops the process).
     if (actionRunning) return
@@ -1594,7 +1664,7 @@ Item {
       setupActivateCursor()
       return
     }
-    if (view === "help") helpView.activateSelection()
+    if (view === "help") helpActivateSelection()
     else if (view === "themes") {
       if (themeFocus >= 0) activateThemeAction()
       else selectTheme(selectedIndex)
@@ -1714,8 +1784,8 @@ Item {
     // The help screen: `p` proposes a feature, `d` opens the version dataset;
     // Enter/Space pick a topic, Esc goes back, everything else is ignored.
     if (view === "help") {
-      if (text === "p" || text === "P") helpView.openFeature()
-      else if (text === "d" || text === "D") helpView.openDatabase()
+      if (text === "p" || text === "P") helperFeatureUrl()
+      else if (text === "d" || text === "D") helperDatabaseUrl()
       return
     }
     // The custom-install screen is driven by the cursor state machine
@@ -3066,6 +3136,7 @@ Item {
           }
           roadmap: root.roadmapData
           index: root.helpIndex
+          settings: settings
           // Same master-pane width as the themes screen, so the two sidebars
           // line up exactly.
           sidebarWidth: themesView.paneWidth
@@ -3176,7 +3247,7 @@ Item {
           onRemoveRequested: root.actionRemove()
           onHelpRequested: root.openHelp()
           onSetupRequested: root.openSetup()
-          onDatabaseRequested: helpView.openDatabase()
+          onDatabaseRequested: root.helperDatabaseUrl()
           onCustomInstallRequested: root.executeCustomInstall()
           onCustomRemoveRequested: root.executeCustomRemove()
           onOpenRepoRequested: {

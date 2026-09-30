@@ -45,12 +45,13 @@ Item {
   // with Setup (see `RoadmapPane.qml`).
   property var roadmap: Model.parseRoadmap("")
   property var blocks: []
-  property int selectedFlat: 0
-  // Topic currently rendered in the centre. It lags behind `selectedFlat` when
-  // the cursor sits on a resource, so the prev/next cards below keep steering
-  // the content even while a reference is highlighted.
-  property int contentTopic: 0
-  property string selectedFile: ""
+  // Persistent navigation state, kept in Settings so this screen can be
+  // destroyed and rebuilt without losing the selected topic.
+  property int selectedFlat: settings.setupHelpSelectedFlat
+  property int contentTopic: settings.setupHelpContentTopic
+  property string selectedFile: settings.setupHelpSelectedFile
+  // Injected by the panel: the shared settings object.
+  required property var settings
 
   readonly property var flatItems: Model.helpFlatItems(index)
   readonly property var sidebarEntries: Model.helpSidebarEntries(index)
@@ -63,14 +64,14 @@ Item {
 
   function selectFlat(target) {
     if (target < 0 || target >= navTotal) return
-    selectedFlat = target
+    settings.setupHelpSelectedFlat = target
     // A resource keeps the last topic on screen; only topics load content.
     if (target >= topicCount) return
-    contentTopic = target
+    settings.setupHelpContentTopic = target
     var item = flatItems[target]
-    if (selectedFile !== item.file) {
+    if (settings.setupHelpSelectedFile !== item.file) {
       blocks = []
-      selectedFile = item.file
+      settings.setupHelpSelectedFile = item.file
     }
     Qt.callLater(positionNav)
   }
@@ -139,11 +140,22 @@ Item {
     if (selectedFile === "" && flatItems.length > 0) selectFlat(0)
   }
 
-  onSelectedFlatChanged: Qt.callLater(positionNav)
-  // The index is injected by the panel (loaded once, shared with Setup). Pick
-  // the first topic as soon as it lands.
-  onIndexChanged: Qt.callLater(ensureSelection)
+  // The cursor now lives in Settings: mirror its changes back to the local
+  // alias so the list stays scrolled to the highlighted row. The index arrives
+  // asynchronously and can land before Help is first opened, so pick the first
+  // topic as soon as both are known.
   onVisibleChanged: if (visible) ensureSelection()
+  onIndexChanged: Qt.callLater(ensureSelection)
+  Connections {
+    target: settings
+
+    function onSetupHelpSelectedFlatChanged() {
+      help.selectedFlat = settings.setupHelpSelectedFlat
+      help.contentTopic = settings.setupHelpContentTopic
+      help.selectedFile = settings.setupHelpSelectedFile
+      Qt.callLater(positionNav)
+    }
+  }
 
   // ---- data ----------------------------------------------------------------
   FileView {

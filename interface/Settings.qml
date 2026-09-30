@@ -244,6 +244,17 @@ Item {
   property var activateSetupCursor: null
   signal rotateRequested()
 
+  // ---- Help screen navigation ----------------------------------------------
+  // Cursor state of the Help guide, kept here (not in the view) so the screen
+  // can be destroyed and rebuilt without losing the selected topic.
+  // `setupHelpSelectedFlat` walks topics first, then reference links;
+  // `setupHelpContentTopic` lags behind it when the cursor sits on a resource,
+  // so the prev/next cards keep steering the content; `setupHelpSelectedFile`
+  // is the Markdown file currently shown.
+  property int setupHelpSelectedFlat: 0
+  property int setupHelpContentTopic: 0
+  property string setupHelpSelectedFile: ""
+
   readonly property var intervalOptions: [1, 5, 15, 30, 60, 120]
   readonly property var intervalChoices: [
     { value: "1", label: "1 minute" },
