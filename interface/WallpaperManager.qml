@@ -1414,7 +1414,7 @@ Item {
   }
 
   function closeSetup() {
-    setupSettings.commitEdit()
+    settings.commitSetupEdit()
     view = setupReturnView
     cursorActive = true
     setStatus("")
@@ -1425,7 +1425,7 @@ Item {
   // Open Setup on the Download section: the storage-limit banner links here.
   function openSetupDownload() {
     if (view !== "setup") openSetup()
-    setupSettings.selectSection("download")
+    settings.selectSetupSection("download")
   }
 
   // Hero "Wallpaper manager" button on Help: jump straight to the theme list
@@ -1480,7 +1480,7 @@ Item {
     // so arrows/h/j/k must not move the cursor on any screen.
     if (actionRunning) return
     if (view === "setup") {
-      setupSettings.moveCursor(dx, dy)
+      settings.moveSetupCursor(dx, dy)
       return
     }
     if (view === "help") {
@@ -1539,7 +1539,7 @@ Item {
     if (actionRunning) return
     // Setup: page between sections (clamped at the ends).
     if (view === "setup") {
-      setupSettings.pageSection(dir)
+      settings.pageSetupSection(dir)
       return
     }
     // Help: page through the central topic content.
@@ -1566,11 +1566,32 @@ Item {
     stepCursor(dir * visibleRows * g.colCount)
   }
 
+  // Setup screen keyboard hooks: all the navigation state lives in `settings`,
+  // but two actions need the live view (the interval popup it owns and the
+  // rotate-now signal). Guarded so they are safe while the screen is not built.
+  function setupActivateCursor() {
+    // Interval time is a dropdown: open its real list, exactly like a click.
+    if (settings.setupNavArea !== "content") return
+    if (settings.setupNavRows[settings.setupContentRow] === "interval") {
+      if (settings.activateSetupCursor) settings.activateSetupCursor()
+      return
+    }
+    if (settings.setupEditing) { settings.commitSetupEdit(); return }
+    if (settings.setupAdjustableRows.indexOf(settings.setupNavRows[settings.setupContentRow]) >= 0) {
+      settings.startSetupEdit(); return
+    }
+    settings.activateSetupRow()
+  }
+
+  function setupSetRotateBusy(busy) {
+    settings.rotateBusy = busy
+  }
+
   function activateCursor() {
     // While an action runs Esc is the only command (it stops the process).
     if (actionRunning) return
     if (view === "setup") {
-      setupSettings.activateCursor()
+      setupActivateCursor()
       return
     }
     if (view === "help") helpView.activateSelection()
@@ -1619,8 +1640,8 @@ Item {
     // Setup and Help are leaf screens: Esc / Back retraces the origin. While a
     // row is in edit mode Esc cancels it instead (reverts the value).
     if (view === "setup") {
-      if (setupSettings.editing) {
-        setupSettings.cancelEdit()
+      if (settings.setupEditing) {
+        settings.cancelSetupEdit()
         return
       }
       closeSetup()
@@ -2369,7 +2390,7 @@ Item {
     if (view !== "wallpapers" && wallpapersView.collectionDropdown
         && wallpapersView.collectionDropdown.popupOpen)
       wallpapersView.collectionDropdown.close()
-    if (view !== "setup" && setupSettings.dropdownOpen)
+    if (view !== "setup" && settings.setupDropdownOpen)
       setupSettings.closeDropdown()
     Qt.callLater(function() { keys.forceActiveFocus() })
   }
@@ -2402,6 +2423,7 @@ Item {
   // differ from the theme open in the plugin).
   Process {
     id: rotationProc
+    onRunningChanged: root.setupSetRotateBusy(running)
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -2882,7 +2904,7 @@ Item {
         // Same while a dropdown popup is open (Setup interval / collections),
         // so its list gets the arrows / Enter / Esc. The collection popup only
         // blocks on its own screen: a leaked popup must not freeze navigation.
-        blocked: root.searching || setupSettings.dropdownOpen
+        blocked: root.searching || settings.setupDropdownOpen
           || (root.view === "wallpapers" && wallpapersView.collectionDropdown.popupOpen)
 
         onMoveRequested: function(dx, dy) { root.moveCursor(dx, dy) }
@@ -2907,7 +2929,7 @@ Item {
         onTabRequested: function(direction) {
           // Only Esc is accepted while an action runs.
           if (root.actionRunning) return
-          if (root.view === "setup") setupSettings.cycleArea(direction)
+          if (root.view === "setup") settings.cycleSetupArea(direction)
           else if (root.view === "themes") {
             // Tab toggles between the theme list and the detail action row.
             if (root.themeFocus < 0) root.enterThemeActions()
@@ -3077,7 +3099,7 @@ Item {
             settings: settings
             localFileCount: root.localFileCount
             localBytes: root.localBytes
-            rotateBusy: rotationProc.running
+            rotateBusy: settings.rotateBusy
             roadmap: root.roadmapData
             featureLabel: root.helpIndex && root.helpIndex.feature
               ? root.helpIndex.feature.title : ""
@@ -3093,6 +3115,9 @@ Item {
               }
             }
             onRotateRequested: root.rotateWallpaper()
+
+            Component.onCompleted: settings.activateSetupCursor = openIntervalDropdown
+            Component.onDestruction: settings.activateSetupCursor = null
           }
         }
 
@@ -3144,8 +3169,8 @@ Item {
           customRemoveEnabled: root.customCanRemove
           ruleX: -card.leftPadding
           ruleWidth: card.width - card.borderLeft - card.borderRight
-          setupDropdownOpen: setupSettings.dropdownOpen
-          setupEditing: setupSettings.editing
+          setupDropdownOpen: settings.setupDropdownOpen
+          setupEditing: settings.setupEditing
           footerSpacing: root.footerSpacing
           onInstallRequested: root.actionInstall()
           onRemoveRequested: root.actionRemove()

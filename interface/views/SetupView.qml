@@ -273,53 +273,11 @@ Item {
     }
   }
 
-  // ---- sections ------------------------------------------------------------
-  // Only Download and Rotation are exposed for now; Storage, Theme integration
-  // and Advanced are deferred until they are actually implemented.
-  property var sections: [
-    { id: "download", label: "Download" },
-    { id: "rotation", label: "Automatic rotation" }
-  ]
-  property string section: "download"
-
-  function selectSection(id) {
-    if (editing) cancelEdit()
-    section = id
-    contentFlick.contentY = 0
-    contentRow = Math.max(0, Math.min(navRows.length - 1, contentRow))
-  }
-
-  // Keyboard navigation of the sections (arrows / h-j-k-l): same model as the
-  // other screens' cursor.
-  function moveSelection(delta) {
-    if (sections.length === 0) return
-    var current = 0
-    for (var i = 0; i < sections.length; i++)
-      if (sections[i].id === section) { current = i; break }
-    var next = Math.max(0, Math.min(sections.length - 1, current + delta))
-    selectSection(sections[next].id)
-  }
-
-  // ---- keyboard focus model ------------------------------------------------
-  // Two areas: the SECTIONS column and the section content. Tab / h-l switch
-  // area, arrows / j-k walk the rows, Enter / Space toggle switches, Left/Right
-  // adjust numeric values and the interval dropdown.
-  property string navArea: "sections"
-  property int contentRow: 0
-
-  // "Edit mode" for the adjustable rows, following the WAI-ARIA select-only
-  // pattern: Enter opens (remembering the current value), Up/Down preview the
-  // options, Enter commits, Esc reverts.
-  property bool editing: false
-  property int editingRow: -1
-  property var editingOriginal: null
-
-  readonly property var navRows: section === "download"
-    ? ["resolution", "shuffle", "parallel", "maxFiles", "maxDisk"]
-    : ["enabled", "allTheme", "random", "interval", "rotateNow"]
-
-  // Rows that open in edit mode instead of toggling on Enter.
-  readonly property var adjustableRows: ["shuffle", "parallel", "maxFiles", "maxDisk"]
+  // ---- keyboard focus hooks ------------------------------------------------
+  // The navigation state (section / area / row / edit) and all its functions
+  // live in `Settings` (see Settings.qml `setup*` members), so the screen can be
+  // destroyed and rebuilt without losing the cursor position. The view only
+  // wires the interval dropdown (which it owns) into `settings.activateSetupCursor`.
 
   // True while the interval dropdown's popup is open: the panel releases the
   // keyboard so the dropdown's own list handles arrows / Enter / Esc.
@@ -331,144 +289,10 @@ Item {
     if (intervalField.popupOpen) intervalField.close()
   }
 
-  function isRowFocused(sec, idx) {
-    return navArea === "content" && section === sec && contentRow === idx
-  }
-
-  function cycleArea(dir) {
-    if (editing) commitEdit()
-    navArea = dir >= 0
-      ? (navArea === "sections" ? "content" : "sections")
-      : (navArea === "content" ? "sections" : "content")
-    if (navArea === "content") contentRow = 0
-  }
-
-  function moveCursor(dx, dy) {
-    // While editing, arrows preview the value instead of moving the cursor.
-    if (navArea === "content" && editing) {
-      if (dy !== 0) adjustRow(dy)
-      else if (dx !== 0) adjustRow(dx)
-      return
-    }
-    if (navArea === "sections") {
-      if (dy !== 0) {
-        moveSelection(dy)
-        return
-      }
-      if (dx > 0) {
-        navArea = "content"
-        contentRow = 0
-      }
-      return
-    }
-    if (dy !== 0) {
-      // Clamp at both ends: the first and last row stay put.
-      contentRow = Math.max(0, Math.min(navRows.length - 1, contentRow + dy))
-      return
-    }
-    if (dx !== 0) adjustRow(dx)
-  }
-
-  // PageUp/PageDown jump to the previous/next section, clamped at the ends.
-  function pageSection(dir) {
-    moveSelection(dir)
-    contentRow = 0
-  }
-
-  function activateCursor() {
-    if (navArea !== "content") return
-    // Interval time is a dropdown: open its real list, exactly like a click.
-    // The popup then owns the keyboard (see `dropdownOpen`).
-    if (navRows[contentRow] === "interval") { intervalField.open(); return }
-    if (editing) { commitEdit(); return }
-    if (adjustableRows.indexOf(navRows[contentRow]) >= 0) { startEdit(); return }
-    activateRow()
-  }
-
-  function rowValue(key) {
-    switch (key) {
-    case "interval": return settings.rotationInterval
-    case "shuffle": return settings.shuffleCount
-    case "parallel": return settings.parallelDownloads
-    case "maxFiles": return settings.maxLocalFiles
-    case "maxDisk": return settings.maxDiskGb
-    }
-    return null
-  }
-
-  function setRowValue(key, value) {
-    switch (key) {
-    case "interval": settings.rotationInterval = value; break
-    case "shuffle": settings.shuffleCount = settings.clampInt(value, 1, 50, settings.shuffleCount); break
-    case "parallel": settings.parallelDownloads = settings.clampInt(value, 1, 12, settings.parallelDownloads); break
-    case "maxFiles": settings.maxLocalFiles = settings.clampInt(value, 1000, 5000, settings.maxLocalFiles); break
-    case "maxDisk": settings.maxDiskGb = settings.clampInt(value, 1, 50, settings.maxDiskGb); break
-    }
-  }
-
-  function startEdit() {
-    editing = true
-    editingRow = contentRow
-    editingOriginal = rowValue(navRows[contentRow])
-  }
-
-  function commitEdit() {
-    editing = false
-    editingRow = -1
-    editingOriginal = null
-  }
-
-  function cancelEdit() {
-    if (editing && editingOriginal !== null)
-      setRowValue(navRows[editingRow], editingOriginal)
-    editing = false
-    editingRow = -1
-    editingOriginal = null
-  }
-
-  function adjustRow(dir) {
-    switch (navRows[contentRow]) {
-    case "shuffle":
-      settings.shuffleCount = settings.clampInt(settings.shuffleCount + dir, 1, 50, settings.shuffleCount); break
-    case "parallel":
-      settings.parallelDownloads = settings.clampInt(settings.parallelDownloads + dir, 1, 12, settings.parallelDownloads); break
-    case "maxFiles":
-      settings.maxLocalFiles = settings.clampInt(settings.maxLocalFiles + dir * 100, 1000, 5000, settings.maxLocalFiles); break
-    case "maxDisk":
-      settings.maxDiskGb = settings.clampInt(settings.maxDiskGb + dir, 1, 50, settings.maxDiskGb); break
-    case "interval":
-      cycleInterval(dir); break
-    default:
-      break
-    }
-  }
-
-  function activateRow() {
-    switch (navRows[contentRow]) {
-    case "enabled": settings.rotationEnabled = !settings.rotationEnabled; break
-    case "allTheme": settings.rotationAllTheme = !settings.rotationAllTheme; break
-    case "random": settings.rotationRandom = !settings.rotationRandom; break
-    case "interval": cycleInterval(1); break
-    case "rotateNow":
-      if (!rotateBusy) rotateRequested(); break
-    case "shuffle":
-      settings.shuffleCount = settings.clampInt(settings.shuffleCount + 1, 1, 50, settings.shuffleCount); break
-    case "parallel":
-      settings.parallelDownloads = settings.clampInt(settings.parallelDownloads + 1, 1, 12, settings.parallelDownloads); break
-    case "maxFiles":
-      settings.maxLocalFiles = settings.clampInt(settings.maxLocalFiles + 100, 1000, 5000, settings.maxLocalFiles); break
-    case "maxDisk":
-      settings.maxDiskGb = settings.clampInt(settings.maxDiskGb + 1, 1, 50, settings.maxDiskGb); break
-    default:
-      break
-    }
-  }
-
-  function cycleInterval(dir) {
-    var i = settings.intervalOptions.indexOf(settings.rotationInterval)
-    if (i < 0) i = 0
-    i = (i + dir + settings.intervalOptions.length) % settings.intervalOptions.length
-    settings.rotationInterval = settings.intervalOptions[i]
+  // Open the real interval list, exactly like a click; the popup then owns the
+  // keyboard (see `dropdownOpen`). Called by Settings through the hook below.
+  function openIntervalDropdown() {
+    intervalField.open()
   }
 
   // load / serialize / scheduleSave / save / restoreDefaults live in Settings.
@@ -543,7 +367,7 @@ Item {
         spacing: Style.space(4)
 
         Repeater {
-          model: setup.sections
+          model: settings.setupSections
 
           delegate: Item {
             id: sectionEntry
@@ -561,7 +385,7 @@ Item {
               height: entryLabel.implicitHeight + Style.space(14)
               foreground: setup.foreground
               accent: setup.accent
-              hasCursor: setup.section === sectionEntry.modelData.id
+              hasCursor: settings.setupSection === sectionEntry.modelData.id
 
               Text {
                 id: entryLabel
@@ -580,7 +404,7 @@ Item {
               }
 
               HoverHandler { cursorShape: Qt.PointingHandCursor }
-              TapHandler { onTapped: setup.selectSection(sectionEntry.modelData.id) }
+              TapHandler { onTapped: settings.selectSetupSection(sectionEntry.modelData.id) }
             }
 
             // Accent ring on the highlighted section, so the keyboard cursor is
@@ -590,7 +414,7 @@ Item {
               color: "transparent"
               radius: Style.cornerRadius
               borderSpec: Border.flat(setup.accent, Math.max(1, Style.normalBorderWidth))
-              visible: setup.section === sectionEntry.modelData.id
+              visible: settings.setupSection === sectionEntry.modelData.id
             }
           }
         }
@@ -687,7 +511,7 @@ Item {
 
       // ---- Download ---------------------------------------------------------
       Column {
-        visible: setup.section === "download"
+        visible: settings.setupSection === "download"
         width: parent.width
         spacing: Style.space(18)
 
@@ -732,7 +556,7 @@ Item {
               width: parent.width
               textFormat: Text.PlainText
               text: "Default resolution (coming soon)"
-              color: setup.isRowFocused("download", 0) ? setup.accent : setup.foreground
+              color: settings.isSetupRowFocused("download", 0) ? setup.accent : setup.foreground
               Behavior on color { ColorAnimation { duration: 140; easing.type: Easing.OutCubic } }
               font.family: setup.fontFamily
               font.pixelSize: Style.font.subtitle
@@ -803,7 +627,7 @@ Item {
               width: parent.width
               textFormat: Text.PlainText
               text: "Random wallpapers per theme"
-              color: setup.isRowFocused("download", 1) ? setup.accent : setup.foreground
+              color: settings.isSetupRowFocused("download", 1) ? setup.accent : setup.foreground
               Behavior on color { ColorAnimation { duration: 140; easing.type: Easing.OutCubic } }
               font.family: setup.fontFamily
               font.pixelSize: Style.font.subtitle
@@ -849,7 +673,7 @@ Item {
               width: parent.width
               textFormat: Text.PlainText
               text: "Parallel downloads"
-              color: setup.isRowFocused("download", 2) ? setup.accent : setup.foreground
+              color: settings.isSetupRowFocused("download", 2) ? setup.accent : setup.foreground
               Behavior on color { ColorAnimation { duration: 140; easing.type: Easing.OutCubic } }
               font.family: setup.fontFamily
               font.pixelSize: Style.font.subtitle
@@ -895,7 +719,7 @@ Item {
               width: parent.width
               textFormat: Text.PlainText
               text: "Max local files"
-              color: setup.isRowFocused("download", 3) ? setup.accent : setup.foreground
+              color: settings.isSetupRowFocused("download", 3) ? setup.accent : setup.foreground
               Behavior on color { ColorAnimation { duration: 140; easing.type: Easing.OutCubic } }
               font.family: setup.fontFamily
               font.pixelSize: Style.font.subtitle
@@ -941,7 +765,7 @@ Item {
               width: parent.width
               textFormat: Text.PlainText
               text: "Max disk size (GB)"
-              color: setup.isRowFocused("download", 4) ? setup.accent : setup.foreground
+              color: settings.isSetupRowFocused("download", 4) ? setup.accent : setup.foreground
               Behavior on color { ColorAnimation { duration: 140; easing.type: Easing.OutCubic } }
               font.family: setup.fontFamily
               font.pixelSize: Style.font.subtitle
@@ -971,7 +795,7 @@ Item {
 
       // ---- Rotation ---------------------------------------------------------
       Column {
-        visible: setup.section === "rotation"
+        visible: settings.setupSection === "rotation"
         width: parent.width
         spacing: Style.space(18)
 
@@ -1018,7 +842,7 @@ Item {
                 width: parent.width
                 textFormat: Text.PlainText
                 text: "Enable feature"
-                color: setup.isRowFocused("rotation", 0) ? setup.accent : setup.foreground
+                color: settings.isSetupRowFocused("rotation", 0) ? setup.accent : setup.foreground
                 Behavior on color { ColorAnimation { duration: 140; easing.type: Easing.OutCubic } }
                 font.family: setup.fontFamily
                 font.pixelSize: Style.font.subtitle
@@ -1075,7 +899,7 @@ Item {
               width: parent.width
               textFormat: Text.PlainText
               text: "Include theme wallpapers"
-              color: setup.isRowFocused("rotation", 1) ? setup.accent : setup.foreground
+              color: settings.isSetupRowFocused("rotation", 1) ? setup.accent : setup.foreground
               Behavior on color { ColorAnimation { duration: 140; easing.type: Easing.OutCubic } }
               font.family: setup.fontFamily
               font.pixelSize: Style.font.subtitle
@@ -1125,7 +949,7 @@ Item {
               width: parent.width
               textFormat: Text.PlainText
               text: "Random order"
-              color: setup.isRowFocused("rotation", 2) ? setup.accent : setup.foreground
+              color: settings.isSetupRowFocused("rotation", 2) ? setup.accent : setup.foreground
               Behavior on color { ColorAnimation { duration: 140; easing.type: Easing.OutCubic } }
               font.family: setup.fontFamily
               font.pixelSize: Style.font.subtitle
@@ -1177,7 +1001,7 @@ Item {
               width: parent.width
               textFormat: Text.PlainText
               text: "Interval time"
-              color: setup.isRowFocused("rotation", 3) ? setup.accent : setup.foreground
+              color: settings.isSetupRowFocused("rotation", 3) ? setup.accent : setup.foreground
               Behavior on color { ColorAnimation { duration: 140; easing.type: Easing.OutCubic } }
               font.family: setup.fontFamily
               font.pixelSize: Style.font.subtitle
@@ -1224,7 +1048,7 @@ Item {
               width: parent.width
               textFormat: Text.PlainText
               text: "Rotate now"
-              color: setup.isRowFocused("rotation", 4) ? setup.accent : setup.foreground
+              color: settings.isSetupRowFocused("rotation", 4) ? setup.accent : setup.foreground
               Behavior on color { ColorAnimation { duration: 140; easing.type: Easing.OutCubic } }
               font.family: setup.fontFamily
               font.pixelSize: Style.font.subtitle

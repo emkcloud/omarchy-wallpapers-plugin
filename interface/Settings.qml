@@ -59,6 +59,191 @@ Item {
   // Flashes the "Saved" caption after a write.
   property bool saved: false
 
+  // ---- Setup screen navigation ---------------------------------------------
+  // Focus state of the Setup screen, kept here (not in the view) so the screen
+  // can be destroyed and rebuilt without losing where the cursor was.
+  //
+  // Two areas: the SECTIONS column and the section content. Tab / h-l switch
+  // area, arrows / j-k walk the rows, Enter / Space toggle switches, Left/Right
+  // adjust numeric values and the interval dropdown.
+  readonly property var setupSections: [
+    { id: "download", label: "Download" },
+    { id: "rotation", label: "Automatic rotation" }
+  ]
+  property string setupSection: "download"
+  property string setupNavArea: "sections"
+  property int setupContentRow: 0
+  // "Edit mode" for the adjustable rows, following the WAI-ARIA select-only
+  // pattern: Enter opens (remembering the current value), Up/Down preview the
+  // options, Enter commits, Esc reverts.
+  property bool setupEditing: false
+  property int setupEditingRow: -1
+  property var setupEditingOriginal: null
+  // True while the interval dropdown's popup is open.
+  property bool setupDropdownOpen: false
+
+  readonly property var setupNavRows: setupSection === "download"
+    ? ["resolution", "shuffle", "parallel", "maxFiles", "maxDisk"]
+    : ["enabled", "allTheme", "random", "interval", "rotateNow"]
+
+  // Rows that open in edit mode instead of toggling on Enter.
+  readonly property var setupAdjustableRows: ["shuffle", "parallel", "maxFiles", "maxDisk"]
+
+  function selectSetupSection(id) {
+    if (setupEditing) cancelSetupEdit()
+    setupSection = id
+    setupContentRow = Math.max(0, Math.min(setupNavRows.length - 1, setupContentRow))
+  }
+
+  // Keyboard navigation of the sections (arrows / h-j-k-l): same model as the
+  // other screens' cursor.
+  function moveSetupSelection(delta) {
+    if (setupSections.length === 0) return
+    var current = 0
+    for (var i = 0; i < setupSections.length; i++)
+      if (setupSections[i].id === setupSection) { current = i; break }
+    var next = Math.max(0, Math.min(setupSections.length - 1, current + delta))
+    selectSetupSection(setupSections[next].id)
+  }
+
+  function isSetupRowFocused(sec, idx) {
+    return setupNavArea === "content" && setupSection === sec && setupContentRow === idx
+  }
+
+  function cycleSetupArea(dir) {
+    if (setupEditing) commitSetupEdit()
+    setupNavArea = dir >= 0
+      ? (setupNavArea === "sections" ? "content" : "sections")
+      : (setupNavArea === "content" ? "sections" : "content")
+    if (setupNavArea === "content") setupContentRow = 0
+  }
+
+  function moveSetupCursor(dx, dy) {
+    // While editing, arrows preview the value instead of moving the cursor.
+    if (setupNavArea === "content" && setupEditing) {
+      if (dy !== 0) adjustSetupRow(dy)
+      else if (dx !== 0) adjustSetupRow(dx)
+      return
+    }
+    if (setupNavArea === "sections") {
+      if (dy !== 0) {
+        moveSetupSelection(dy)
+        return
+      }
+      if (dx > 0) {
+        setupNavArea = "content"
+        setupContentRow = 0
+      }
+      return
+    }
+    if (dy !== 0) {
+      // Clamp at both ends: the first and last row stay put.
+      setupContentRow = Math.max(0, Math.min(setupNavRows.length - 1, setupContentRow + dy))
+      return
+    }
+    if (dx !== 0) adjustSetupRow(dx)
+  }
+
+  // PageUp/PageDown jump to the previous/next section, clamped at the ends.
+  function pageSetupSection(dir) {
+    moveSetupSelection(dir)
+    setupContentRow = 0
+  }
+
+  // The interval dropdown opens its own popup; SetupView calls it through the
+  // `activateSetupCursor` hook below.
+  function startSetupEdit() {
+    setupEditing = true
+    setupEditingRow = setupContentRow
+    setupEditingOriginal = setupRowValue(setupNavRows[setupContentRow])
+  }
+
+  function commitSetupEdit() {
+    setupEditing = false
+    setupEditingRow = -1
+    setupEditingOriginal = null
+  }
+
+  function cancelSetupEdit() {
+    if (setupEditing && setupEditingOriginal !== null)
+      setSetupRowValue(setupNavRows[setupEditingRow], setupEditingOriginal)
+    setupEditing = false
+    setupEditingRow = -1
+    setupEditingOriginal = null
+  }
+
+  function setupRowValue(key) {
+    switch (key) {
+    case "interval": return rotationInterval
+    case "shuffle": return shuffleCount
+    case "parallel": return parallelDownloads
+    case "maxFiles": return maxLocalFiles
+    case "maxDisk": return maxDiskGb
+    }
+    return null
+  }
+
+  function setSetupRowValue(key, value) {
+    switch (key) {
+    case "interval": rotationInterval = value; break
+    case "shuffle": shuffleCount = clampInt(value, 1, 50, shuffleCount); break
+    case "parallel": parallelDownloads = clampInt(value, 1, 12, parallelDownloads); break
+    case "maxFiles": maxLocalFiles = clampInt(value, 1000, 5000, maxLocalFiles); break
+    case "maxDisk": maxDiskGb = clampInt(value, 1, 50, maxDiskGb); break
+    }
+  }
+
+  function adjustSetupRow(dir) {
+    switch (setupNavRows[setupContentRow]) {
+    case "shuffle":
+      shuffleCount = clampInt(shuffleCount + dir, 1, 50, shuffleCount); break
+    case "parallel":
+      parallelDownloads = clampInt(parallelDownloads + dir, 1, 12, parallelDownloads); break
+    case "maxFiles":
+      maxLocalFiles = clampInt(maxLocalFiles + dir * 100, 1000, 5000, maxLocalFiles); break
+    case "maxDisk":
+      maxDiskGb = clampInt(maxDiskGb + dir, 1, 50, maxDiskGb); break
+    case "interval":
+      cycleSetupInterval(dir); break
+    default:
+      break
+    }
+  }
+
+  function activateSetupRow() {
+    switch (setupNavRows[setupContentRow]) {
+    case "enabled": rotationEnabled = !rotationEnabled; break
+    case "allTheme": rotationAllTheme = !rotationAllTheme; break
+    case "random": rotationRandom = !rotationRandom; break
+    case "interval": cycleSetupInterval(1); break
+    case "rotateNow":
+      if (!rotateBusy) rotateRequested(); break
+    case "shuffle":
+      shuffleCount = clampInt(shuffleCount + 1, 1, 50, shuffleCount); break
+    case "parallel":
+      parallelDownloads = clampInt(parallelDownloads + 1, 1, 12, parallelDownloads); break
+    case "maxFiles":
+      maxLocalFiles = clampInt(maxLocalFiles + 100, 1000, 5000, maxLocalFiles); break
+    case "maxDisk":
+      maxDiskGb = clampInt(maxDiskGb + 1, 1, 50, maxDiskGb); break
+    default:
+      break
+    }
+  }
+
+  function cycleSetupInterval(dir) {
+    var i = intervalOptions.indexOf(rotationInterval)
+    if (i < 0) i = 0
+    i = (i + dir + intervalOptions.length) % intervalOptions.length
+    rotationInterval = intervalOptions[i]
+  }
+
+  // Set by SetupView: `true` while a rotate is in flight, so "Rotate now" is
+  // disabled; `activateSetupCursor` lets the view open its own interval popup.
+  property bool rotateBusy: false
+  property var activateSetupCursor: null
+  signal rotateRequested()
+
   readonly property var intervalOptions: [1, 5, 15, 30, 60, 120]
   readonly property var intervalChoices: [
     { value: "1", label: "1 minute" },
