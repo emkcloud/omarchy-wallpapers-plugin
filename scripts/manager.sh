@@ -481,6 +481,29 @@ cmd_catalog() {
     "$DATASETS_DIR/$theme/catalog.json")
 }
 
+# Warm the on-disk cache once, at plugin start: fetch datasets.json and every
+# theme catalog from the CDN if they are not cached yet (reusing them until the
+# configured base changes), then prewarm each theme's first previews. After this
+# every screen reads catalogs from disk and the Custom Install grid loads its
+# previews locally, so opening it never waits on the network. Best effort.
+cmd_warm() {
+  ensure_datasets || {
+    echo "Failed to warm datasets." >&2
+    return 1
+  }
+  local theme catalog urls
+  for catalog in "$DATASETS_DIR"/*/catalog.json; do
+    [[ -s $catalog ]] || continue
+    urls="$(jq -r '[.wallpapers[].preview | select(. != null and . != "")][0:9][]' \
+      "$catalog" 2>/dev/null || true)"
+    [[ -n $urls ]] || continue
+    # shellcheck disable=SC2086
+    cmd_prewarm $urls 2>/dev/null || true
+  done
+  printf 'WARM\t%s\n' "$DATASETS_DIR"
+}
+
+
 # Total wallpaper files currently installed across every theme.
 count_local_files() {
   find "$DEST_BASE" -mindepth 2 -maxdepth 2 -type f ! -name '*.tmp' 2>/dev/null | wc -l | tr -d ' '
@@ -1068,6 +1091,7 @@ case "$command" in
   themes) cmd_themes ;;
   limits) cmd_limits ;;
   catalog) cmd_catalog "$@" ;;
+  warm) cmd_warm ;;
   install) cmd_install "$@" ;;
   random-install) cmd_random_install "$@" ;;
   remove) cmd_remove "$@" ;;

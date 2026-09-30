@@ -376,7 +376,7 @@ Item {
   // hides the list until then, so it never renders a partial set (just Full /
   // Shuffle / Select only) that then shifts under the cursor when the
   // collections stream in.
-  readonly property bool customCatalogReady: customCatalogModel.count > 0
+  readonly property bool customCatalogReady: customCatalogItems.length > 0
   // Cursor over the option rows (0..N-1) plus the trailing switch row (N).
   property int customSelection: 0
   // Bumped when the custom catalog (re)loads: `customRows` re-reads the model.
@@ -392,6 +392,10 @@ Item {
   property var customCatalogCache: ({})
   // Theme queued for the idle catalog prefetch ("" = none).
   property string pendingCustomPrefetch: ""
+  // Remaining themes to warm in the background, in order. Filled once after the
+  // themes load (`prefetchAllCatalogs`), so Custom Install is instant whichever
+  // theme the user picks instead of only the one under the cursor.
+  property var customPrefetchQueue: []
   // Theme queued for a random default once a custom install finishes ("" = none).
   property string pendingCustomRandomDefault: ""
 
@@ -538,8 +542,10 @@ Item {
   ListModel { id: wallpapersDisplayModel }
   // Catalog of the theme being configured on the custom-install screen. Kept
   // separate from `wallpapersModel` so opening the screen never disturbs the
-  // wallpapers grid's own load/scroll state.
-  ListModel { id: customCatalogModel }
+  // wallpapers grid's own load/scroll state. A plain JS array, not a ListModel:
+  // assigning it is O(1), while a ListModel needed one `append` per row and
+  // blocked the first paint of the screen for about a second on big themes.
+  property var customCatalogItems: []
 
   // What the themes list and cursor read from.
   readonly property var activeThemesModel: filterText === "" ? themesModel : themesDisplayModel
@@ -1026,8 +1032,7 @@ Item {
   // `customRevision` makes the binding re-read the ListModel.
   readonly property var customRows: {
     var rev = customRevision
-    var items = []
-    for (var i = 0; i < customCatalogModel.count; i++) items.push(customCatalogModel.get(i))
+    var items = customCatalogItems
     var totals = Model.wallpaperTotals(items)
     var rows = [{
       kind: "full",
@@ -1123,8 +1128,8 @@ Item {
   function prefetchCustomPreviews() {
     if (actionRunning) return
     var urls = []
-    for (var i = 0; i < customCatalogModel.count && urls.length < 9; i++) {
-      var row = customCatalogModel.get(i)
+    for (var i = 0; i < customCatalogItems.length && urls.length < 9; i++) {
+      var row = customCatalogItems[i]
       if (!row || !row.preview) continue
       var url = String(row.preview)
       if (url.indexOf("http") !== 0) continue
@@ -1164,8 +1169,8 @@ Item {
     customSelection = 0
     customLoading = true
     // Clear before switching the view: otherwise the screen briefly renders the
-    // previous theme's cards (ready = true) before the model empties.
-    customCatalogModel.clear()
+    // previous theme's cards (ready = true) before the data empties.
+    customCatalogItems = []
     customPreviews = []
     customRevision++
     view = "custom"
@@ -1206,8 +1211,8 @@ Item {
     if (theme === "") return
     customCatalogCache[theme] = rows
     if (theme !== customThemeName) return
-    customCatalogModel.clear()
-    for (var i = 0; i < rows.length; i++) customCatalogModel.append(rows[i])
+    // Assign the whole array at once (O(1)) instead of one model append per row.
+    customCatalogItems = rows
     customRevision++
     customLoading = false
     // Resolve the 3x3 previews once, now, so they are not swapped later.
@@ -1237,6 +1242,31 @@ Item {
     catalogPrefetchProc.requestedTheme = theme
     catalogPrefetchProc.command = scriptCmd(["catalog", theme, t.catalogUrl])
     catalogPrefetchProc.running = true
+  }
+
+  // Warm every theme's catalog once, in the given priority order (the selected
+  // theme first), so the in-memory cache covers them all and Custom Install
+  // never waits on a `manager.sh catalog` read.
+  function prefetchAllCatalogs() {
+    var queue = []
+    if (selectedIndex >= 0 && selectedIndex < activeThemesModel.count)
+      queue.push(activeThemesModel.get(selectedIndex).name)
+    for (var i = 0; i < activeThemesModel.count; i++) {
+      var name = activeThemesModel.get(i).name
+      if (queue.indexOf(name) < 0) queue.push(name)
+    }
+    customPrefetchQueue = queue
+    advanceCustomPrefetch()
+  }
+
+  // Keep the one-at-a-time prefetch fed from the queue.
+  function advanceCustomPrefetch() {
+    if (catalogPrefetchProc.running) return
+    while (customPrefetchQueue.length > 0) {
+      var next = customPrefetchQueue[0]
+      customPrefetchQueue = customPrefetchQueue.slice(1)
+      if (!customCatalogCache[next]) { prefetchCustomCatalog(next); return }
+    }
   }
 
   function moveCustomCursor(dir) {
@@ -1307,8 +1337,8 @@ Item {
   // sure to land on disk — exactly like `actionToggleDefault`, so a random
   // default on another theme never replaces the current desktop background.
   function applyCustomRandomDefault(theme) {
-    if (theme === "" || customCatalogModel.count === 0) return
-    var item = customCatalogModel.get(Math.floor(Math.random() * customCatalogModel.count))
+    if (theme === "" || customCatalogItems.length === 0) return
+    var item = customCatalogItems[Math.floor(Math.random() * customCatalogItems.length)]
     if (!item) return
     // Closing step: the overlay reads "Finalizing…", never "Downloading 1…".
     customFinalStep = true
@@ -2381,16 +2411,22 @@ Item {
     }
     var installedValue = (cmd === "remove") ? "0" : "1"
     var changed = false
-    for (var i = 0; i < customCatalogModel.count; i++) {
-      var row = customCatalogModel.get(i)
+    var items = customCatalogItems.slice()
+    for (var i = 0; i < items.length; i++) {
+      var row = items[i]
       var hit = false
       if (collection !== "") hit = String(row.collection) === collection
       else if (filenames.length > 0) hit = filenames.indexOf(String(row.filename)) >= 0
       else hit = true
       if (hit && String(row.installed) !== installedValue) {
-        customCatalogModel.setProperty(i, "installed", installedValue)
+        row.installed = installedValue
         changed = true
       }
+    }
+    if (changed) {
+      // Reassign so the `customRevision`-driven bindings re-read the array.
+      customCatalogItems = items
+      customRevision++
     }
     // Keep the cache in sync so the next open of this screen is instant too.
     var cached = customCatalogCache[theme]
@@ -2647,6 +2683,37 @@ Item {
   // pane from the small preview without waiting for the next selection.
   onImageCacheRevisionChanged: refreshDetailShown()
 
+  // ---- cache warm-up --------------------------------------------------------
+  // At plugin start, fetch datasets.json and every theme catalog from the CDN
+  // once (the script reuses them until the configured base changes). After this
+  // every screen reads catalogs from the on-disk cache, so opening Custom
+  // Install never waits on the network. Best effort: a failure is silent and
+  // `ensure_catalog` still retries on demand.
+  Process {
+    id: warmProc
+    command: root.scriptCmd(["warm"])
+    stdout: SplitParser {
+      onRead: function(line) {
+        var s = String(line)
+        // `url<TAB>path` lines come from the preview prewarm: record them so
+        // those previews load from disk the first time the screen opens.
+        var parts = s.split("\t")
+        if (parts.length >= 2 && parts[0].indexOf("http") === 0 && parts[1] !== "") {
+          root.imagePathByUrl[parts[0]] = parts[1]
+          root.imageCacheRevision++
+        }
+      }
+    }
+    onExited: {
+      // The catalogs are on disk now: drop the in-memory cache so the next
+      // reads come straight from the warmed files, then re-warm the queue.
+      root.customCatalogCache = ({})
+      if (root.activeThemesModel.count > 0) root.prefetchAllCatalogs()
+    }
+  }
+
+  Component.onCompleted: warmProc.running = true
+
   // ---- local usage ----------------------------------------------------------
   // `manager.sh limits` -> `LIMITS\t<files>\t<bytes>`, feeding the storage-cap
   // flag. Best effort: a failure leaves the previous values in place.
@@ -2713,10 +2780,11 @@ Item {
         root.setStatus(Model.themesStatus(themesModel.count))
         if (root.activeThemesModel.count > 0)
           Qt.callLater(function() { scrollToList(root.selectedIndex, ListView.Contain) })
-        // Warm the selected theme's catalog in the background.
-        if (root.activeThemesModel.count > 0
-            && root.selectedIndex < root.activeThemesModel.count)
-          root.prefetchCustomCatalog(root.activeThemesModel.get(root.selectedIndex).name)
+        // Warm every theme's catalog in the background, one at a time, so
+        // Custom Install opens instantly whichever theme the user picks. The
+        // selected theme first (most likely next), then the rest.
+        if (root.activeThemesModel.count > 0)
+          root.prefetchAllCatalogs()
       }
     }
     onExited: {
@@ -2832,6 +2900,8 @@ Item {
       var next = root.pendingCustomPrefetch
       root.pendingCustomPrefetch = ""
       if (next !== "") root.prefetchCustomCatalog(next)
+      // Continue draining the whole-theme warm-up queue.
+      root.advanceCustomPrefetch()
     }
   }
 
