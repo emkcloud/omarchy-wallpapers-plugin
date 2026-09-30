@@ -424,10 +424,25 @@ Item {
     settingsDir: root.settingsDir
   }
 
+  // Content width used to derive the side panes. The card width and its
+  // padding are known here, so the pane widths no longer have to be read back
+  // from the (now disposable) views.
+  readonly property real cardContentWidth: Math.max(0,
+    Math.min(Style.space(1180), panel.width - Style.gapsOut * 2) - contentMargin * 2)
+  // Master-pane width of the themes/help/setup sidebars: 26% of the content,
+  // min 210 — the same rule ThemeSelectionView uses internally.
+  readonly property real themePaneWidth: Math.max(Style.space(210),
+    Math.floor(cardContentWidth * 0.26))
+  // Footer divider alignment for the custom-install previews pane (62% of the
+  // content, min 260), expressed as the offset the footer expects.
+  readonly property real customPaneWidth: Math.max(Style.space(260),
+    Math.floor(cardContentWidth * 0.62))
+
   // The two heroes (grid / fullscreen preview) are pinned to the same height so
   // switching view — or a title that grows a resolution suffix — never shifts
-  // the separator and the content below it.
-  readonly property int heroHeight: Math.max(heroBar.implicitHeight, previewView.heroNaturalHeight)
+  // the separator and the content below it. Both heroes share the same font and
+  // insets, so their natural height is the same.
+  readonly property int heroHeight: heroBar.implicitHeight
 
   ListModel { id: themesModel }
   // Filtered view of `themesModel`, used by the left list only while a search
@@ -3139,7 +3154,7 @@ Item {
           settings: settings
           // Same master-pane width as the themes screen, so the two sidebars
           // line up exactly.
-          sidebarWidth: themesView.paneWidth
+          sidebarWidth: root.themePaneWidth
           foreground: root.foreground
           background: root.background
           accent: root.accent
@@ -3174,7 +3189,7 @@ Item {
             roadmap: root.roadmapData
             featureLabel: root.helpIndex && root.helpIndex.feature
               ? root.helpIndex.feature.title : ""
-            sidebarWidth: themesView.paneWidth
+            sidebarWidth: root.themePaneWidth
             foreground: root.foreground
             background: root.background
             accent: root.accent
@@ -3234,8 +3249,8 @@ Item {
           checkedCount: root.checkedCount
           storageLimitReached: root.storageLimitReached
           currentInstalled: root.currentInstalled
-          sidebarWidth: themesView.paneWidth
-          customPaneWidth: customView.paneWidth - card.leftPadding
+          sidebarWidth: root.themePaneWidth
+          customPaneWidth: root.customPaneWidth
           customInstallEnabled: root.customCanInstall
           customRemoveEnabled: root.customCanRemove
           ruleX: -card.leftPadding
