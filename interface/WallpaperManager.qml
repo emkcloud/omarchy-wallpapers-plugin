@@ -248,10 +248,11 @@ Item {
   // progress even while the user browses another theme.
   property string actionTheme: ""
   // How many wallpapers the running operation touches, so the "Downloading N
-  // wallpapers…" caption describes the current phase (a 250-wallpaper
-  // collection) instead of the theme's whole size (500). The footer bar stays
-  // theme-wide (`installed/count`). 0 means "no info yet": fall back to the
-  // theme's own count.
+  // wallpapers…" caption describes the action (the collection / scope the user
+  // asked for) instead of the theme's whole size. Fixed from the FIRST progress
+  // line of the action: later phases (a trailing single default file) must not
+  // move it, and it must not drift to the theme total. 0 means "no info yet":
+  // fall back to the theme's own count.
   property int actionScopeTotal: 0
   // Arguments of the running/last action, so `onExited` can apply its effect to
   // the in-memory catalog instead of reloading the whole thing.
@@ -361,6 +362,16 @@ Item {
   property string customThemeCatalogUrl: ""
   property bool customThemePresent: false
   property bool customLoading: false
+  // True while the catalog is being re-read after an install/remove (finished
+  // or cancelled). The action overlay stays up for this window too: the UI is
+  // still busy recomputing the card counts, so it must not look free.
+  property bool customReloading: false
+  // Last action caption, kept so the overlay can show the same "Downloading…"
+  // while the counts are recomputed (no label swap, no blink).
+  property string customBusyLabel: ""
+  // True while the custom screen runs its closing random-default step (a single
+  // file). The overlay reads "Finalizing…" instead of "Downloading 1…".
+  property bool customFinalStep: false
   // True once the catalog has rows to build the option cards from. The screen
   // hides the list until then, so it never renders a partial set (just Full /
   // Shuffle / Select only) that then shifts under the cursor when the
@@ -652,11 +663,14 @@ Item {
   // it falls back to the bulk action and the running theme's wallpaper count.
   readonly property string actionLabel: {
     var rev = wallpapersRevision
+    // Closing random-default step of a custom install: a single file, shown as
+    // "Finalizing…" so the count never drops to "Downloading 1…".
+    if (customFinalStep) return "Finalizing…"
     var item = currentItem()
     var cmd = lastAction.length > 0 ? String(lastAction[0]) : ""
     if (cmd === "remove") return "Removing…"
     if (cmd === "uninstall-default") return "Clearing default…"
-    if (cmd === "set-default" && item && String(item.installed) === "1")
+    if (cmd === "set-default" && (!item || String(item.installed) === "1"))
       return "Setting default…"
     if (item) {
       var size = Model.formatSize(item.sizeBytes)
@@ -664,12 +678,12 @@ Item {
     }
     if (cmd === "random-install")
       return "Shuffling in " + settings.shuffleCount + " wallpapers…"
-    var theme = actionTheme !== "" ? themeByName(actionTheme) : selectedTheme
-    // Prefer the running scope (a collection / a selection) over the theme's
-    // whole count, so "Downloading 250 wallpapers…" and not 500.
-    var count = (actionRunning && actionScopeTotal > 0)
-      ? actionScopeTotal : (theme ? (theme.count || 0) : 0)
-    return count > 0 ? "Downloading " + count + " wallpapers…" : "Downloading…"
+    // The caption always describes the running action's own scope, fixed when
+    // the action started (`actionScopeTotal`). It never falls back to the
+    // theme's whole size: that read "750" for a 250-wallpaper collection.
+    if (actionRunning && actionScopeTotal > 0)
+      return "Downloading " + actionScopeTotal + " wallpapers…"
+    return "Downloading…"
   }
 
   // Where the open wallpaper lives (or will live) on disk, `~`-shortened.
@@ -1172,9 +1186,12 @@ Item {
     setStatus("")
   }
 
-  function loadCustomCatalog() {
-    if (customThemeName === "") return
-    customLoading = true
+  function loadCustomCatalog(silent) {
+    if (customThemeName === "") { customReloading = false; return }
+    // A silent reload (after a cancelled action) refreshes the counts without
+    // raising the visible "Loading catalog…" overlay: the user stopped an
+    // install and must not see it flash open again on its own.
+    if (!silent) customLoading = true
     customSerial++
     customCatalogProc.requestedSerial = customSerial
     customCatalogProc.requestedTheme = customThemeName
@@ -1236,6 +1253,9 @@ Item {
     var row = customRows[customSelection]
     if (!row) return
     if (row.kind === "selectOnly") { selectCustomTheme(); return }
+    // Same gate as the footer button: a fully-installed scope must not start a
+    // download from Enter either.
+    if (!customCanInstall) return
     executeCustomRow(row)
   }
 
@@ -1290,6 +1310,8 @@ Item {
     if (theme === "" || customCatalogModel.count === 0) return
     var item = customCatalogModel.get(Math.floor(Math.random() * customCatalogModel.count))
     if (!item) return
+    // Closing step: the overlay reads "Finalizing…", never "Downloading 1…".
+    customFinalStep = true
     if (customThemeIsActive) {
       busy = true
       setStatus("Setting a random default for " + Model.ucfirst(theme) + "…")
@@ -1304,6 +1326,7 @@ Item {
     } else {
       setStatus("Default for " + Model.ucfirst(theme)
         + " set — applies when you switch to it")
+      customFinalStep = false
     }
   }
 
@@ -1346,7 +1369,7 @@ Item {
     cursorActive = true
     refreshDetailShown()
     if (activeThemesModel.count > 0)
-      Qt.callLater(function() { themesList().positionViewAtIndex(0, ListView.Beginning) })
+      Qt.callLater(function() { scrollToList(0, ListView.Beginning) })
   }
 
   function setWallpaperFilter(text) {
@@ -1357,7 +1380,7 @@ Item {
     selectedIndex = 0
     cursorActive = true
     if (activeWallpapersModel.count > 0)
-      Qt.callLater(function() { wallpapersGrid().positionViewAtIndex(0, GridView.Beginning) })
+      Qt.callLater(function() { scrollToGrid(0, GridView.Beginning) })
   }
 
   // Narrow the grid to one collection ("" = all). Shares the rebuild/cursor
@@ -1370,7 +1393,7 @@ Item {
     selectedIndex = 0
     cursorActive = true
     if (activeWallpapersModel.count > 0)
-      Qt.callLater(function() { wallpapersGrid().positionViewAtIndex(0, GridView.Beginning) })
+      Qt.callLater(function() { scrollToGrid(0, GridView.Beginning) })
   }
 
   // The dataset carries a readable `title` ("Tokyo Night"); the tiles show it
@@ -1448,7 +1471,7 @@ Item {
     cursorActive = true
     setStatus("")
     if (activeThemesModel.count > 0)
-      Qt.callLater(function() { themesList().positionViewAtIndex(root.selectedIndex, ListView.Contain) })
+      Qt.callLater(function() { scrollToList(root.selectedIndex, ListView.Contain) })
   }
 
   // Help screen: opened from the hero Help button on any screen (or `?` on the
@@ -1479,14 +1502,14 @@ Item {
       selectedIndex = Math.max(0, Math.min(activeThemesModel.count - 1, selectedIndex))
       setStatus("")
       if (activeThemesModel.count > 0)
-        Qt.callLater(function() { themesList().positionViewAtIndex(root.selectedIndex, ListView.Contain) })
+        Qt.callLater(function() { scrollToList(root.selectedIndex, ListView.Contain) })
       return
     }
     view = target
     cursorActive = true
     setStatus("")
     if (target === "wallpapers")
-      Qt.callLater(function() { wallpapersGrid().positionViewAtIndex(root.selectedIndex, GridView.Contain) })
+      Qt.callLater(function() { scrollToGrid(root.selectedIndex, GridView.Contain) })
   }
 
   // Setup screen: a placeholder screen like Help but empty. Reached with `s`
@@ -1506,7 +1529,7 @@ Item {
     cursorActive = true
     setStatus("")
     if (setupReturnView === "wallpapers")
-      Qt.callLater(function() { wallpapersGrid().positionViewAtIndex(root.selectedIndex, GridView.Contain) })
+      Qt.callLater(function() { scrollToGrid(root.selectedIndex, GridView.Contain) })
   }
 
   // Open Setup on the Download section: the storage-limit banner links here.
@@ -1525,7 +1548,7 @@ Item {
       helpReturnView === "themes" ? selectedIndex : lastThemeIndex))
     setStatus("")
     if (activeThemesModel.count > 0)
-      Qt.callLater(function() { themesList().positionViewAtIndex(root.selectedIndex, ListView.Contain) })
+      Qt.callLater(function() { scrollToList(root.selectedIndex, ListView.Contain) })
   }
 
   function refresh() {
@@ -1545,8 +1568,8 @@ Item {
   }
 
   function positionActive(index) {
-    if (view === "themes") themesList().positionViewAtIndex(index, ListView.Contain)
-    else wallpapersGrid().positionViewAtIndex(index, GridView.Contain)
+    if (view === "themes") scrollToList(index, ListView.Contain)
+    else scrollToGrid(index, GridView.Contain)
   }
 
   function stepCursor(step) {
@@ -1787,6 +1810,10 @@ Item {
   }
 
   function dismissCursor() {
+    // The custom screen is recomputing the counts after an install/remove:
+    // the overlay is up and the work is not done, so ignore Esc here. The
+    // first Esc already switched the caption to "Stopping…".
+    if (customReloading) return
     // While an action runs, Esc stops it instead of navigating away; a second
     // Esc then closes/backs out.
     if (actionRunning) {
@@ -1838,7 +1865,13 @@ Item {
   function cancelAction() {
     if (!actionRunning) return
     actionCancelled = true
-    actionRunning = false
+    // On the custom screen the overlay must not blink off: `actionProc.onExited`
+    // raises `customReloading` before clearing `actionRunning`, recomputes the
+    // counts, then leaves the user on the screen (Esc only stopped the install).
+    // Swap the caption to "Stopping…" right away so the first Esc is visibly
+    // acknowledged; further Esc presses are ignored while the overlay is up.
+    if (view === "custom") customBusyLabel = "Stopping…"
+    else actionRunning = false
     actionProc.running = false
   }
 
@@ -2059,7 +2092,7 @@ Item {
     selectedIndex = Math.max(0, Math.min(activeWallpapersModel.count - 1, selectedIndex))
     // Deferred: the GridView only becomes visible on the view change, so
     // scrolling in the same frame reads stale geometry and lands nowhere.
-    Qt.callLater(function() { wallpapersGrid().positionViewAtIndex(root.selectedIndex, GridView.Contain) })
+    Qt.callLater(function() { scrollToGrid(root.selectedIndex, GridView.Contain) })
   }
 
   function previewNext(delta) {
@@ -2316,6 +2349,64 @@ Item {
     }
   }
 
+  // Patch the custom-install model in place after an action, instead of
+  // re-reading the whole catalog with `manager.sh catalog` (which was the slow
+  // path: the data was already in memory). Only the `installed` flag can change.
+  // `random-install` picks unknown files, so that one still reloads.
+  function applyCustomActionResult() {
+    var args = lastAction
+    // Unknown files (random sample): the only case that still needs a re-read.
+    var cmd = (args && args.length > 0) ? String(args[0]) : ""
+    var theme = (args && args.length > 1) ? String(args[1]) : ""
+    if (cmd === "random-install" && theme === customThemeName) {
+      customReloading = true
+      loadCustomCatalog(true)
+      return
+    }
+    // Everything else is patched in place below; release the overlay now.
+    customReloading = false
+    if (!args || args.length < 2) return
+    if (theme !== customThemeName) return
+    var collection = ""
+    var filenames = []
+    if (cmd === "install" || cmd === "remove") {
+      if (args.length > 2 && String(args[2]) === "--collection")
+        collection = String(args[3])
+      else if (args.length > 2)
+        filenames = args.slice(2).map(function(x) { return String(x) })
+    } else if (cmd === "set-default" || cmd === "uninstall-default") {
+      if (args.length > 2) filenames = [String(args[2])]
+    } else {
+      return
+    }
+    var installedValue = (cmd === "remove") ? "0" : "1"
+    var changed = false
+    for (var i = 0; i < customCatalogModel.count; i++) {
+      var row = customCatalogModel.get(i)
+      var hit = false
+      if (collection !== "") hit = String(row.collection) === collection
+      else if (filenames.length > 0) hit = filenames.indexOf(String(row.filename)) >= 0
+      else hit = true
+      if (hit && String(row.installed) !== installedValue) {
+        customCatalogModel.setProperty(i, "installed", installedValue)
+        changed = true
+      }
+    }
+    // Keep the cache in sync so the next open of this screen is instant too.
+    var cached = customCatalogCache[theme]
+    if (cached) {
+      for (var k = 0; k < cached.length; k++) {
+        var crow = cached[k]
+        var chit = false
+        if (collection !== "") chit = String(crow.collection) === collection
+        else if (filenames.length > 0) chit = filenames.indexOf(String(crow.filename)) >= 0
+        else chit = true
+        if (chit) crow.installed = installedValue
+      }
+    }
+    if (changed) customRevision++
+  }
+
   function setWallpaperInstalled(filename, value) {
     for (var i = 0; i < wallpapersModel.count; i++) {
       if (wallpapersModel.get(i).filename === filename) {
@@ -2374,7 +2465,11 @@ Item {
     pendingProgressInstalled = -1
     pendingProgressScopeTotal = -1
     if (name === "" || installed < 0) return
-    if (scopeTotal >= 0) actionScopeTotal = scopeTotal
+    // Freeze the caption on the first scope reported for this action: the script
+    // can emit a trailing single-file phase after the bulk download, and the
+    // caption must not jump from "250 wallpapers" to "1" (or drift to the
+    // theme total) mid-action.
+    if (scopeTotal > 0 && actionScopeTotal === 0) actionScopeTotal = scopeTotal
     for (var i = 0; i < themesModel.count; i++) {
       if (themesModel.get(i).name === name) {
         if ((themesModel.get(i).installed || 0) !== installed) {
@@ -2617,7 +2712,7 @@ Item {
         root.busy = false
         root.setStatus(Model.themesStatus(themesModel.count))
         if (root.activeThemesModel.count > 0)
-          Qt.callLater(function() { themesList().positionViewAtIndex(root.selectedIndex, ListView.Contain) })
+          Qt.callLater(function() { scrollToList(root.selectedIndex, ListView.Contain) })
         // Warm the selected theme's catalog in the background.
         if (root.activeThemesModel.count > 0
             && root.selectedIndex < root.activeThemesModel.count)
@@ -2674,7 +2769,7 @@ Item {
         root.busy = false
         root.setStatus(Model.catalogStatus(wallpapersModel.count, root.themeName))
         if (root.activeWallpapersModel.count > 0)
-          Qt.callLater(function() { wallpapersGrid().positionViewAtIndex(root.selectedIndex, GridView.Contain) })
+          Qt.callLater(function() { scrollToGrid(root.selectedIndex, GridView.Contain) })
       }
     }
     onExited: {
@@ -2711,7 +2806,12 @@ Item {
           Model.parseCatalog(text))
       }
     }
-    onExited: if (root.customLoading) root.customLoading = false
+    onExited: {
+      if (root.customLoading) root.customLoading = false
+      // The post-action recompute is done: release the action overlay and stay
+      // on the custom screen (Esc only stopped the running install).
+      root.customReloading = false
+    }
   }
 
   // Idle catalog prefetch (one theme at a time): parse a theme into the
@@ -2749,9 +2849,23 @@ Item {
     }
     onExited: {
       var cancelled = root.actionCancelled
+      // The closing random-default step is over (whether it ran or not).
+      root.customFinalStep = false
       // Captured before the reset below: the action changed this theme's
       // on-disk state, so its cached parse must be dropped.
       var actedTheme = root.actionTheme
+      // Raise the post-action overlay BEFORE clearing `actionRunning`, so the
+      // custom-install spinner never blinks off between the two flags: it reads
+      // `actionRunning || customReloading`.
+      var willReloadCustom = (root.view === "custom")
+      if (willReloadCustom) {
+        // Caption during the recompute: the action is done, so do not keep the
+        // stale download count ("Downloading 250…" jumping to 1 on re-read).
+        // Cancelled already says "Stopping…" (set by cancelAction); a finished
+        // action reads "Updating…".
+        if (!cancelled) root.customBusyLabel = "Finalizing…"
+        root.customReloading = true
+      }
       root.actionCancelled = false
       root.busy = false
       root.actionRunning = false
@@ -2763,6 +2877,13 @@ Item {
       root.setStatus(cancelled ? "Operation cancelled" : "Operation completed")
       // Update the in-memory catalog in place; no full reload (see docs/DEVELOPMENT.md).
       if (!cancelled) root.applyActionResult()
+      // Custom install: refresh the option counts in place from the in-memory
+      // catalog (no slow `manager.sh catalog` re-read — the data is already
+      // here, from the grid/prefetch or the last load), then release the
+      // overlay. `applyCustomActionResult` keeps the overlay up for the rare
+      // unknown-file case (random install) by reloading.
+      if (willReloadCustom) root.applyCustomActionResult()
+      else root.customReloading = false
       // Refresh the storage-cap flag after the on-disk state changed.
       root.loadLimits()
       // A selection-based install/remove clears the checks when it is done.
@@ -2772,17 +2893,12 @@ Item {
       }
       root.actionTheme = ""
       root.lastAction = []
-      // Custom install: refresh the option counts and, when the switch asked for
-      // it, chain a random default now that the process is free.
+      // The switch applies after an install that finished; a stopped install
+      // must not chain a fresh random-default download, or Esc would appear to
+      // reopen the overlay by itself.
       var randomDefaultTheme = root.pendingCustomRandomDefault
       root.pendingCustomRandomDefault = ""
-      // Reload even when cancelled: files installed before Esc are on disk, so
-      // the card counts must catch up without leaving the screen.
-      if (actedTheme !== "") delete root.customCatalogCache[actedTheme]
-      if (root.view === "custom") root.loadCustomCatalog()
-      // The switch applies after an install whether it finished or was stopped
-      // with Esc; `applyCustomRandomDefault` only touches the configured theme.
-      if (randomDefaultTheme !== "")
+      if (!cancelled && randomDefaultTheme !== "")
         root.applyCustomRandomDefault(randomDefaultTheme)
     }
   }

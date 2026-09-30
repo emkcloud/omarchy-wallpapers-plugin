@@ -425,11 +425,13 @@ Item {
   }
 
   // Running overlay: freezes the screen while an install runs; only Esc cancels.
+  // It stays up while the card counts are recomputed after the action, so the
+  // UI never looks free during the reload.
   RunningOverlay {
     anchors.fill: parent
     z: 6
-    running: manager.actionRunning
-    label: manager.actionLabel
+    running: manager.actionRunning || manager.customReloading
+    label: manager.actionRunning ? manager.actionLabel : manager.customBusyLabel
     foreground: manager.foreground
     background: manager.background
     accent: manager.accent
