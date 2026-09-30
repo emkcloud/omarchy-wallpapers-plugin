@@ -231,8 +231,8 @@ Item {
   property string collectionFilter: ""
   // Keep the picker label in sync when the filter is reset programmatically:
   // the Dropdown's own selection breaks the `value` binding.
-  onCollectionFilterChanged: if (wallpapersView && wallpapersView.collectionDropdown)
-    wallpapersView.collectionDropdown.value = collectionFilter
+  onCollectionFilterChanged: if (wallpapersCollectionDropdown())
+    wallpapersCollectionDropdown().value = collectionFilter
   property bool searching: false
   // Set when Esc stops a running action, so `actionProc.onExited` reports a
   // cancellation instead of a completion.
@@ -443,6 +443,75 @@ Item {
   // the separator and the content below it. Both heroes share the same font and
   // insets, so their natural height is the same.
   readonly property int heroHeight: heroBar.implicitHeight
+
+  // ---- live screen handles --------------------------------------------------
+  // The screens live behind `contentLoader` / `previewLoader` and are destroyed
+  // on every view switch, so the panel reaches them through these guarded
+  // accessors instead of direct ids. Each returns null when the screen is not
+  // mounted, which is exactly the case the guards need to tolerate.
+  function themesView() { return root.view === "themes" ? contentLoader.item : null }
+  function helpView() { return root.view === "help" ? contentLoader.item : null }
+  function setupView() { return root.view === "setup" ? contentLoader.item : null }
+  function wallpapersView() { return root.view === "wallpapers" ? contentLoader.item : null }
+  function previewView() { return previewLoader.item }
+
+  function themesList() {
+    var v = themesView()
+    return v ? v.listView : null
+  }
+
+  function wallpapersGrid() {
+    var v = wallpapersView()
+    return v ? v.grid : null
+  }
+
+  function wallpapersCollectionDropdown() {
+    var v = wallpapersView()
+    return v ? v.collectionDropdown : null
+  }
+
+  function wallpapersColumns() {
+    var g = wallpapersGrid()
+    return g ? g.colCount : 1
+  }
+
+  function wallpapersGridHeight() {
+    var g = wallpapersGrid()
+    return g ? g.height : 0
+  }
+
+  function wallpapersCellHeight() {
+    var g = wallpapersGrid()
+    return g ? g.cellHeight : 1
+  }
+
+  function themesListHeight() {
+    var l = themesList()
+    return l ? l.height : 0
+  }
+
+  // Position a view's scroll to its cursor row. Called after a screen is
+  // mounted (a destroyed-and-rebuilt list starts at the top) and by the cursor
+  // code whenever it needs to keep the selection in view. Safe while no screen
+  // is mounted.
+  function scrollToList(index, position) {
+    var t = themesList()
+    if (t) t.positionViewAtIndex(index, position)
+  }
+
+  function scrollToGrid(index, position) {
+    var g = wallpapersGrid()
+    if (g) g.positionViewAtIndex(index, position)
+  }
+
+  // Re-apply the scroll position of the screen that was just mounted.
+  function restoreViewScroll() {
+    Qt.callLater(function() {
+      if (root.view === "themes") scrollToList(Math.max(0, root.selectedIndex), ListView.Contain)
+      else if (root.view === "wallpapers")
+        scrollToGrid(Math.max(0, root.selectedIndex), GridView.Contain)
+    })
+  }
 
   ListModel { id: themesModel }
   // Filtered view of `themesModel`, used by the left list only while a search
@@ -740,7 +809,8 @@ Item {
 
   function close() {
     // A dropdown popup is a separate window and would outlive the overlay.
-    if (wallpapersView.collectionDropdown && wallpapersView.collectionDropdown.popupOpen) wallpapersView.collectionDropdown.close()
+    if (wallpapersCollectionDropdown() && wallpapersCollectionDropdown().popupOpen)
+      wallpapersCollectionDropdown().close()
     opened = false
   }
 
@@ -1274,7 +1344,7 @@ Item {
     cursorActive = true
     refreshDetailShown()
     if (activeThemesModel.count > 0)
-      Qt.callLater(function() { themesView.listView.positionViewAtIndex(0, ListView.Beginning) })
+      Qt.callLater(function() { themesList().positionViewAtIndex(0, ListView.Beginning) })
   }
 
   function setWallpaperFilter(text) {
@@ -1285,7 +1355,7 @@ Item {
     selectedIndex = 0
     cursorActive = true
     if (activeWallpapersModel.count > 0)
-      Qt.callLater(function() { wallpapersView.grid.positionViewAtIndex(0, GridView.Beginning) })
+      Qt.callLater(function() { wallpapersGrid().positionViewAtIndex(0, GridView.Beginning) })
   }
 
   // Narrow the grid to one collection ("" = all). Shares the rebuild/cursor
@@ -1298,7 +1368,7 @@ Item {
     selectedIndex = 0
     cursorActive = true
     if (activeWallpapersModel.count > 0)
-      Qt.callLater(function() { wallpapersView.grid.positionViewAtIndex(0, GridView.Beginning) })
+      Qt.callLater(function() { wallpapersGrid().positionViewAtIndex(0, GridView.Beginning) })
   }
 
   // The dataset carries a readable `title` ("Tokyo Night"); the tiles show it
@@ -1376,7 +1446,7 @@ Item {
     cursorActive = true
     setStatus("")
     if (activeThemesModel.count > 0)
-      Qt.callLater(function() { themesView.listView.positionViewAtIndex(root.selectedIndex, ListView.Contain) })
+      Qt.callLater(function() { themesList().positionViewAtIndex(root.selectedIndex, ListView.Contain) })
   }
 
   // Help screen: opened from the hero Help button on any screen (or `?` on the
@@ -1407,14 +1477,14 @@ Item {
       selectedIndex = Math.max(0, Math.min(activeThemesModel.count - 1, selectedIndex))
       setStatus("")
       if (activeThemesModel.count > 0)
-        Qt.callLater(function() { themesView.listView.positionViewAtIndex(root.selectedIndex, ListView.Contain) })
+        Qt.callLater(function() { themesList().positionViewAtIndex(root.selectedIndex, ListView.Contain) })
       return
     }
     view = target
     cursorActive = true
     setStatus("")
     if (target === "wallpapers")
-      Qt.callLater(function() { wallpapersView.grid.positionViewAtIndex(root.selectedIndex, GridView.Contain) })
+      Qt.callLater(function() { wallpapersGrid().positionViewAtIndex(root.selectedIndex, GridView.Contain) })
   }
 
   // Setup screen: a placeholder screen like Help but empty. Reached with `s`
@@ -1434,7 +1504,7 @@ Item {
     cursorActive = true
     setStatus("")
     if (setupReturnView === "wallpapers")
-      Qt.callLater(function() { wallpapersView.grid.positionViewAtIndex(root.selectedIndex, GridView.Contain) })
+      Qt.callLater(function() { wallpapersGrid().positionViewAtIndex(root.selectedIndex, GridView.Contain) })
   }
 
   // Open Setup on the Download section: the storage-limit banner links here.
@@ -1453,7 +1523,7 @@ Item {
       helpReturnView === "themes" ? selectedIndex : lastThemeIndex))
     setStatus("")
     if (activeThemesModel.count > 0)
-      Qt.callLater(function() { themesView.listView.positionViewAtIndex(root.selectedIndex, ListView.Contain) })
+      Qt.callLater(function() { themesList().positionViewAtIndex(root.selectedIndex, ListView.Contain) })
   }
 
   function refresh() {
@@ -1473,8 +1543,8 @@ Item {
   }
 
   function positionActive(index) {
-    if (view === "themes") themesView.listView.positionViewAtIndex(index, ListView.Contain)
-    else wallpapersView.grid.positionViewAtIndex(index, GridView.Contain)
+    if (view === "themes") themesList().positionViewAtIndex(index, ListView.Contain)
+    else wallpapersGrid().positionViewAtIndex(index, GridView.Contain)
   }
 
   function stepCursor(step) {
@@ -1529,7 +1599,7 @@ Item {
 
     // The filter row owns the arrows while it is focused (and not typing — the
     // search editor handles its own keys through the card fallback): Left/Right
-    // walk the controls, Down drops back to the wallpapersView.grid.
+    // walk the controls, Down drops back to the wallpapers grid.
     if (filterRowFocused && !searching) {
       if (dx !== 0) {
         moveFilterField(dx > 0 ? 1 : -1)
@@ -1540,11 +1610,11 @@ Item {
     }
 
     // Up from the first row moves the focus into the filter row (search field).
-    if (dy < 0 && selectedIndex < wallpapersView.grid.colCount) {
+    if (dy < 0 && selectedIndex < wallpapersColumns()) {
       enterFilterRow(1)
       return
     }
-    stepCursor(dx !== 0 ? dx : dy * wallpapersView.grid.colCount)
+    stepCursor(dx !== 0 ? dx : dy * wallpapersColumns())
   }
 
   // PageUp/PageDown: jump a whole visible page of tiles (rows on screen ×
@@ -1560,7 +1630,7 @@ Item {
     // Help: page through the central topic content.
     if (view === "help") {
       // Scrolling the topic body only needs the built view.
-      if (helpView) helpView.scrollPage(dir)
+      if (helpView()) helpView().scrollPage(dir)
       return
     }
     if (view === "preview") {
@@ -1572,14 +1642,13 @@ Item {
       return
     }
     if (view === "themes") {
-      var rows = Math.max(1, Math.floor(themesView.listView.height / root.themeRowHeight))
+      var rows = Math.max(1, Math.floor(themesListHeight() / root.themeRowHeight))
       stepCursor(dir * rows)
       return
     }
 
-    var g = wallpapersView.grid
-    var visibleRows = Math.max(1, Math.floor(g.height / g.cellHeight))
-    stepCursor(dir * visibleRows * g.colCount)
+    var visibleRows = Math.max(1, Math.floor(wallpapersGridHeight() / wallpapersCellHeight()))
+    stepCursor(dir * visibleRows * wallpapersColumns())
   }
 
   // Setup screen keyboard hooks: all the navigation state lives in `settings`,
@@ -1634,7 +1703,7 @@ Item {
   function helpActivateSelection() {
     var topics = Model.helpFlatItems(root.helpIndex).length
     if (settings.setupHelpSelectedFlat >= topics) {
-      if (helpView) helpView.activateSelection()
+      if (helpView()) helpView().activateSelection()
       return
     }
     helpSelectFlat(settings.setupHelpSelectedFlat)
@@ -1687,7 +1756,7 @@ Item {
     else if (view === "custom") activateCustom()
     else if (view === "wallpapers") {
       if (filterRowFocused && !searching) {
-        if (filterFocus === 0) wallpapersView.collectionDropdown.open()
+        if (filterFocus === 0 && wallpapersCollectionDropdown()) wallpapersCollectionDropdown().open()
         else if (filterFocus === 1) searching = true
         else if (filterFocus === 2) selectAllWallpapers()
         else if (filterFocus === 3) clearWallpaperSelection()
@@ -1988,7 +2057,7 @@ Item {
     selectedIndex = Math.max(0, Math.min(activeWallpapersModel.count - 1, selectedIndex))
     // Deferred: the GridView only becomes visible on the view change, so
     // scrolling in the same frame reads stale geometry and lands nowhere.
-    Qt.callLater(function() { wallpapersView.grid.positionViewAtIndex(root.selectedIndex, GridView.Contain) })
+    Qt.callLater(function() { wallpapersGrid().positionViewAtIndex(root.selectedIndex, GridView.Contain) })
   }
 
   function previewNext(delta) {
@@ -2469,14 +2538,12 @@ Item {
     refreshDetailShown()
     hoverArmed = false
     hoverGate.restart()
-    // Dropdown popups are top-level overlays: they ignore the screen's
-    // `visible`, so leaving the screen would leave them floating over the
-    // next one and holding the keyboard. Close both, then hand focus back.
-    if (view !== "wallpapers" && wallpapersView.collectionDropdown
-        && wallpapersView.collectionDropdown.popupOpen)
-      wallpapersView.collectionDropdown.close()
-    if (view !== "setup" && settings.setupDropdownOpen)
-      setupSettings.closeDropdown()
+    // Popups are top-level overlays and would outlive a screen switch: the
+    // view is destroyed right after this, so close anything open first.
+    if (wallpapersCollectionDropdown() && wallpapersCollectionDropdown().popupOpen)
+      wallpapersCollectionDropdown().close()
+    if (view !== "setup" && settings.setupDropdownOpen && setupView())
+      setupView().closeDropdown()
     Qt.callLater(function() { keys.forceActiveFocus() })
   }
   // A prewarmed neighbour may make the full image available: upgrade the detail
@@ -2548,7 +2615,7 @@ Item {
         root.busy = false
         root.setStatus(Model.themesStatus(themesModel.count))
         if (root.activeThemesModel.count > 0)
-          Qt.callLater(function() { themesView.listView.positionViewAtIndex(root.selectedIndex, ListView.Contain) })
+          Qt.callLater(function() { themesList().positionViewAtIndex(root.selectedIndex, ListView.Contain) })
         // Warm the selected theme's catalog in the background.
         if (root.activeThemesModel.count > 0
             && root.selectedIndex < root.activeThemesModel.count)
@@ -2605,7 +2672,7 @@ Item {
         root.busy = false
         root.setStatus(Model.catalogStatus(wallpapersModel.count, root.themeName))
         if (root.activeWallpapersModel.count > 0)
-          Qt.callLater(function() { wallpapersView.grid.positionViewAtIndex(root.selectedIndex, GridView.Contain) })
+          Qt.callLater(function() { wallpapersGrid().positionViewAtIndex(root.selectedIndex, GridView.Contain) })
       }
     }
     onExited: {
@@ -2990,7 +3057,8 @@ Item {
         // so its list gets the arrows / Enter / Esc. The collection popup only
         // blocks on its own screen: a leaked popup must not freeze navigation.
         blocked: root.searching || settings.setupDropdownOpen
-          || (root.view === "wallpapers" && wallpapersView.collectionDropdown.popupOpen)
+          || (root.view === "wallpapers" && wallpapersCollectionDropdown()
+            && wallpapersCollectionDropdown().popupOpen)
 
         onMoveRequested: function(dx, dy) { root.moveCursor(dx, dy) }
         // Enter also fires `activateRequested`, so the flag drops that second
@@ -3085,103 +3153,88 @@ Item {
           foreground: root.foreground
         }
 
-        // ---- themes view (master-detail) ------------------------------------
-        // Left: vertical list of themes. Right: large preview with the theme
-        // palette, description and bulk actions. One `selectedIndex` drives the
-        // list highlight and the detail pane for mouse and keyboard alike.
-        ThemeSelectionView {
-          id: themesView
+        // ---- content: one screen at a time ----------------------------------
+        // A single Loader mounts only the active screen, so leaving it destroys
+        // the previous one: no background screen can hold focus, take clicks or
+        // leak a popup over the next screen. Navigation state lives in `root`
+        // and `settings`, so destroying and rebuilding loses nothing.
+        Loader {
+          id: contentLoader
 
-          visible: root.view === "themes"
-          // An inactive screen must be inert: no focus, no clicks, no popups.
-          enabled: root.view === "themes"
-          anchors.top: heroRule.bottom
-          anchors.left: parent.left
-          anchors.right: parent.right
-          // Full-bleed on the right: cancel the content padding so the detail
-          // image touches the border (the master list keeps its own margins).
-          anchors.rightMargin: -card.rightPadding
-          anchors.bottom: actionFooter.top
-          manager: root
-          shuffleCount: settings.shuffleCount
-        }
-
-        // ---- custom install view --------------------------------------------
-        // Previews + theme info on the left, the install choices on the right.
-        // The panel owns the catalog load and the actions.
-        CustomInstallView {
-          id: customView
-
-          visible: root.view === "custom"
-          enabled: root.view === "custom"
           anchors.top: heroRule.bottom
           anchors.left: parent.left
           anchors.right: parent.right
           anchors.bottom: actionFooter.top
-          // Full-bleed on the left: cancel the card padding so the previews
-          // grid starts right after the border.
-          anchors.leftMargin: -card.leftPadding
-          manager: root
-        }
-
-        // ---- help view ------------------------------------------------------
-        // Index + resources on the left, the selected topic in the centre and
-        // the roadmap on the right. Data lives under `help/` (index.json,
-        // roadmap.json, one Markdown file per topic). Esc / Back go back to the
-        // themes list.
-        HelpView {
-          id: helpView
-
-          visible: root.view === "help"
-          enabled: root.view === "help"
-          anchors.top: heroRule.bottom
-          anchors.left: parent.left
-          anchors.right: parent.right
-          anchors.bottom: actionFooter.top
-          helpRoot: root.helpRoot
-          links: {
-            var l = root.pluginLinks
-            return {
-              repo: l.repo,
-              donation: l.donation,
-              issues: l.issues,
-              releases: l.releases,
-              database: root.pluginDatabaseUrl
-            }
+          sourceComponent: root.view === "themes" ? themesComponent
+            : root.view === "custom" ? customComponent
+            : root.view === "help" ? helpComponent
+            : root.view === "setup" ? setupComponent
+            : root.view === "wallpapers" ? wallpapersComponent
+            : null
+          onLoaded: {
+            if (item) item.forceActiveFocus()
+            root.restoreViewScroll()
           }
-          roadmap: root.roadmapData
-          index: root.helpIndex
-          settings: settings
-          // Same master-pane width as the themes screen, so the two sidebars
-          // line up exactly.
-          sidebarWidth: root.themePaneWidth
-          foreground: root.foreground
-          background: root.background
-          accent: root.accent
-          fontFamily: root.fontFamily
-          // A link opens a normal browser window under the overlay: hide the
-          // panel so the page is visible.
-          onLinkOpened: root.close()
         }
 
-        // ---- setup view -----------------------------------------------------
-        // Settings screen, reachable with `s` on any screen or from the setup
-        // buttons: sections sidebar on the left (same width as the Help/themes
-        // sidebars), the selected section on the right.
-        Item {
-          id: setupView
+        Component {
+          id: themesComponent
 
-          visible: root.view === "setup"
-          enabled: root.view === "setup"
-          anchors.top: heroRule.bottom
-          anchors.left: parent.left
-          anchors.right: parent.right
-          anchors.bottom: actionFooter.top
+          ThemeSelectionView {
+            manager: root
+            shuffleCount: settings.shuffleCount
+            // Full-bleed on the right: cancel the content padding so the detail
+            // image touches the border (the master list keeps its own margins).
+            anchors.rightMargin: -card.rightPadding
+          }
+        }
+
+        Component {
+          id: customComponent
+
+          CustomInstallView {
+            manager: root
+            // Full-bleed on the left: cancel the card padding so the previews
+            // grid starts right after the border.
+            anchors.leftMargin: -card.leftPadding
+          }
+        }
+
+        Component {
+          id: helpComponent
+
+          HelpView {
+            helpRoot: root.helpRoot
+            settings: settings
+            links: {
+              var l = root.pluginLinks
+              return {
+                repo: l.repo,
+                donation: l.donation,
+                issues: l.issues,
+                releases: l.releases,
+                database: root.pluginDatabaseUrl
+              }
+            }
+            roadmap: root.roadmapData
+            index: root.helpIndex
+            // Same master-pane width as the themes screen, so the two sidebars
+            // line up exactly.
+            sidebarWidth: root.themePaneWidth
+            foreground: root.foreground
+            background: root.background
+            accent: root.accent
+            fontFamily: root.fontFamily
+            // A link opens a normal browser window under the overlay: hide the
+            // panel so the page is visible.
+            onLinkOpened: root.close()
+          }
+        }
+
+        Component {
+          id: setupComponent
 
           SetupView {
-            id: setupSettings
-
-            anchors.fill: parent
             settings: settings
             localFileCount: root.localFileCount
             localBytes: root.localBytes
@@ -3201,25 +3254,21 @@ Item {
               }
             }
             onRotateRequested: root.rotateWallpaper()
-
+            // The interval popup lives in the view; wire it into the shared
+            // keyboard state while the screen is mounted.
             Component.onCompleted: settings.activateSetupCursor = openIntervalDropdown
             Component.onDestruction: settings.activateSetupCursor = null
           }
         }
 
-        // ---- wallpapers view: search + grid ---------------------------------
-        WallpapersView {
-          id: wallpapersView
+        Component {
+          id: wallpapersComponent
 
-          visible: root.view === "wallpapers"
-          enabled: root.view === "wallpapers"
-          anchors.top: heroRule.bottom
-          anchors.bottom: actionFooter.top
-          anchors.left: parent.left
-          anchors.right: parent.right
-          manager: root
-          ruleX: -card.leftPadding
-          ruleWidth: card.width - card.borderLeft - card.borderRight
+          WallpapersView {
+            manager: root
+            ruleX: -card.leftPadding
+            ruleWidth: card.width - card.borderLeft - card.borderRight
+          }
         }
 
         // ---- footer: actions + status ---------------------------------------
@@ -3272,18 +3321,25 @@ Item {
         }
 
         // ---- fullscreen preview ---------------------------------------------
-        PreviewView {
-          id: previewView
+        Loader {
+          id: previewLoader
 
-          visible: root.view === "preview"
-          enabled: root.view === "preview"
           anchors.fill: parent
           z: 10
-          manager: root
-          cardLeftPadding: card.leftPadding
-          cardRightPadding: card.rightPadding
-          ruleWidth: card.width - card.borderLeft - card.borderRight
-          footerHeight: actionFooter.height
+          active: root.view === "preview"
+          sourceComponent: previewComponent
+        }
+
+        Component {
+          id: previewComponent
+
+          PreviewView {
+            manager: root
+            cardLeftPadding: card.leftPadding
+            cardRightPadding: card.rightPadding
+            ruleWidth: card.width - card.borderLeft - card.borderRight
+            footerHeight: actionFooter.height
+          }
         }
       }
     }
