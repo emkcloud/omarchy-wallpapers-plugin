@@ -45,8 +45,8 @@ Item {
   // with Setup (see `RoadmapPane.qml`).
   property var roadmap: Model.parseRoadmap("")
   property var blocks: []
-  // Persistent navigation state, kept in Settings so this screen can be
-  // destroyed and rebuilt without losing the selected topic.
+  // The cursor lives in Settings (the panel drives it); this view only reads it
+  // so it survives being destroyed and rebuilt.
   property int selectedFlat: settings.setupHelpSelectedFlat
   property int contentTopic: settings.setupHelpContentTopic
   property string selectedFile: settings.setupHelpSelectedFile
@@ -62,6 +62,8 @@ Item {
   readonly property int resourceCount: index.resources ? index.resources.length : 0
   readonly property int navTotal: topicCount + resourceCount
 
+  // Move the cursor. The panel owns the same logic for keyboard input, but the
+  // view's own click handlers (list rows, prev/next cards) go through here.
   function selectFlat(target) {
     if (target < 0 || target >= navTotal) return
     settings.setupHelpSelectedFlat = target
@@ -69,7 +71,7 @@ Item {
     if (target >= topicCount) return
     settings.setupHelpContentTopic = target
     var item = flatItems[target]
-    if (settings.setupHelpSelectedFile !== item.file) {
+    if (item && settings.setupHelpSelectedFile !== item.file) {
       blocks = []
       settings.setupHelpSelectedFile = item.file
     }
@@ -132,28 +134,31 @@ Item {
     openUrl(help.links.database || "")
   }
 
-  // Pick the first topic when none is selected yet. Called both when the index
-  // lands and when the view becomes visible: `onIndexChanged` alone is not
-  // enough because the `flatItems` binding may still be stale inside the
-  // handler, and the index can already be loaded before Help is first opened.
+  // Pick the first topic when none is selected yet. `flatItems` derives from the
+  // injected index, which can arrive before OR after this view is mounted, so
+  // this is called from every point where either could have changed: the index
+  // binding, the mount, and the cursor count itself. Idempotent by design.
   function ensureSelection() {
     if (selectedFile === "" && flatItems.length > 0) selectFlat(0)
   }
 
-  // The cursor now lives in Settings: mirror its changes back to the local
-  // alias so the list stays scrolled to the highlighted row. The index arrives
-  // asynchronously and can land before Help is first opened, so pick the first
-  // topic as soon as both are known.
-  onVisibleChanged: if (visible) ensureSelection()
+  // The cursor lives in Settings. The index arrives asynchronously and can land
+  // before Help is first opened, so pick the first topic as soon as both are
+  // known. The view is mounted by the panel's Loader and re-created on every
+  // visit: `Component.onCompleted` plays the role `onVisibleChanged` had when
+  // the screens were persistent. `onTopicCountChanged` covers the case where
+  // the index was already set during creation (so `onIndexChanged` never fires).
   onIndexChanged: Qt.callLater(ensureSelection)
+  onTopicCountChanged: Qt.callLater(ensureSelection)
+  Component.onCompleted: ensureSelection()
+  // Re-run the selection when the panel moves the cursor from the keyboard, so
+  // the first topic is loaded even if the user navigates before it was picked.
   Connections {
     target: settings
 
     function onSetupHelpSelectedFlatChanged() {
-      help.selectedFlat = settings.setupHelpSelectedFlat
-      help.contentTopic = settings.setupHelpContentTopic
-      help.selectedFile = settings.setupHelpSelectedFile
-      Qt.callLater(positionNav)
+      Qt.callLater(help.ensureSelection)
+      Qt.callLater(help.positionNav)
     }
   }
 
