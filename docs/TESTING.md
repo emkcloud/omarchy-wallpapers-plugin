@@ -41,7 +41,7 @@ symlink to the shell (the same trick the shell's own code uses):
 ```bash
 mkdir -p /tmp/qs && ln -sf /usr/share/omarchy/shell /tmp/qs/qs
 /usr/lib/qt6/bin/qmllint -I /tmp/qs \
-  interface/WallpaperManager.qml interface/BarLauncher.qml \
+  interface/WallpaperManager.qml interface/BarLauncher.qml interface/Settings.qml \
   interface/views/*.qml interface/sections/*.qml interface/components/*.qml
 ```
 
@@ -132,6 +132,8 @@ report the rest.
 - [ ] Arrows/jk move, Tab cycles areas, `Enter`/Space toggle, numeric rows open an edit, the interval opens the `Dropdown`.
 - [ ] Settings survive close/reopen (`~/.config/omarchy/<id>/settings.json`).
 - [ ] Automatic rotation runs on the timer once enabled; "Rotate now" changes the background even with the switch off.
+- [ ] Sequential rotation resumes where it left off: switch to another Omarchy theme and back, and the next tick advances from the last file instead of jumping to the first.
+- [ ] Random rotation never repeats a wallpaper until the whole pool has been shown, then starts a new cycle (the current one is not repeated at the cycle boundary).
 - [ ] A default chosen on a theme that is *not* the running one is remembered and applied after switching to that theme.
 
 **G. Custom install**

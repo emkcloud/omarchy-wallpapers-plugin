@@ -44,11 +44,78 @@ Item {
 
   // true only when the visible image is the one of the selected item,
   // so the title never pairs a name with the previous resolution
-  readonly property bool shown: previewImage.status === Image.Ready
-    && String(previewImage.source) === String(nextSource)
+  readonly property bool shown: bufferImage(frontBuffer).status === Image.Ready
+    && String(bufferImage(frontBuffer).source) === String(nextSource)
 
   readonly property bool failed: failedSource !== ""
     && String(failedSource) === String(nextSource)
+
+  // Which stacked image buffer is in front (0 or 1). The visible image is a
+  // double buffer: the back one is fed `nextSource` while the front keeps the
+  // previous wallpaper up, and the two cross-fade once the back is Ready. A
+  // single Image cannot hold its old frame while `source` changes, so it
+  // blanked for a frame on every step — the flash seen while scrolling.
+  property int frontBuffer: 0
+  // True from a swap until the cross-fade ends, so the buffer that is fading
+  // out is not reused mid-animation (that would swap its content while it is
+  // still partly visible).
+  property bool swapping: false
+
+  function bufferImage(index) {
+    return index === 0 ? previewImage : previewImageAlt
+  }
+
+  // Bring a buffer to the front and start the cross-fade.
+  function promote(index) {
+    previewView.frontBuffer = index
+    previewView.swapping = true
+    swapTimer.restart()
+  }
+
+  // The back buffer reached a stable state: promote it only when the source
+  // that landed is the one the selection wants, so a fast scroll cannot flash
+  // a stale wallpaper; on failure report the source and keep the old frame.
+  function bufferStatusChanged(index) {
+    var img = bufferImage(index)
+    if (index === previewView.frontBuffer) return
+    if (String(img.source) !== String(nextSource)) return
+    if (img.status === Image.Ready) {
+      promote(index)
+    } else if (img.status === Image.Error) {
+      previewView.failedSource = String(img.source)
+    }
+  }
+
+  // Feed the back buffer with the selected wallpaper (called on every
+  // selection change and once at start-up).
+  function loadNext() {
+    if (nextSource === "") return
+    var front = bufferImage(frontBuffer)
+    if (front.status === Image.Ready && String(front.source) === String(nextSource)) return
+    if (swapping) return
+    var back = 1 - frontBuffer
+    var img = bufferImage(back)
+    // Stepping back onto a wallpaper still held by the other buffer: its
+    // source is unchanged, so no `status` signal would fire — promote it
+    // directly, or the strip would move while the image stayed put.
+    if (img.status === Image.Ready && String(img.source) === String(nextSource)) {
+      promote(back)
+      return
+    }
+    if (String(img.source) !== String(nextSource)) img.source = nextSource
+  }
+
+  onNextSourceChanged: loadNext()
+  Component.onCompleted: loadNext()
+
+  Timer {
+    id: swapTimer
+    interval: 80
+    onTriggered: {
+      previewView.swapping = false
+      previewView.loadNext()
+    }
+  }
 
   // true when an event point falls inside the full-bleed image frame;
   // used to route taps (image → set default, header → back)
@@ -263,15 +330,39 @@ Item {
     anchors.bottomMargin: footerHeight - manager.footerOverlap
     clip: true
 
+    // Two stacked buffers (see `frontBuffer` above). Only the front one is
+    // opaque, and only once Ready, so the swap is a cross-fade with both
+    // frames on screen at once — never a blank card between wallpapers.
     Image {
       id: previewImage
 
+      readonly property int bufferIndex: 0
       anchors.fill: parent
       fillMode: Image.PreserveAspectCrop
       asynchronous: true
       cache: true
-      opacity: status === Image.Ready ? 1 : 0
-      Behavior on opacity { NumberAnimation { duration: 180 } }
+      opacity: previewView.frontBuffer === bufferIndex
+        && status === Image.Ready ? 1 : 0
+      Behavior on opacity {
+        NumberAnimation { duration: 80; easing.type: Easing.OutCubic }
+      }
+      onStatusChanged: previewView.bufferStatusChanged(bufferIndex)
+    }
+
+    Image {
+      id: previewImageAlt
+
+      readonly property int bufferIndex: 1
+      anchors.fill: parent
+      fillMode: Image.PreserveAspectCrop
+      asynchronous: true
+      cache: true
+      opacity: previewView.frontBuffer === bufferIndex
+        && status === Image.Ready ? 1 : 0
+      Behavior on opacity {
+        NumberAnimation { duration: 80; easing.type: Easing.OutCubic }
+      }
+      onStatusChanged: previewView.bufferStatusChanged(bufferIndex)
     }
 
     // Installed disc, top-right of the image: accent when on disk, dim
@@ -479,28 +570,6 @@ Item {
             if (!manager.actionRunning) manager.takeCursor(stripCell.index)
           }
         }
-      }
-    }
-  }
-
-  // hidden preloader: fetches the target wallpaper in the background and
-  // swaps it onto the visible image only when it is fully loaded, so the
-  // previous wallpaper never disappears while the next one downloads.
-  Image {
-    id: nextImage
-    visible: false
-    asynchronous: true
-    cache: true
-    source: previewView.nextSource
-    onStatusChanged: {
-      if (status === Image.Ready) {
-        previewImage.source = nextImage.source
-      } else if (status === Image.Error) {
-        // Keep the previous wallpaper on screen — that is the point of
-        // the double buffer. Clearing `previewImage.source` here left a
-        // blank frame with no feedback at all; the failure is reported
-        // in the hero meta line instead.
-        previewView.failedSource = String(nextImage.source)
       }
     }
   }

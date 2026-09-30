@@ -46,6 +46,10 @@ Item {
       // Same width as a grid tile below, so the picker lines up with the
       // first column.
       width: Math.max(Style.space(120), grid.cellWidth - manager.tileGap * 2)
+      // The popup is a top-level overlay: it would outlive this screen if it
+      // were still open when the view switches. The panel closes it on every
+      // view change (`onViewChanged`); this is a second safety net.
+      enabled: manager.view === "wallpapers"
       options: manager.collectionOptions
       value: manager.collectionFilter
       foreground: manager.foreground
@@ -58,8 +62,11 @@ Item {
         manager.setCollectionFilter(v)
       }
       // Taking the keyboard focus to open the popup (click or Enter) also
-      // lands the row focus on the picker.
-      onPopupOpenChanged: if (popupOpen && !manager.searching) manager.filterFocus = 0
+      // lands the row focus on the picker; when the popup closes, focus goes
+      // back to the panel's key catcher.
+      onPopupOpenChanged: {
+        if (popupOpen && !manager.searching) manager.filterFocus = 0
+      }
     }
 
     // Accent ring on the focused filter-row control, same treatment as the

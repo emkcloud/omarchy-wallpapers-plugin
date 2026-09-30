@@ -31,10 +31,15 @@ set-default), theme by theme.
   overlay via the scoped shell facade (`bar.shell.toggle(pluginId, …)`). The
   developer install shares the file but gets a distinct glyph from its
   `-developer` moduleName.
+- `interface/Settings.qml` — the persistent settings object (`id: settings`),
+  created once by the panel: the settings values, the Setup/Help cursor state
+  and the load/save machinery. Kept out of `SetupView.qml` so the screen can be
+  destroyed and rebuilt without losing anything (see *Code map*).
 - `interface/views/` — the six full screens, one file each:
   `ThemeSelectionView.qml` (theme list + detail), `WallpapersView.qml` (filter
   row + grid), `PreviewView.qml` (fullscreen wallpaper), `HelpView.qml`,
   `SetupView.qml` and `CustomInstallView.qml` (previews + install choices).
+  Only one is mounted at a time (see the Loader note in *Code map*).
 - `interface/sections/` — composite header/footer/style columns shared across
   screens: `HeroBar.qml` (icon + title/meta + action row), `ActionFooter.qml`
   (the card footer, all five rows) and `RoadmapPane.qml` (the roadmap column
@@ -58,7 +63,7 @@ set-default), theme by theme.
 - `config/` — plugin config, kept out of the repo root.
 - `config/config.json` — plugin config, read by both `manager.sh` and the QML.
   - `base` — the versioned CloudFront base of the wallpaper snapshot, e.g.
-    `https://content.emkcloud.com/wallpapers/1.2.0`. `manager.sh` downloads
+    `https://content.emkcloud.com/wallpapers/1.2.1`. `manager.sh` downloads
     `datasets/datasets.json` from `<base>/datasets/datasets.json`; that JSON
     already carries every absolute URL (catalogs, previews, images) under the
     same versioned base, so there is no rebase. Bump `base` and push to roll a
@@ -202,6 +207,27 @@ The screens themselves: `views/ThemeSelectionView.qml`,
 `views/WallpapersView.qml`, `views/PreviewView.qml`, `views/HelpView.qml`,
 `views/SetupView.qml`; the shared chrome: `sections/HeroBar.qml`,
 `sections/ActionFooter.qml`, `sections/RoadmapPane.qml`.
+
+**One screen at a time.** The screens are not kept alive behind a `visible`
+flag: a single `contentLoader` (`Loader`) mounts only the active screen and a
+`previewLoader` mounts the fullscreen preview, so leaving a screen **destroys**
+its component. This is what keeps state from one screen out of another: no
+background screen can hold focus, take clicks or leave a `Popup` floating over
+the next screen. Navigation state therefore lives outside the screens:
+
+- `Settings.qml` is a persistent object created once by the panel (id
+  `settings`). It owns the settings values **and** the Setup / Help cursor
+  state (`setup*` and `setupHelp*` members), plus the load/save machinery, so a
+  destroyed-and-rebuilt screen reads back where it was.
+- The panel owns `selectedIndex`, `view`, the search/filter strings, the
+  custom-install state and the pane widths (`themePaneWidth`,
+  `customPaneWidth`), so those survive a screen switch too.
+
+Because a screen can be `null`, the panel reaches it through guarded accessors
+(`themesView()`, `wallpapersView()`, `themesList()`, `wallpapersGrid()`,
+`wallpapersCollectionDropdown()`, …) rather than direct ids; each returns
+`null` when the screen is not mounted. After a mount, `restoreViewScroll()`
+re-applies the list/grid scroll to the current cursor row.
 
 Pure helpers live in `interface/js/Model.js` (imported as `Model`): `parseThemes`,
 `parseCatalog`, `themeLabel`, `ucfirst`, `formatSize`, `themeMatches`,
@@ -426,10 +452,14 @@ applied when the user switches to that theme (see *Setup → per-theme default*)
   rounded mask, `clip: true` only. The footer is a sibling of the view, so the
   frame cannot anchor to it: it anchors bottom to its parent and reserves the
   passed `footerHeight` as the bottom margin.
-- Double buffer: hidden `nextImage` preloads the target (`nextSource`: local
-  file if installed, else remote `url`); the swap to `previewImage` happens only
-  on `Image.Ready`, so navigating never shows a blank screen. On load error the
-  previous wallpaper stays up and the meta reports `failed to load`. No spinner.
+- Double buffer: two stacked `Image`s (`previewImage` / `previewImageAlt`) cross-fade
+  via `frontBuffer` (0/1). The back buffer is fed `nextSource` (local file if
+  installed, else remote `url`) at opacity 0 and is promoted only on `Image.Ready`
+  with a source that still matches the selection, so navigating never shows a
+  blank screen or a stale frame. `swapping` freezes new loads for the 80ms fade
+  so the just-faded buffer is not reused mid-animation. On load error the previous
+  wallpaper stays up and the meta reports `failed to load`. No hidden preloader, no
+  spinner.
 - Fill: `previewImage` uses `Image.PreserveAspectCrop`, so the wallpaper covers
   the whole frame (like it would on the desktop) instead of letterboxing.
 - Footer first rule is at `themeListPane.width - 1` (the themes screen's
@@ -486,7 +516,7 @@ applied when the user switches to that theme (see *Setup → per-theme default*)
   | `remove` | `<theme> [selector...]` / `<theme> --collection <name>` | human text; same selector matching (any of them), or one collection via `--collection`. Same `PROGRESS` stream (count decreases) |
   | `set-default` | `<theme> <filename> <url>` | human text; downloads if missing then `omarchy-theme-bg-set` |
   | `unset-default` | `<theme> <filename>` | human text; if it is the background, falls back to the theme's own default background |
-  | `rotate` | `[--all] [--random]` | `ROTATE\t<path>`; sets the next background of the **current Omarchy theme** (local files only). Default pool = the plugin's installs, narrowed to the collection catalog when available; `--all` adds the theme's bundled backgrounds; `--random` picks at random (never the current one). Drives automatic rotation and the Setup "Rotate now" action |
+  | `rotate` | `[--all] [--random]` | `ROTATE\t<path>`; sets the next background of the **current Omarchy theme** (local files only), using a per-theme cursor persisted in `~/.config/omarchy/<id>/rotation.json` so the sequence resumes after a theme switch. Default pool = the plugin's installs, narrowed to the collection catalog when available; `--all` adds the theme's bundled backgrounds; `--random` draws from a shuffle bag (never repeats until the pool is exhausted, then a new cycle; never the current one at a cycle boundary). Drives automatic rotation and the Setup "Rotate now" action |
   | `image` | `<url>` | local cache path of the image (downloads it once); empty on failure |
   | `prewarm` | `<url>...` | `url<TAB>path` per warmed image; warms the image cache (best-effort) |
   | `download` | `<url> <dest-dir>` | copies the original into the folder (numeric suffix on collision), prints the saved path |
@@ -661,11 +691,15 @@ hero also keeps Help / GitHub / "Wallpaper manager".
   **current Omarchy theme** from files already on disk (never a download). The
   default pool is the plugin's installs, narrowed to the collection catalog when
   available; `Include theme wallpapers` (`--all`) adds the theme's bundled
-  backgrounds and `Random order` (`--random`) picks at random. Because the
-  overlay is `keepLoaded`, the timer runs from shell start even with the overlay
-  closed, and it follows the Setup settings live; the first change lands one full
-  interval after enabling. "Rotate now" calls the same function and works with
-  the switch off.
+  backgrounds and `Random order` (`--random`) draws from a shuffle bag.
+  `manager.sh` keeps the cursor per theme in
+  `~/.config/omarchy/<id>/rotation.json` (`sequential`: the last file set, so the
+  next tick advances from it even after switching Omarchy themes; `randomUsed`:
+  the files shown this cycle, reset once the whole pool has been seen). The QML
+  does not read that file. Because the overlay is `keepLoaded`, the timer runs
+  from shell start even with the overlay closed, and it follows the Setup
+  settings live; the first change lands one full interval after enabling.
+  "Rotate now" calls the same function and works with the switch off.
 - `s` is handled globally in `handleTextKey`, before the per-view branches, and
   ignored while `actionRunning`; Shuffle moved to `f` in
   `Model.themeTextAction` to free the key. `moveCursor` / `pageCursor` /

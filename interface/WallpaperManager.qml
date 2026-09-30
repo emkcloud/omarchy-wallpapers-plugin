@@ -3054,11 +3054,9 @@ Item {
 
         // Search owns the keyboard entirely: let the card's fallback handle it.
         // Same while a dropdown popup is open (Setup interval / collections),
-        // so its list gets the arrows / Enter / Esc. The collection popup only
-        // blocks on its own screen: a leaked popup must not freeze navigation.
+        // so its list gets the arrows / Enter / Esc.
         blocked: root.searching || settings.setupDropdownOpen
-          || (root.view === "wallpapers" && wallpapersCollectionDropdown()
-            && wallpapersCollectionDropdown().popupOpen)
+          || (wallpapersCollectionDropdown() && wallpapersCollectionDropdown().popupOpen)
 
         onMoveRequested: function(dx, dy) { root.moveCursor(dx, dy) }
         // Enter also fires `activateRequested`, so the flag drops that second

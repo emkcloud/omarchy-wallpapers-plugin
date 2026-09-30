@@ -5,7 +5,7 @@
 # install/remove/set-default dei wallpaper nel tema Omarchy locale.
 #
 # La base CloudFront (un path versionato, es.
-# https://content.emkcloud.com/wallpapers/1.2.0) viene letta da config.json:
+# https://content.emkcloud.com/wallpapers/1.2.1) viene letta da config.json:
 # da lì si scarica `datasets/datasets.json`, che contiene già tutti gli URL
 # assoluti versionati (cataloghi, preview, immagini). Nessun rebase: cambiare
 # la base in config è sufficiente a passare a una nuova snapshot.
@@ -62,7 +62,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && p
 PLUGIN_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
 CONFIG_FILE="$PLUGIN_ROOT/config/config.json"
-DEFAULT_BASE="https://content.emkcloud.com/wallpapers/1.2.0"
+DEFAULT_BASE="https://content.emkcloud.com/wallpapers/1.2.1"
 DEFAULT_DATASETS="datasets"
 
 BASE="$DEFAULT_BASE"
@@ -122,6 +122,13 @@ DEST_BASE="$HOME/.config/omarchy/backgrounds"
 STATE_BG="$HOME/.local/state/omarchy/current/background"
 CONFIG_BG="$HOME/.config/omarchy/current/background"
 
+# Rotation cursor, persisted per theme so automatic rotation resumes where it
+# left off instead of restarting from the first wallpaper after switching
+# Omarchy themes (Omarchy keeps a single global `current/background` link, so
+# the old theme's position is lost on every switch). Kept next to the QML's
+# `settings.json`, but in its own file: the QML owns that one.
+ROTATION_STATE="$HOME/.config/omarchy/$WALLPAPER_MANAGER_ID/rotation.json"
+
 usage() {
   cat >&2 <<EOF
 Usage: $0 <command> [args...]
@@ -137,7 +144,7 @@ Commands:
   set-default <theme> <filename> <url>  Download if needed + set as current background
   unset-default <theme> <filename>  Clear it as background, back to the theme default
   random-default <theme>            Set a random wallpaper of the theme as current background
-  rotate [--all] [--random]         Set the next wallpaper of the current theme (--all: include theme backgrounds)
+  rotate [--all] [--random]         Set the next wallpaper of the current theme (--all: include theme backgrounds; --random: shuffled, no repeats until every one is shown)
   image <url>                       Print the local cache path of an image, downloading it if missing
   prewarm <url>...                  Warm the image cache in the background (best-effort)
   download <url> <dest-dir>         Copy the original wallpaper into a folder, print the saved path
@@ -345,7 +352,7 @@ matches_any_selector() {
 # If the current background link dangles (its file was removed), fall back to
 # the theme's own default background.
 reset_dangling_background() {
-  local link="" candidate f fallback="" dir
+  local link="" candidate f fallback="" dir rtheme
   for candidate in "$STATE_BG" "$CONFIG_BG"; do
     if [[ -L $candidate ]]; then link="$candidate"; break; fi
   done
@@ -362,6 +369,9 @@ reset_dangling_background() {
   done
   [[ -n $fallback ]] || return 0
   omarchy-theme-bg-set "$fallback" >/dev/null 2>&1 || true
+  # Keep the rotation cursor on what the fallback put up.
+  rtheme="$(cat "$HOME/.local/state/omarchy/current/theme.name" 2>/dev/null || true)"
+  [[ -n $rtheme ]] && rotation_set --arg t "$rtheme" --arg f "$fallback" '.sequential[$t] = $f'
 }
 
 # Extensions a wallpaper file may carry. The collection is JSON-driven, so a
@@ -715,6 +725,9 @@ cmd_set_default() {
     fetch "$url" -o "$path"
   fi
   omarchy-theme-bg-set "$path"
+  # The cursor follows the manual choice: the next sequential rotate resumes
+  # from here instead of the file rotation had set before.
+  rotation_set --arg t "$theme" --arg f "$path" '.sequential[$t] = $f'
   # A downloaded default is a new file the native picker has to thumbnail.
   warm_thumbnails "$DEST_BASE/$theme"
 }
@@ -736,6 +749,7 @@ cmd_unset_default() {
   done
   [[ -n $fallback ]] || return 1
   omarchy-theme-bg-set "$fallback" >/dev/null 2>&1 || true
+  rotation_set --arg t "$theme" --arg f "$fallback" '.sequential[$t] = $f'
 }
 
 # Pick a random wallpaper of a theme (no selector) and set it as the current
@@ -849,13 +863,58 @@ cmd_random_install() {
   echo "Installed ${#sel_url[@]} random wallpaper(s) in $DEST_BASE/$theme."
 }
 
+# ---- rotation cursor --------------------------------------------------------
+# Automatic rotation resumes where it left off, per theme. Omarchy keeps only
+# one global `current/background` link, whose target belongs to whatever theme
+# is active: after a theme switch the old theme's position is unknown and the
+# old code restarted from the first file. The state file records, per theme:
+#   - `sequential`: the last file rotation set, so the next tick advances from it
+#   - `randomUsed`: the files already shown this cycle, so random does not
+#     repeat one until the whole pool has been seen (then the cycle resets)
+# Written only here; the QML's `settings.json` stays untouched.
+
+rotation_read() {
+  if [[ -s $ROTATION_STATE ]]; then
+    jq -c '.' "$ROTATION_STATE" 2>/dev/null || printf '{}\n'
+  else
+    printf '{}\n'
+  fi
+}
+
+# Read-modify-write of the state file. No locking of its own: callers either go
+# through `rotation_set` or hold the lock themselves (the whole pick in
+# `cmd_rotate`). `$@` are jq arguments followed by the filter.
+rotation_write() {
+  local base out tmp
+  mkdir -p "$(dirname "$ROTATION_STATE")"
+  if [[ -s $ROTATION_STATE ]]; then
+    base="$(jq -c '.' "$ROTATION_STATE" 2>/dev/null || printf '{}')"
+  else
+    base="{}"
+  fi
+  out="$(jq -c "$@" <<<"$base")" || return 1
+  tmp="$ROTATION_STATE.tmp.$$"
+  printf '%s\n' "$out" >"$tmp" && mv -f -- "$tmp" "$ROTATION_STATE"
+}
+
+# Locked write for the standalone callers (`set-default` / `unset-default` /
+# the dangling-link fallback), so they cannot clobber a rotation in flight.
+rotation_set() {
+  local lock="$ROTATION_STATE.lock"
+  mkdir -p "$(dirname "$ROTATION_STATE")"
+  (
+    flock -w 10 9 || exit 1
+    rotation_write "$@"
+  ) 9>"$lock"
+}
+
 # Automatic rotation: pick the next wallpaper of the CURRENT Omarchy theme and
 # set it as the background. Only files already on disk are used, so no network
 # is needed once the pool is installed.
 #   default   the plugin's installs for the theme (narrowed to the collection's
 #             catalog when it is available)
 #   --all     every background of the theme (plugin + theme-bundled)
-#   --random  pick at random instead of the next in name order
+#   --random  pick at random, without repeating until the pool is exhausted
 # Prints `ROTATE<TAB><path>` on success.
 cmd_rotate() {
   local pool="plugin" random=0 arg
@@ -931,26 +990,64 @@ cmd_rotate() {
     return 0
   fi
 
-  local current choice=""
+  local current choice="" state
+
+  # Hold the lock across the whole read-compute-write. Two concurrent `rotate`
+  # runs (the timer plus a quick "Rotate now", or two CLI calls) would otherwise
+  # both compute from the same bag and lose one entry.
+  mkdir -p "$(dirname "$ROTATION_STATE")"
+  exec 8>>"$ROTATION_STATE.lock"
+  if ! flock -w 10 8; then
+    exec 8>&-
+    echo "Rotation state is busy." >&2
+    return 1
+  fi
+  state="$(rotation_read)"
   current="$(readlink -f "$STATE_BG" 2>/dev/null || true)"
   if (( random )); then
-    if (( total > 1 )) && [[ -n $current ]]; then
-      local -a no_current=()
-      for f in "${sorted[@]}"; do [[ $f == "$current" ]] || no_current+=("$f"); done
-      if (( ${#no_current[@]} > 0 )); then sorted=("${no_current[@]}"); total=${#sorted[@]}; fi
+    # Shuffle bag: drop files no longer in the pool, reset the bag once the
+    # whole pool has been seen, then pick among the not-yet-shown ones. Prefer a
+    # file other than the current background, so a cycle boundary never repeats
+    # the wallpaper already up.
+    local -A in_pool=()
+    for f in "${sorted[@]}"; do in_pool["$f"]=1; done
+    local -a used=() avail=() filtered=()
+    local u
+    while IFS= read -r u; do
+      [[ -n $u && ${in_pool["$u"]+x} ]] && used+=("$u")
+    done < <(jq -r --arg t "$theme" '(.randomUsed // {})[$t][]? // empty' <<<"$state" 2>/dev/null || true)
+    (( ${#used[@]} >= total )) && used=()
+    local -A bag=()
+    for u in "${used[@]}"; do bag["$u"]=1; done
+    for f in "${sorted[@]}"; do [[ ${bag["$f"]+x} ]] || avail+=("$f"); done
+    if (( total > 1 )); then
+      for f in "${avail[@]}"; do [[ $f == "$current" ]] || filtered+=("$f"); done
+      (( ${#filtered[@]} > 0 )) && avail=("${filtered[@]}")
     fi
-    choice="${sorted[$(( RANDOM % total ))]}"
+    choice="${avail[$(( RANDOM % ${#avail[@]} ))]}"
+    used+=("$choice")
+    local used_json
+    used_json="$(printf '%s\n' "${used[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')"
+    rotation_write --arg t "$theme" --argjson used "$used_json" '.randomUsed[$t] = $used'
   else
-    local index=-1 i
-    for i in "${!sorted[@]}"; do
-      if [[ ${sorted[$i]} == "$current" ]]; then index=$i; break; fi
-    done
+    # Resume from the file rotation last set for this theme; fall back to the
+    # live background (first run, or state cleared), else the first file.
+    local remembered index=-1 i
+    remembered="$(jq -r --arg t "$theme" '(.sequential // {})[$t] // empty' <<<"$state" 2>/dev/null || true)"
+    if [[ -n $remembered ]]; then
+      for i in "${!sorted[@]}"; do [[ ${sorted[$i]} == "$remembered" ]] && { index=$i; break; }; done
+    fi
+    if (( index < 0 )) && [[ -n $current ]]; then
+      for i in "${!sorted[@]}"; do [[ ${sorted[$i]} == "$current" ]] && { index=$i; break; }; done
+    fi
     if (( index < 0 )); then
       choice="${sorted[0]}"
     else
       choice="${sorted[$(( (index + 1) % total ))]}"
     fi
+    rotation_write --arg t "$theme" --arg f "$choice" '.sequential[$t] = $f'
   fi
+  exec 8>&-
 
   printf 'ROTATE\t%s\n' "$choice"
   omarchy-theme-bg-set "$choice" >/dev/null 2>&1 || {
