@@ -59,6 +59,19 @@ It rejects symlinks anywhere inside the plugin folder, so the local `AGENTS.md`
 must be a **regular gitignored file**, never a symlink (see `DEVELOPMENT.md` →
 *Repository layout*).
 
+The shell script's commands can be run by hand (they need the network and the
+dataset cache). Most useful while debugging:
+
+```bash
+WALLPAPER_MANAGER_ID=emkcloud.wallpaper-manager-developer \
+  bash scripts/manager.sh warm      # fetch datasets + catalogs, prewarm previews
+WALLPAPER_MANAGER_ID=emkcloud.wallpaper-manager-developer \
+  bash scripts/manager.sh catalog <theme>   # TSV rows for one theme
+```
+
+`warm` is what the plugin runs once at start; running it manually is the quickest
+way to tell a cold-cache problem from a QML one.
+
 ## Manual / visual
 
 The developer install is a wrapper of symlinks, so inotify does **not**
@@ -111,7 +124,7 @@ report the rest.
 
 **D. Preview**
 
-- [ ] Full-bleed image; title `<theme> / <collection> / <name>`; meta shows file + size (or "failed to load").
+- [ ] Full-bleed image; title `<theme> / Preview`; meta shows `Wallpaper manager <version>`; the info pill on the right shows resolution and size (or "failed to load").
 - [ ] `h/l/j/k` or arrows walk the wallpapers; the filmstrip follows the selection.
 - [ ] Navigating never shows a blank frame (previous image stays until the next is ready).
 - [ ] Install is disabled when already installed and Uninstall when not; the state dot shows top-right.
