@@ -150,14 +150,67 @@ function formatSize(bytes) {
 // Case-insensitive substring match of a search query against a wallpaper's
 // name or country code (both shown on the tile). `collection`, when set,
 // narrows to a single collection first (exact match, `""` = every collection).
-function wallpaperMatches(item, query, collection) {
+// The pseudo-collection FAVORITES_FILTER keeps only starred wallpapers, using
+// the `<filename> -> meta` map the Settings object persists.
+var FAVORITES_FILTER = "__favorites__"
+
+// Function accessor so QML (which imports this module as a namespace) reads the
+// value through a call rather than a top-level variable.
+function favoritesFilter() { return FAVORITES_FILTER }
+
+function wallpaperMatches(item, query, collection, favorites) {
   var col = String(collection || "")
-  if (col && String((item && item.collection) || "") !== col) return false
+  if (col === FAVORITES_FILTER) {
+    if (!isFavorite(favorites, item && item.filename)) return false
+  } else if (col && String((item && item.collection) || "") !== col) {
+    return false
+  }
   var q = String(query || "").trim().toLowerCase()
   if (!q) return true
   if (!item) return false
   return String(item.name || "").toLowerCase().indexOf(q) !== -1
     || String(item.code || "").toLowerCase().indexOf(q) !== -1
+}
+
+// --- favourites --------------------------------------------------------------
+
+// True when `filename` is starred in the favourites map (a plain object keyed
+// by filename). Tolerant of a missing map or a `null` item.
+function isFavorite(favorites, filename) {
+  if (!favorites || !filename) return false
+  return !!favorites[String(filename)]
+}
+
+// Group-toggle decision for a set of targets: star them when at least one is
+// not yet a favourite, clear them when every one already is (the user is
+// unstarring the whole group). An empty list never turns anything on.
+function favoriteToggleOn(favorites, filenames) {
+  if (!filenames || filenames.length === 0) return false
+  for (var i = 0; i < filenames.length; i++) {
+    if (!isFavorite(favorites, filenames[i])) return true
+  }
+  return false
+}
+
+// Keep only well-formed favourites, so a hand-edited or older file can never
+// inject a non-object value into the UI. Every entry becomes an object with the
+// display fields (empty strings when unknown).
+function sanitizeFavorites(raw) {
+  var out = {}
+  if (!raw || typeof raw !== "object") return out
+  for (var k in raw) {
+    if (!k) continue
+    var v = raw[k]
+    if (!v) continue
+    if (typeof v !== "object") v = {}
+    out[String(k)] = {
+      name: typeof v.name === "string" ? v.name : "",
+      code: typeof v.code === "string" ? v.code : "",
+      collection: typeof v.collection === "string" ? v.collection : "",
+      resolution: typeof v.resolution === "string" ? v.resolution : ""
+    }
+  }
+  return out
 }
 
 // Unique collection names present in a wallpaper list, sorted, as Dropdown
@@ -250,6 +303,30 @@ function collectionSummary(items) {
   return out
 }
 
+// Intersection between the user's favourites and a theme's catalogue: how many
+// are available in this theme, how many already on disk, their total size, the
+// dominant resolution and the filenames themselves (so the caller can install
+// or remove exactly the favourites present here).
+function favoritesSummary(items, favorites) {
+  var out = { count: 0, installed: 0, sizeBytes: 0, resolution: "", filenames: [] }
+  if (!items || !favorites) return out
+  var resCount = {}
+  for (var i = 0; i < items.length; i++) {
+    var item = items[i]
+    if (!item) continue
+    var key = String(item.filename || "")
+    if (!key || !isFavorite(favorites, key)) continue
+    out.count++
+    out.filenames.push(key)
+    if (String(item.installed) === "1") out.installed++
+    out.sizeBytes += Number(item.sizeBytes) || 0
+    var res = String(item.resolution || "")
+    if (res) resCount[res] = (resCount[res] || 0) + 1
+  }
+  out.resolution = dominantResolution(resCount)
+  return out
+}
+
 // --- theme state -----------------------------------------------------------
 
 // "installed" when every catalog entry is present on disk, "partial" when only
@@ -299,6 +376,7 @@ function textAction(text) {
   if (text === "r" || text === "R") return "refresh"
   if (text === "i" || text === "I") return "install"
   if (text === "u" || text === "U") return "uninstall"
+  if (text === "f" || text === "F" || text === "m" || text === "M") return "favorite"
   return ""
 }
 
@@ -688,6 +766,12 @@ if (typeof module !== "undefined" && module.exports) {
     elideMiddle,
     formatSize,
     wallpaperMatches,
+    FAVORITES_FILTER,
+    favoritesFilter,
+    isFavorite,
+    favoriteToggleOn,
+    sanitizeFavorites,
+    favoritesSummary,
     collectionOptions,
     wallpaperTotals,
     collectionSummary,

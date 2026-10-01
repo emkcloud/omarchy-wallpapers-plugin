@@ -246,6 +246,10 @@ Item {
   }
   readonly property bool wallpapersCanInstall: wallpapersSelectionState.installable
   readonly property bool wallpapersCanRemove: wallpapersSelectionState.removable
+  // Mark (star/unstar) needs a target: a checked selection or the cursor tile.
+  // On an empty grid (e.g. the Favorites filter with no stars) it is disabled,
+  // exactly like Install/Uninstall.
+  readonly property bool wallpapersCanFavorite: checkedCount > 0 || currentItem() !== null
   // Set while a selection-based install/remove runs: the checks are cleared when
   // it finishes (not before, so the grid keeps showing what was acted on).
   property bool actionClearsChecks: false
@@ -366,6 +370,9 @@ Item {
   property var imagePathByUrl: ({})
   property int imageCacheRevision: 0
   property var pendingPrefetch: []
+  // Backdrop of the Favorites empty state: a random wallpaper of the open
+  // theme, picked once (not on every render) and flushed behind the message.
+  property string favoritesBackdrop: ""
   // "Download original": the URL queued and the folder chosen in the picker.
   property string pendingDownloadUrl: ""
   property string pendingDownloadDest: ""
@@ -608,20 +615,25 @@ Item {
     wallpapersDisplayModel.clear()
     for (var i = 0; i < wallpapersModel.count; i++) {
       var row = wallpapersModel.get(i)
-      if (Model.wallpaperMatches(row, wallpaperFilterText, collectionFilter))
+      if (Model.wallpaperMatches(row, wallpaperFilterText, collectionFilter, settings.favorites))
         wallpapersDisplayModel.append(row)
     }
     wallpapersRevision++
   }
 
   // Collections present in the open theme, as Dropdown options ("All
-  // collections" first). `wallpapersRevision` makes the binding re-read the
-  // rows after a catalog reload (`ListModel.get()` is not tracked).
+  // collections" first, then "Favorites"). The Favorites entry is always
+  // present: the filter can be selected before starring anything (showing its
+  // empty state), and the label never falls back to the internal sentinel.
+  // `wallpapersRevision` makes the binding re-read the rows after a catalog
+  // reload (`ListModel.get()` is not tracked).
   readonly property var collectionOptions: {
     var rev = wallpapersRevision
     var rows = []
     for (var i = 0; i < wallpapersModel.count; i++) rows.push(wallpapersModel.get(i))
-    return Model.collectionOptions(rows)
+    var opts = Model.collectionOptions(rows)
+    opts.splice(1, 0, { value: Model.favoritesFilter(), label: "Favorites" })
+    return opts
   }
 
   // Pretty name of the active collection filter ("" when showing all), so the
@@ -682,6 +694,14 @@ Item {
   readonly property bool currentIsDefault: {
     var rev = wallpapersRevision
     return isThemeDefault(currentItem())
+  }
+
+  // Whether the open wallpaper is starred (global favourites).
+  readonly property bool currentIsFavorite: {
+    var rev = wallpapersRevision
+    var favRev = settings.favoritesRevision
+    var item = currentItem()
+    return !!item && Model.isFavorite(settings.favorites, item.filename)
   }
 
   // Gap around the preview overlays (path pill / filmstrip), set to the card's
@@ -818,6 +838,7 @@ Item {
   // installed locally. Shown as a pill in the hero, before Refresh.
   readonly property var globalCounts: {
     var rev = themesRevision
+    var favRev = settings.favoritesRevision
     var wallpapers = 0
     var installed = 0
     for (var i = 0; i < themesModel.count; i++) {
@@ -825,7 +846,9 @@ Item {
       wallpapers += (theme.count || 0)
       installed += (theme.installed || 0)
     }
-    return { "wallpapers": wallpapers, "installed": installed }
+    var favorites = 0
+    for (var key in settings.favorites) if (settings.favorites[key]) favorites++
+    return { "wallpapers": wallpapers, "installed": installed, "favorites": favorites }
   }
 
   // Status colors follow the Omarchy theme accent (Color.accent) instead of a
@@ -1089,10 +1112,13 @@ Item {
 
   // ---- custom install screen ------------------------------------------------
   // The option rows of the custom screen, in visual order: the whole theme
-  // first, then one per collection, then the random sample and "select only".
-  // `customRevision` makes the binding re-read the ListModel.
+  // first, then the favourites available here, then one per collection, then
+  // the random sample and "select only". `customRevision` makes the binding
+  // re-read the ListModel; `settings.favoritesRevision` makes the Favorites row
+  // follow star changes.
   readonly property var customRows: {
     var rev = customRevision
+    var favRev = settings.favoritesRevision
     var items = customCatalogItems
     var totals = Model.wallpaperTotals(items)
     var rows = [{
@@ -1104,6 +1130,19 @@ Item {
       sizeBytes: totals.sizeBytes,
       resolution: totals.resolution
     }]
+    var fav = Model.favoritesSummary(items, settings.favorites)
+    if (fav.count > 0) {
+      rows.push({
+        kind: "favorites",
+        label: "Favorites",
+        hint: "Your starred wallpapers available in this theme",
+        count: fav.count,
+        installed: fav.installed,
+        sizeBytes: fav.sizeBytes,
+        resolution: fav.resolution,
+        filenames: fav.filenames
+      })
+    }
     var collections = Model.collectionSummary(items)
     for (var j = 0; j < collections.length; j++) {
       var c = collections[j]
@@ -1148,8 +1187,8 @@ Item {
       ? customRows[customSelection] : null
 
   // Footer Install is enabled only for the bulk rows that still have something
-  // to install: Full collections, a collection, or Shuffle. Select only and the
-  // switch row keep it disabled, as does a fully-installed scope.
+  // to install: Full collections, Favorites, a collection, or Shuffle. Select
+  // only and the switch row keep it disabled, as does a fully-installed scope.
   readonly property bool customCanInstall: {
     var row = customSelectedRow
     if (!row || !customThemePresent || actionRunning) return false
@@ -1160,12 +1199,13 @@ Item {
     return (row.count || 0) > (row.installed || 0)
   }
 
-  // Footer Uninstall is enabled only for Full collections / a collection that
-  // actually has files on disk.
+  // Footer Uninstall is enabled only for Full collections / Favorites / a
+  // collection that actually has files on disk.
   readonly property bool customCanRemove: {
     var row = customSelectedRow
     if (!row || !customThemePresent || actionRunning) return false
-    if (row.kind !== "full" && row.kind !== "collection") return false
+    if (row.kind !== "full" && row.kind !== "collection" && row.kind !== "favorites")
+      return false
     return (row.installed || 0) > 0
   }
 
@@ -1358,6 +1398,8 @@ Item {
     // finishes; the chain is applied in `actionProc.onExited`.
     pendingCustomRandomDefault = settings.randomDefaultOnInstall ? theme : ""
     if (row.kind === "full") runAction(["install", theme])
+    else if (row.kind === "favorites")
+      runAction(["install", theme, "--bulk"].concat(row.filenames || []))
     else if (row.kind === "collection")
       runAction(["install", theme, "--collection", String(row.collection)])
     else if (row.kind === "shuffle")
@@ -1386,6 +1428,9 @@ Item {
     if (row.kind === "collection") {
       setStatus("Removing " + row.label + "…")
       runAction(["remove", customThemeName, "--collection", String(row.collection)])
+    } else if (row.kind === "favorites") {
+      setStatus("Removing " + row.label + "…")
+      runAction(["remove", customThemeName].concat(row.filenames || []))
     } else {
       setStatus("Removing all of " + customThemeName + "…")
       runAction(["remove", customThemeName])
@@ -1434,11 +1479,14 @@ Item {
   }
 
   // `b`: like Select only, but when a collection card is highlighted the grid
-  // opens already narrowed to that collection.
+  // opens already narrowed to that collection. The Favorites card narrows to
+  // the Favorites filter instead, like picking it from the collection dropdown.
   function browseCustom() {
     if (view !== "custom" || actionRunning) return
     var row = customSelectedRow
-    var collection = (row && row.kind === "collection") ? String(row.collection) : ""
+    var collection = ""
+    if (row && row.kind === "collection") collection = String(row.collection)
+    else if (row && row.kind === "favorites") collection = Model.favoritesFilter()
     for (var i = 0; i < activeThemesModel.count; i++) {
       if (activeThemesModel.get(i).name === customThemeName) {
         selectTheme(i)
@@ -1484,6 +1532,7 @@ Item {
     if (next === collectionFilter) return
     collectionFilter = next
     if (wallpaperFilterText !== "" || collectionFilter !== "") rebuildWallpaperDisplay()
+    if (next === Model.favoritesFilter()) pickFavoritesBackdrop()
     selectedIndex = 0
     cursorActive = true
     if (activeWallpapersModel.count > 0)
@@ -1586,6 +1635,20 @@ Item {
     view = "help"
     cursorActive = true
     setStatus("")
+  }
+
+  // Open Help on a specific topic file (used by the Favorites empty state).
+  // Falls back to the default topic when the file is unknown.
+  function openHelpTopic(file) {
+    var items = Model.helpFlatItems(root.helpIndex)
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].file === file) {
+        settings.setupHelpSelectedFlat = i
+        settings.setupHelpSelectedFile = file
+        break
+      }
+    }
+    openHelp()
   }
 
   function closeHelp() {
@@ -2051,6 +2114,7 @@ Item {
     else if (action === "refresh") refresh()
     else if (action === "install") actionInstall()
     else if (action === "uninstall") actionRemove()
+    else if (action === "favorite") toggleFavoriteTargets()
   }
 
   function takeCursor(index) {
@@ -2172,6 +2236,86 @@ Item {
     var rev = settings.themeDefaultsRevision
     var d = settings.themeDefault(themeName)
     return !!d && String(d.filename) === String(model.filename)
+  }
+
+  // ---- favourites -----------------------------------------------------------
+  // Whether a wallpaper is starred (global, across themes).
+  function isWallpaperFavorite(filename) {
+    var rev = settings.favoritesRevision
+    return Model.isFavorite(settings.favorites, filename)
+  }
+
+  // The wallpapers a star toggle acts on: every checked tile when a selection
+  // exists, else just the one under the cursor. Rows come from the full
+  // `wallpapersModel` (not the filtered view), so a checked tile hidden by the
+  // active filter still keeps its name/code when starred.
+  function favoriteTargets() {
+    var names = checkedFilenames()
+    if (names.length === 0) {
+      var item = currentItem()
+      return item ? [item] : []
+    }
+    var lookup = {}
+    for (var i = 0; i < wallpapersModel.count; i++) {
+      var row = wallpapersModel.get(i)
+      if (row) lookup[String(row.filename)] = row
+    }
+    var out = []
+    for (var n = 0; n < names.length; n++) {
+      var key = String(names[n])
+      out.push(lookup[key] || { filename: key })
+    }
+    return out
+  }
+
+  // Star/unstar the target group. When every target is already starred the
+  // whole group is cleared; otherwise the whole group is starred. With no
+  // selection this is just the cursor tile.
+  function toggleFavoriteTargets() {
+    if (actionRunning) return
+    // A star toggle driven by the checks consumes them, like an install does:
+    // the user selected a set, acted on it, and starts fresh.
+    var hadSelection = checkedFilenames().length > 0
+    var targets = favoriteTargets()
+    if (targets.length === 0) return
+    var names = []
+    for (var i = 0; i < targets.length; i++) names.push(targets[i].filename)
+    var on = Model.favoriteToggleOn(settings.favorites, names)
+    settings.setFavorites(targets, on)
+    if (hadSelection) clearWallpaperSelection()
+    if (targets.length === 1)
+      setStatus((on ? "Added to favorites: " : "Removed from favorites: ")
+        + Model.titleCase(targets[0].name))
+    else
+      setStatus((on ? "Added " + targets.length + " wallpapers to favorites"
+        : "Removed " + targets.length + " wallpapers from favorites"))
+    // A tile that just lost its star must leave the "★ Favorites" grid now;
+    // clamp the cursor so it cannot point past the shrunken model.
+    if (collectionFilter === Model.favoritesFilter()) {
+      rebuildWallpaperDisplay()
+      selectedIndex = Math.max(0, Math.min(activeWallpapersModel.count - 1, selectedIndex))
+    }
+  }
+
+  // Pick the Favorites empty-state backdrop: a random wallpaper of the open
+  // theme, from files already on disk only (installed full-res, else a cached
+  // preview). Never a remote URL: the Image is drawn synchronously, and a
+  // network fetch would leave the area blank for the duration.
+  function pickFavoritesBackdrop() {
+    var installed = []
+    var cached = []
+    for (var i = 0; i < wallpapersModel.count; i++) {
+      var row = wallpapersModel.get(i)
+      if (!row) continue
+      if (String(row.installed) === "1" && themeName !== "")
+        installed.push(Util.fileUrl(backgroundsDir + "/" + themeName + "/" + row.filename))
+      var prev = String(row.preview || "")
+      if (prev !== "" && imagePathByUrl[prev] !== undefined)
+        cached.push(String(imagePathByUrl[prev]))
+    }
+    var pool = installed.length > 0 ? installed : cached
+    favoritesBackdrop = pool.length > 0
+      ? pool[Math.floor(Math.random() * pool.length)] : ""
   }
 
   function currentItem() {
@@ -2912,6 +3056,9 @@ Item {
         if (root.wallpaperFilterText !== "" || root.collectionFilter !== "")
           root.rebuildWallpaperDisplay()
         root.wallpapersRevision++
+        // The Favorites empty state flushes a random theme wallpaper behind it.
+        if (root.collectionFilter === Model.favoritesFilter())
+          root.pickFavoritesBackdrop()
         // Land the cursor on the entry target (first tile, or the remembered
         // one). Applied here, after the model is populated, so a hover event
         // fired while the grid was being built cannot override it; the hover
@@ -3393,6 +3540,7 @@ Item {
           saved: settings.saved
           wallpapers: root.globalCounts.wallpapers
           installed: root.globalCounts.installed
+          favorites: root.globalCounts.favorites
           storageLimitReached: root.storageLimitReached
           storageLimitReason: root.storageLimitReason
           foreground: root.foreground
@@ -3594,6 +3742,7 @@ Item {
           checkedCount: root.checkedCount
           wallpapersInstallEnabled: root.wallpapersCanInstall
           wallpapersRemoveEnabled: root.wallpapersCanRemove
+          wallpapersFavoriteEnabled: root.wallpapersCanFavorite
           storageLimitReached: root.storageLimitReached
           currentInstalled: root.currentInstalled
           sidebarWidth: root.themePaneWidth
@@ -3607,6 +3756,7 @@ Item {
           footerSpacing: root.footerSpacing
           onInstallRequested: root.actionInstall()
           onRemoveRequested: root.actionRemove()
+          onFavoriteRequested: root.toggleFavoriteTargets()
           onHelpRequested: root.openHelp()
           onSetupRequested: root.openSetup()
           onDatabaseRequested: root.helperDatabaseUrl()

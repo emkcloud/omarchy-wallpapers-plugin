@@ -4,7 +4,7 @@ import qs.Ui
 import "../components"
 
 // Shared card footer: a top rule bled to the card edges and, below it, one row
-// per screen — themes (Setup + counts + progress), wallpapers (Install /
+// per screen — themes (Setup + counts + progress), wallpapers (Mark / Install /
 // Uninstall), preview (Install / Uninstall), help (Setup / Archive / Star),
 // setup (Help / Archive / Star) and custom install (Help / Install / Uninstall
 // + progress). Every row keeps the theme progress in the
@@ -32,6 +32,8 @@ Column {
   // tile) has anything to install / uninstall. Gates the buttons and keys.
   property bool wallpapersInstallEnabled: true
   property bool wallpapersRemoveEnabled: true
+  // Whether there is a target to star/unstar (a selection or the cursor tile).
+  property bool wallpapersFavoriteEnabled: true
 
   // x / width of the top rule, computed by the panel so it bleeds to the card
   // edges (the footer itself is inset by the card padding).
@@ -51,6 +53,7 @@ Column {
 
   signal installRequested()
   signal removeRequested()
+  signal favoriteRequested()
   signal helpRequested()
   signal setupRequested()
   signal databaseRequested()
@@ -217,23 +220,24 @@ Column {
       anchors.verticalCenter: parent.verticalCenter
       spacing: Style.spacing.controlGap
 
-      // Help, before the actions (the wallpapers header carries none).
+      // Star/unstar the current selection (or the cursor tile). The same action
+      // as the `f` / `m` keys, mouse-reachable. Help moved up to the hero bar.
       Button {
-        enabled: !footer.actionRunning
+        enabled: !footer.actionRunning && footer.wallpapersFavoriteEnabled
         opacity: enabled ? 1 : 0.4
-        text: "Help"
-        iconText: "󰘥"
+        text: "Mark"
+        iconText: "\uf005"
         bordered: true
         foreground: footer.foreground
         accent: footer.accent
         fontFamily: footer.fontFamily
-        onClicked: footer.helpRequested()
+        onClicked: footer.favoriteRequested()
       }
 
+      // Install. A batch install is bulk: disabled while a storage cap is
+      // reached (one wallpaper at a time stays available). Disabled too when
+      // nothing in the selection is left to install.
       Button {
-        // A batch install is bulk: disabled while a storage cap is reached (one
-        // wallpaper at a time stays available). Disabled too when nothing in the
-        // selection is left to install.
         enabled: !footer.actionRunning
           && footer.wallpapersInstallEnabled
           && !(footer.storageLimitReached && footer.checkedCount > 1)
@@ -313,7 +317,7 @@ Column {
         ? footer.keyHint("esc", "stop")
         : footer.keyHint("enter", "browse")
           + "&nbsp;&nbsp;" + footer.keyHint("space", "select")
-          + "&nbsp;&nbsp;" + footer.keyHint("i", "install")
+          + "&nbsp;&nbsp;" + footer.keyHint("f", "favorite")
           + "&nbsp;&nbsp;" + footer.keyHint("/", "search")
           + "&nbsp;&nbsp;" + footer.keyHint("esc", "back")
       color: footer.dim
@@ -339,18 +343,18 @@ Column {
       anchors.verticalCenter: parent.verticalCenter
       spacing: Style.spacing.controlGap
 
-      // Help, before the actions (the big preview's only Help button: the
-      // header carries none).
+      // Star/unstar the previewed wallpaper, same action as the `f` / `m`
+      // keys and the grid's Mark. Help moved up to the header.
       Button {
-        enabled: !footer.actionRunning
+        enabled: !footer.actionRunning && footer.wallpapersFavoriteEnabled
         opacity: enabled ? 1 : 0.4
-        text: "Help"
-        iconText: "󰘥"
+        text: "Mark"
+        iconText: "\uf005"
         bordered: true
         foreground: footer.foreground
         accent: footer.accent
         fontFamily: footer.fontFamily
-        onClicked: footer.helpRequested()
+        onClicked: footer.favoriteRequested()
       }
 
       Button {
@@ -432,6 +436,7 @@ Column {
       // `&nbsp;` (not plain spaces: StyledText collapses runs of them).
       text: footer.keyHint("enter", "install")
         + "&nbsp;&nbsp;" + footer.keyHint("d", "default")
+        + "&nbsp;&nbsp;" + footer.keyHint("f", "favorite")
         + "&nbsp;&nbsp;" + footer.keyHint("u", "uninstall")
         + "&nbsp;&nbsp;" + footer.keyHint("esc", "back")
       color: footer.dim

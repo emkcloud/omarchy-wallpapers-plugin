@@ -131,6 +131,94 @@ test("wallpaperMatches narrows by collection when given", () => {
   assert.equal(Model.wallpaperMatches(row, "", ""), true);
 });
 
+// --- favorites -------------------------------------------------------------
+
+test("wallpaperMatches keeps only starred files with the pseudo-collection", () => {
+  const favs = Model.sanitizeFavorites({
+    "a.webp": { name: "Albania", code: "AL", collection: "countries" }
+  });
+  const starred = { filename: "a.webp", name: "Albania", code: "AL", collection: "countries" };
+  const plain = { filename: "b.webp", name: "Bhutan", code: "BT", collection: "countries" };
+  assert.equal(Model.wallpaperMatches(starred, "", Model.FAVORITES_FILTER, favs), true);
+  assert.equal(Model.wallpaperMatches(plain, "", Model.FAVORITES_FILTER, favs), false);
+  // No map at all: the favorites filter matches nothing.
+  assert.equal(Model.wallpaperMatches(starred, "", Model.FAVORITES_FILTER, null), false);
+  // The search query composes with the filter.
+  assert.equal(Model.wallpaperMatches(starred, "alb", Model.FAVORITES_FILTER, favs), true);
+  assert.equal(Model.wallpaperMatches(starred, "zzz", Model.FAVORITES_FILTER, favs), false);
+});
+
+test("sanitizeFavorites keeps well-formed entries and drops junk", () => {
+  const out = Model.sanitizeFavorites({
+    "a.webp": { name: "Albania", code: "AL", collection: "countries", resolution: "2K" },
+    "b.webp": { name: "Bhutan" },
+    "c.webp": null,
+    "": { name: "x" },
+    "d.webp": 42
+  });
+  assert.deepEqual(out, {
+    "a.webp": { name: "Albania", code: "AL", collection: "countries", resolution: "2K" },
+    "b.webp": { name: "Bhutan", code: "", collection: "", resolution: "" },
+    "d.webp": { name: "", code: "", collection: "", resolution: "" }
+  });
+  assert.deepEqual(Model.sanitizeFavorites(null), {});
+  assert.deepEqual(Model.sanitizeFavorites("nope"), {});
+});
+
+test("isFavorite is tolerant of a missing map or filename", () => {
+  const favs = { "a.webp": {} };
+  assert.equal(Model.isFavorite(favs, "a.webp"), true);
+  assert.equal(Model.isFavorite(favs, "b.webp"), false);
+  assert.equal(Model.isFavorite(null, "a.webp"), false);
+  assert.equal(Model.isFavorite(favs, ""), false);
+});
+
+test("favoriteToggleOn stars unless every target is already starred", () => {
+  const none = {};
+  const some = Model.sanitizeFavorites({ "a.webp": {}, "b.webp": {} });
+  const all = Model.sanitizeFavorites({ "a.webp": {}, "b.webp": {}, "c.webp": {} });
+  // A group with a not-yet-starred member is starred.
+  assert.equal(Model.favoriteToggleOn(none, ["a.webp", "b.webp"]), true);
+  assert.equal(Model.favoriteToggleOn(some, ["a.webp", "c.webp"]), true);
+  // Every member already starred: the group is being cleared.
+  assert.equal(Model.favoriteToggleOn(some, ["a.webp", "b.webp"]), false);
+  assert.equal(Model.favoriteToggleOn(all, ["a.webp", "b.webp", "c.webp"]), false);
+  // Single target behaves like a toggle.
+  assert.equal(Model.favoriteToggleOn(some, ["a.webp"]), false);
+  assert.equal(Model.favoriteToggleOn(some, ["z.webp"]), true);
+  // Degenerate inputs never star anything.
+  assert.equal(Model.favoriteToggleOn(some, []), false);
+  assert.equal(Model.favoriteToggleOn(some, null), false);
+});
+
+test("favoritesFilter exposes the pseudo-collection value", () => {
+  assert.equal(Model.favoritesFilter(), Model.FAVORITES_FILTER);
+  assert.equal(Model.favoritesFilter(), "__favorites__");
+});
+
+test("favoritesSummary intersects favourites with a catalogue", () => {
+  const items = [
+    { filename: "a.webp", installed: "1", sizeBytes: 100, resolution: "2K" },
+    { filename: "b.webp", installed: "0", sizeBytes: 200, resolution: "4K" },
+    { filename: "c.webp", installed: "0", sizeBytes: 300, resolution: "2K" }
+  ];
+  const favs = Model.sanitizeFavorites({ "a.webp": {}, "c.webp": {}, "zz.webp": {} });
+  assert.deepEqual(Model.favoritesSummary(items, favs), {
+    count: 2,
+    installed: 1,
+    sizeBytes: 400,
+    resolution: "2K",
+    filenames: ["a.webp", "c.webp"]
+  });
+  assert.deepEqual(Model.favoritesSummary(items, null), {
+    count: 0,
+    installed: 0,
+    sizeBytes: 0,
+    resolution: "",
+    filenames: []
+  });
+});
+
 test("collectionOptions lists unique sorted collections with All first", () => {
   const rows = [
     { collection: "shelters" },
@@ -252,6 +340,8 @@ test("textAction maps the wallpaper-screen keys", () => {
   assert.equal(Model.textAction("R"), "refresh");
   assert.equal(Model.textAction("i"), "install");
   assert.equal(Model.textAction("U"), "uninstall");
+  assert.equal(Model.textAction("f"), "favorite");
+  assert.equal(Model.textAction("M"), "favorite");
   assert.equal(Model.textAction("x"), "");
 });
 

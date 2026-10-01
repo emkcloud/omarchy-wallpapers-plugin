@@ -80,9 +80,9 @@ Since screens are destroyed, any state that must outlive them lives **outside**:
 
 - `Settings.qml` — a persistent object created once by the panel (id
   `settings`). It owns the settings values (resolution, caps, rotation,
-  per-theme defaults) **and** the Setup / Help cursor state (`setup*`,
-  `setupHelp*` members), plus the `FileView`/debounce load-save machinery. The
-  Setup screen is thus a pure renderer over `settings.*`.
+  per-theme defaults, favorites) **and** the Setup / Help cursor state
+  (`setup*`, `setupHelp*` members), plus the `FileView`/debounce load-save
+  machinery. The Setup screen is thus a pure renderer over `settings.*`.
 - The panel (`root`) owns navigation and interaction state: `view`,
   `selectedIndex`, search/filter strings, `checkedWallpapers`, the custom-install
   state and the derived pane widths.
@@ -221,9 +221,28 @@ to `~/.config/omarchy/<pluginId>/settings.json`.
 ### Custom install (`custom`)
 
 Left: 3×3 previews + theme info. Right: the install scopes (Full collections,
-one per collection, Shuffle, Select only) + the random-default switch. Its
-catalog is kept as a **plain JS array** (`customCatalogItems`), never a
-`ListModel`: see bug 9.
+Favorites when any is available, one per collection, Shuffle, Select only) + the
+random-default switch. Its catalog is kept as a **plain JS array**
+(`customCatalogItems`), never a `ListModel`: see bug 9.
+
+The Favorites row is built by `Model.favoritesSummary(customCatalogItems,
+settings.favorites)` — the intersection of the starred files with this theme's
+catalogue — and installs with `install <theme> --bulk <file…>` (caps honoured,
+like a collection) or removes with `remove <theme> <file…>`.
+
+## Favorites
+
+Global, cross-theme stars keyed by `filename` (identical in every theme; the
+theme only changes the URL/sha). State lives in `Settings.qml`
+(`favorites` + `favoritesRevision`, persisted in the plugin `settings.json`
+beside `themeDefaults`), the pure logic in `Model.js`
+(`sanitizeFavorites` / `isFavorite` / `favoritesSummary`, plus the
+`FAVORITES_FILTER` pseudo-collection). UI: the star badge on the tile
+(`WallpapersView`) and beside the installed disc in `PreviewView`, the `f`/`m`
+action from `Model.textAction`, the **Favorites** entry in `collectionOptions`,
+and the Favorites card above. `f`/`m` act on `favoriteTargets()` — the checked tiles
+when a selection exists (group star, or group clear when every one is already
+starred), else the cursor tile. No `manager.sh` change beyond the `--bulk` flag.
 
 ## Actions & progress
 

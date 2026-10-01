@@ -5,6 +5,7 @@
       "items": [
         { "id": "theme-selection", "title": "Themes", "file": "theme-selection.md" },
         { "id": "wallpaper-selection", "title": "Wallpapers", "file": "wallpaper-selection.md" },
+        { "id": "favorites", "title": "Favorites", "file": "favorites.md" },
         { "id": "previews", "title": "Previews", "file": "previews.md" }
       ]
     },

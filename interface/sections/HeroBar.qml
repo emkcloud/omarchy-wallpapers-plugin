@@ -27,6 +27,7 @@ PanelHero {
   property bool saved: false
   property int wallpapers: 0
   property int installed: 0
+  property int favorites: 0
   property bool storageLimitReached: false
   property string storageLimitReason: ""
   property color accent: Color.accent
@@ -112,6 +113,7 @@ PanelHero {
         controlHeight: refreshButton.implicitHeight
         wallpapers: heroBar.wallpapers
         installed: heroBar.installed
+        favorites: heroBar.favorites
         limitReason: heroBar.storageLimitReached && heroBar.view !== "setup"
           ? heroBar.storageLimitReason : ""
         foreground: heroBar.foreground
@@ -121,7 +123,7 @@ PanelHero {
       }
 
       Button {
-        visible: heroBar.view === "themes"
+        visible: heroBar.view === "themes" || heroBar.view === "wallpapers"
         // Frozen while an action runs, like the preview's actions.
         enabled: !heroBar.actionRunning
         opacity: enabled ? 1 : 0.4

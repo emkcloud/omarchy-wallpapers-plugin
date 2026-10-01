@@ -13,6 +13,8 @@ wallpaper.
 ## What to install
 
 - **Full collections** — the whole theme, every collection at once.
+- **Favorites** — only the wallpapers you starred (see the Favorites topic),
+  limited to the ones this theme has. Shown once you have at least one.
 - **Full …** — one collection, e.g. **Full Countries**.
 - **Shuffle (N)** — N random wallpapers of the theme, set in Setup.
 - **Select only** — pick the wallpapers by hand on the grid.
@@ -20,8 +22,8 @@ wallpaper.
 Move with the arrows (or h / j / k / l), then run the highlighted card with
 enter, space or `i`. A single click only selects. **Install** runs the
 highlighted choice; **Uninstall** removes it — the whole theme for **Full
-collections**, or just that collection for a **Full** card. Caps from Setup
-apply.
+collections**, just that collection for a **Full** card, or the starred files
+for **Favorites**. Caps from Setup apply.
 
 ## Default wallpaper switch
 

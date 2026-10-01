@@ -157,6 +157,7 @@ Item {
         controlHeight: previewDownloadButton.implicitHeight
         wallpapers: manager.globalCounts.wallpapers
         installed: manager.globalCounts.installed
+        favorites: manager.globalCounts.favorites
         limitReason: manager.storageLimitReached ? manager.storageLimitReason : ""
         foreground: manager.foreground
         accent: manager.accent
@@ -357,10 +358,57 @@ Item {
       onStatusChanged: previewView.bufferStatusChanged(bufferIndex)
     }
 
+    // Favourite star, just left of the installed disc (same treatment as the
+    // grid tile), on a small dark fill so the accent glyph reads on any
+    // wallpaper.
+    Rectangle {
+      id: previewFavoriteBadge
+
+      readonly property int disc: Math.round(Style.space(18))
+      readonly property int starSize: Math.round(disc * 0.7)
+
+      visible: manager.currentIsFavorite
+      anchors.top: parent.top
+      anchors.topMargin: Style.space(12)
+      anchors.right: previewInstalledDisc.left
+      anchors.rightMargin: Style.space(6)
+      width: disc
+      height: disc
+      radius: disc / 2
+      color: Util.alpha(manager.background, 0.55)
+
+      // Centre the glyph's painted box, not its font line box: AlignVCenter
+      // leaves the star ~1px low (more space above than below). Both rects are
+      // baseline-relative, so the glyph's top inside the Text is
+      // `boundingRect.y + tightBoundingRect.y`.
+      TextMetrics {
+        id: previewStarMetrics
+
+        font.family: manager.fontFamily
+        font.pixelSize: previewFavoriteBadge.starSize
+        text: "★"
+      }
+
+      Text {
+        text: "★"
+        color: manager.accent
+        font.family: manager.fontFamily
+        font.pixelSize: previewFavoriteBadge.starSize
+        x: (parent.width - previewStarMetrics.tightBoundingRect.width) / 2
+          - previewStarMetrics.tightBoundingRect.x
+        y: (parent.height - previewStarMetrics.tightBoundingRect.height) / 2
+          + previewStarMetrics.boundingRect.y
+          - previewStarMetrics.tightBoundingRect.y
+          - 1
+      }
+    }
+
     // Installed disc, top-right of the image: accent when on disk, dim
     // otherwise. Right margin matches the card padding so it lines up
     // with the header/footer controls.
     Rectangle {
+      id: previewInstalledDisc
+
       // Ring width is subtracted on all sides, so the inner dot is
       // exactly centred whatever the spacing scale rounds to.
       readonly property int disc: Math.round(Style.space(18))

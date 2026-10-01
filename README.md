@@ -27,6 +27,8 @@ and installs wallpapers natively into the active theme.
 - **Live progress** — the footer bar and the list keep counting while an
   operation runs.
 - **Search** — a small search engine to filter themes and wallpapers.
+- **Favorites** — star a wallpaper once and install it in any theme, with a
+  dedicated filter and a one-click install card.
 - **Automatic rotation** — cycle the current theme's wallpapers on a schedule.
 - **Theme-aware UI** — colors, borders and rounding follow the active Omarchy
   theme.

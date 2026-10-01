@@ -274,10 +274,59 @@ Item {
           }
         }
 
+        // Favourite star, top-right just left of the installed disc, on a small
+        // dark fill so the accent glyph reads on any thumbnail.
+        Item {
+          id: favoriteBadge
+
+          readonly property int disc: Math.round(Math.max(Style.space(9),
+            Math.min(Style.space(16), preview.width * 0.075)))
+          readonly property int starSize: Math.round(disc * 0.7)
+
+          visible: manager.isWallpaperFavorite(tile.model.filename)
+          anchors.top: parent.top
+          anchors.topMargin: manager.tileInset + Style.space(8)
+          anchors.right: installedDisc.left
+          anchors.rightMargin: Style.space(6)
+          width: disc
+          height: disc
+
+          Rectangle {
+            anchors.fill: parent
+            radius: width / 2
+            color: Util.alpha(manager.background, 0.55)
+          }
+
+          // Same glyph centring as the preview badge: the star's painted box is
+          // centred (not its font line box), with a 1px lift.
+          TextMetrics {
+            id: gridStarMetrics
+
+            font.family: manager.fontFamily
+            font.pixelSize: favoriteBadge.starSize
+            text: "★"
+          }
+
+          Text {
+            text: "★"
+            color: manager.accent
+            font.family: manager.fontFamily
+            font.pixelSize: favoriteBadge.starSize
+            x: (parent.width - gridStarMetrics.tightBoundingRect.width) / 2
+              - gridStarMetrics.tightBoundingRect.x
+            y: (parent.height - gridStarMetrics.tightBoundingRect.height) / 2
+              + gridStarMetrics.boundingRect.y
+              - gridStarMetrics.tightBoundingRect.y
+              - 1
+          }
+        }
+
         // Installed disc, top-right of the thumbnail: same state as the
         // preview's, scaled down with the tile (accent when on disk, dim
         // otherwise).
         Rectangle {
+          id: installedDisc
+
           readonly property int disc: Math.round(Math.max(Style.space(9),
             Math.min(Style.space(16), preview.width * 0.075)))
           readonly property int ring: Math.round(disc * 0.22)
@@ -396,6 +445,149 @@ Item {
             }
             manager.takeCursor(tile.index)
             manager.showPreview()
+          }
+        }
+      }
+    }
+  }
+
+  // Favorites empty state: the picker can sit on "Favorites" before anything is
+  // starred, or right after unstarring the last one. Guide the user back to a
+  // full collection instead of leaving a blank grid.
+  Item {
+    id: favoritesEmpty
+
+    visible: manager.view === "wallpapers"
+      && manager.collectionFilter === Model.favoritesFilter()
+      && manager.activeWallpapersModel.count === 0
+    // Full-bleed container: the backdrop spans the whole content area from the
+    // search rule down to the footer rule, cancelling the card padding on the
+    // sides, so no card background shows between the image and the borders.
+    anchors.top: wallpapersSearchRule.bottom
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    anchors.leftMargin: -manager.contentMargin
+    anchors.rightMargin: -manager.contentMargin
+
+    // Width shared by the bordered box and its content, so the border hugs the
+    // message and the caption still breaks into two roughly equal lines.
+    readonly property real contentWidth:
+      Math.min(width - Style.space(120), Style.space(470))
+
+    // Card color captured once at creation (theme colors are already loaded
+    // then), never a live binding: Color.* recomputes while the theme file
+    // streams in, which would flash the box from transparent to colored.
+    // Alpha is forced to 1 so the card is always opaque.
+    property color cardColor: "transparent"
+    Component.onCompleted: {
+      var b = manager.background
+      cardColor = Qt.lighter(Qt.rgba(b.r, b.g, b.b, 1.0), 1.15)
+    }
+
+    // Delicate backdrop: a random wallpaper of the open theme, local-only
+    // (installed file or a preview already in the cache) so it never waits on
+    // the network. Empty source when nothing is local, so no 2s flash.
+    Image {
+      anchors.fill: parent
+      source: favoritesEmpty.visible ? manager.favoritesBackdrop : ""
+      opacity: 0.2
+      fillMode: Image.PreserveAspectCrop
+      asynchronous: false
+      cache: true
+      clip: true
+    }
+
+    BorderSurface {
+      anchors.centerIn: parent
+      width: favoritesEmpty.contentWidth + Style.space(56)
+      height: contentColumn.implicitHeight + Style.space(56)
+      radius: Style.cornerRadius
+      color: favoritesEmpty.cardColor
+      borderSpec: Border.flat(Util.alpha(manager.foreground, 0.18),
+        Math.max(1, Style.normalBorderWidth))
+    }
+
+    Column {
+      id: contentColumn
+      anchors.centerIn: parent
+      width: favoritesEmpty.contentWidth
+      spacing: Style.space(14)
+
+      Text {
+        width: parent.width
+        horizontalAlignment: Text.AlignHCenter
+        textFormat: Text.PlainText
+        text: "★"
+        color: Util.alpha(manager.accent, 0.6)
+        font.family: manager.fontFamily
+        font.pixelSize: Style.font.displayLarge
+      }
+
+      Text {
+        width: parent.width
+        horizontalAlignment: Text.AlignHCenter
+        textFormat: Text.PlainText
+        text: "No favorites yet"
+        color: manager.foreground
+        font.family: manager.fontFamily
+        font.pixelSize: Style.font.subtitle
+        font.bold: true
+      }
+
+      Text {
+        width: parent.width
+        horizontalAlignment: Text.AlignHCenter
+        textFormat: Text.PlainText
+        text: "Open a full collection and press f on the wallpapers you like, "
+          + "then install them in any theme from this Favorites filter."
+        color: manager.dim
+        font.family: manager.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        wrapMode: Text.WordWrap
+      }
+
+      // Quick ways out of the empty state: back to the full collection, the
+      // guide, or home. The extra top margin keeps the buttons at least a
+      // full panel padding away from the caption.
+      Item {
+        width: parent.width
+        height: emptyActions.implicitHeight + Style.spacing.panelPadding
+
+        Row {
+          id: emptyActions
+          anchors.horizontalCenter: parent.horizontalCenter
+          anchors.bottom: parent.bottom
+          spacing: Style.spacing.controlGap
+
+          Button {
+            text: "All collections"
+            iconText: "󰉖"
+            bordered: true
+            foreground: manager.foreground
+            accent: manager.accent
+            fontFamily: manager.fontFamily
+            onClicked: manager.setCollectionFilter("")
+          }
+
+          Button {
+            text: "How it works"
+            iconText: "󰘥"
+            bordered: true
+            foreground: manager.foreground
+            accent: manager.accent
+            fontFamily: manager.fontFamily
+            onClicked: manager.openHelpTopic("favorites.md")
+          }
+
+          Button {
+            text: "Theme selection"
+            iconText: "󰸌"
+            bordered: true
+            foreground: manager.foreground
+            accent: manager.accent
+            fontFamily: manager.fontFamily
+            onClicked: manager.showThemes()
           }
         }
       }

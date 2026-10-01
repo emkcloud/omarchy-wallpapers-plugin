@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import "js/Model.js" as Model
 
 // Persistent application settings for the wallpaper manager.
 //
@@ -54,6 +55,16 @@ Item {
   // makes the plain object a tracked dependency for the DEFAULT markers.
   property var themeDefaults: ({})
   property int themeDefaultsRevision: 0
+
+  // Global favourites, shared across themes. Keyed by `filename`, which is
+  // identical in every theme's catalogue (the theme lives in the directory, not
+  // in the name), so a starred wallpaper can be found and reinstalled in any
+  // theme. The value keeps the display name/code/collection/resolution so a
+  // favourite can be listed even without loading a catalogue.
+  // `favoritesRevision` makes the plain object a tracked dependency for the
+  // star markers and the "☆ Favorites" filter.
+  property var favorites: ({})
+  property int favoritesRevision: 0
 
   property bool settingsLoaded: false
   // Flashes the "Saved" caption after a write.
@@ -307,6 +318,40 @@ Item {
     scheduleSave()
   }
 
+  // ---- favourites ----------------------------------------------------------
+  function isFavorite(filename) {
+    var rev = favoritesRevision
+    return Model.isFavorite(favorites, filename)
+  }
+
+  // Star/unstar a set of wallpapers in one write. `entries` is an array of
+  // catalogue rows (objects with filename/name/code/collection/resolution);
+  // `on` stamps or clears them together, so the grid's group toggle is a
+  // single revision bump and a single debounced save.
+  function setFavorites(entries, on) {
+    if (!settingsLoaded || !entries || entries.length === 0) return
+    var next = {}
+    for (var k in favorites) next[k] = favorites[k]
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i] || {}
+      var key = e.filename ? String(e.filename) : ""
+      if (!key) continue
+      if (on) {
+        next[key] = {
+          name: e.name ? String(e.name) : "",
+          code: e.code ? String(e.code) : "",
+          collection: e.collection ? String(e.collection) : "",
+          resolution: e.resolution ? String(e.resolution) : ""
+        }
+      } else {
+        delete next[key]
+      }
+    }
+    favorites = next
+    favoritesRevision++
+    scheduleSave()
+  }
+
   function clampInt(value, lo, hi, fallback) {
     var n = Number(value)
     if (!isFinite(n)) return fallback
@@ -333,6 +378,7 @@ Item {
     rotationRandom = parsed.rotationRandom === true
     randomDefaultOnInstall = parsed.randomDefaultOnInstall !== false
     themeDefaults = sanitizeThemeDefaults(parsed.themeDefaults)
+    favorites = Model.sanitizeFavorites(parsed.favorites)
 
     settingsLoaded = true
     saved = false
@@ -351,7 +397,8 @@ Item {
       rotationAllTheme: rotationAllTheme,
       rotationRandom: rotationRandom,
       randomDefaultOnInstall: randomDefaultOnInstall,
-      themeDefaults: themeDefaults
+      themeDefaults: themeDefaults,
+      favorites: favorites
     }, null, 2) + "\n"
   }
 

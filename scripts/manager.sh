@@ -138,6 +138,7 @@ Commands:
   catalog <theme> <catalog-url>     Wallpapers of a theme as TSV
   install <theme> [selector...]     Install all wallpapers, or every one matching a selector
   install <theme> --collection <name>  Install one collection (caps apply, like install all)
+  install <theme> --bulk <selector...>  Install explicit selectors with the caps applied
   random-install <theme> [count]    Install <count> (default 5) random wallpapers
   remove <theme> [selector...]      Remove all wallpapers, or every one matching a selector
   remove <theme> --collection <name>   Remove one collection
@@ -563,8 +564,10 @@ cmd_install() {
   WARM_THEME="$theme"
   # `--collection <name>` installs a single collection as a bulk action, so the
   # caps apply. Any other argument is a manual selector (exact filename, etc.):
-  # the user is choosing it explicitly, so the caps are bypassed.
+  # the user is choosing it explicitly, so the caps are bypassed, unless
+  # `--bulk` is passed (the Favorites card).
   local collection=""
+  local bulk=0
   local -a selectors=()
   while (( $# > 0 )); do
     case "$1" in
@@ -575,6 +578,10 @@ cmd_install() {
           return 1
         fi
         shift 2
+        ;;
+      --bulk)
+        bulk=1
+        shift
         ;;
       *)
         selectors+=("$1")
@@ -609,7 +616,7 @@ cmd_install() {
   # honoured, since the user is choosing them explicitly. Already-installed
   # files do not consume budget.
   local cap_active=0 remaining=0 bytes_remaining=0 skipped=0
-  if (( ${#SELECTORS[@]} == 0 )); then
+  if (( ${#SELECTORS[@]} == 0 || bulk )); then
     cap_active=1
     remaining=$(( MAX_LOCAL_FILES - $(count_local_files) ))
     (( remaining < 0 )) && remaining=0
