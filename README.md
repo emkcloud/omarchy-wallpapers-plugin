@@ -138,24 +138,24 @@ switch off leaves the current wallpaper in place.
 
 <table>
   <tr>
-    <td><a href="https://github.com/emkcloud/omarchy-wallpapers/blob/main/images/tokyo-night/countries/omarchy-country-BH-Bahrain-2K.webp"><img src="assets/images/showcase/showcase-001-tokyo-night.webp" alt="Tokyo Night preview 1"></a></td>
-    <td><a href="https://github.com/emkcloud/omarchy-wallpapers/blob/main/images/tokyo-night/countries/omarchy-country-HK-Hong-Kong-2K.webp"><img src="assets/images/showcase/showcase-002-tokyo-night.webp" alt="Tokyo Night preview 2"></a></td>
-    <td><a href="https://github.com/emkcloud/omarchy-wallpapers/blob/main/images/tokyo-night/countries/omarchy-country-BT-Bhutan-2K.webp"><img src="assets/images/showcase/showcase-003-tokyo-night.webp" alt="Tokyo Night preview 3"></a></td>
+    <td><a href="assets/images/showcase/showcase-001-tokyo-night-2K.webp"><img src="assets/images/showcase/showcase-001-tokyo-night.webp" alt="Tokyo Night preview 1"></a></td>
+    <td><a href="assets/images/showcase/showcase-002-tokyo-night-2K.webp"><img src="assets/images/showcase/showcase-002-tokyo-night.webp" alt="Tokyo Night preview 2"></a></td>
+    <td><a href="assets/images/showcase/showcase-003-tokyo-night-2K.webp"><img src="assets/images/showcase/showcase-003-tokyo-night.webp" alt="Tokyo Night preview 3"></a></td>
   </tr>
   <tr>
-    <td><a href="https://github.com/emkcloud/omarchy-wallpapers/blob/main/images/osaka-jade/countries/omarchy-country-BA-Bosnia-Herzegovina-2K.webp"><img src="assets/images/showcase/showcase-004-osaka-jade.webp" alt="Osaka Jade preview 1"></a></td>
-    <td><a href="https://github.com/emkcloud/omarchy-wallpapers/blob/main/images/osaka-jade/countries/omarchy-country-FI-Finland-2K.webp"><img src="assets/images/showcase/showcase-005-osaka-jade.webp" alt="Osaka Jade preview 2"></a></td>
-    <td><a href="https://github.com/emkcloud/omarchy-wallpapers/blob/main/images/osaka-jade/countries/omarchy-country-VU-Vanuatu-2K.webp"><img src="assets/images/showcase/showcase-006-osaka-jade.webp" alt="Osaka Jade preview 3"></a></td>
+    <td><a href="assets/images/showcase/showcase-004-osaka-jade-2K.webp"><img src="assets/images/showcase/showcase-004-osaka-jade.webp" alt="Osaka Jade preview 1"></a></td>
+    <td><a href="assets/images/showcase/showcase-005-osaka-jade-2K.webp"><img src="assets/images/showcase/showcase-005-osaka-jade.webp" alt="Osaka Jade preview 2"></a></td>
+    <td><a href="assets/images/showcase/showcase-006-osaka-jade-2K.webp"><img src="assets/images/showcase/showcase-006-osaka-jade.webp" alt="Osaka Jade preview 3"></a></td>
   </tr>
   <tr>
-    <td><a href="https://github.com/emkcloud/omarchy-wallpapers/blob/main/images/matte-black/countries/omarchy-country-VA-Vatican-2K.webp"><img src="assets/images/showcase/showcase-007-matte-black.webp" alt="Matte Black preview 1"></a></td>
-    <td><a href="https://github.com/emkcloud/omarchy-wallpapers/blob/main/images/matte-black/countries/omarchy-country-VI-US-Virgin-Islands-2K.webp"><img src="assets/images/showcase/showcase-008-matte-black.webp" alt="Matte Black preview 2"></a></td>
-    <td><a href="https://github.com/emkcloud/omarchy-wallpapers/blob/main/images/matte-black/countries/omarchy-country-TD-Chad-2K.webp"><img src="assets/images/showcase/showcase-009-matte-black.webp" alt="Matte Black preview 3"></a></td>
+    <td><a href="assets/images/showcase/showcase-007-matte-black-2K.webp"><img src="assets/images/showcase/showcase-007-matte-black.webp" alt="Matte Black preview 1"></a></td>
+    <td><a href="assets/images/showcase/showcase-008-matte-black-2K.webp"><img src="assets/images/showcase/showcase-008-matte-black.webp" alt="Matte Black preview 2"></a></td>
+    <td><a href="assets/images/showcase/showcase-009-matte-black-2K.webp"><img src="assets/images/showcase/showcase-009-matte-black.webp" alt="Matte Black preview 3"></a></td>
   </tr>
   <tr>
-    <td><a href="https://github.com/emkcloud/omarchy-wallpapers/blob/main/images/gruvbox/countries/omarchy-country-AE-United-Arab-Emirates-2K.webp"><img src="assets/images/showcase/showcase-010-gruvbox.webp" alt="Gruvbox preview 1"></a></td>
-    <td><a href="https://github.com/emkcloud/omarchy-wallpapers/blob/main/images/gruvbox/countries/omarchy-country-VA-Vatican-2K.webp"><img src="assets/images/showcase/showcase-011-gruvbox.webp" alt="Gruvbox preview 2"></a></td>
-    <td><a href="https://github.com/emkcloud/omarchy-wallpapers/blob/main/images/gruvbox/countries/omarchy-country-TT-Trinidad-and-Tobago-2K.webp"><img src="assets/images/showcase/showcase-012-gruvbox.webp" alt="Gruvbox preview 3"></a></td>
+    <td><a href="assets/images/showcase/showcase-010-gruvbox-2K.webp"><img src="assets/images/showcase/showcase-010-gruvbox.webp" alt="Gruvbox preview 1"></a></td>
+    <td><a href="assets/images/showcase/showcase-011-gruvbox-2K.webp"><img src="assets/images/showcase/showcase-011-gruvbox.webp" alt="Gruvbox preview 2"></a></td>
+    <td><a href="assets/images/showcase/showcase-012-gruvbox-2K.webp"><img src="assets/images/showcase/showcase-012-gruvbox.webp" alt="Gruvbox preview 3"></a></td>
   </tr>
 </table>
 
@@ -172,6 +172,7 @@ switch off leaves the current wallpaper in place.
 ## Available collections
 
 - **Countries** — panoramas and iconic scenery inspired by individual countries.
+- **Machines** — computing machines through the decades, from 1960s mainframes to today's AI.
 - **Shelters** — cozy improvised refuges tucked into the city.
 
 ## Security
