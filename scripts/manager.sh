@@ -389,11 +389,44 @@ is_allowed_image() {
   return 1
 }
 
+# A catalogue `filename` is appended to the theme's backgrounds folder, so it
+# must be a bare name: no directory component, no `.`/`..`, no leading dash.
+# The extension allowlist alone is not enough: a malicious catalogue could ship
+# a name like `../../../../Pictures/photo.png` (still a valid image extension)
+# and, during an ordinary bulk install, overwrite an unrelated user file outside
+# the wallpaper folder.
+is_safe_filename() {
+  local name="$1"
+  [[ -n $name ]] || return 1
+  [[ $name != */* ]] || return 1
+  [[ $name != . && $name != .. ]] || return 1
+  [[ $name != -* ]] || return 1
+  return 0
+}
+
+# A theme is a directory name under DEST_BASE and comes from the same untrusted
+# datasets, so it follows the same bare-name rule as a catalogue filename.
+require_safe_theme() {
+  local theme="$1"
+  if ! is_safe_filename "$theme"; then
+    echo "Refusing theme '$theme': unsafe name." >&2
+    return 1
+  fi
+}
+
 # Download one wallpaper unless the destination already matches its sha256.
 download_one() {
   local url="$1" dest="$2" sha="$3"
   if ! is_allowed_image "$dest"; then
     echo "Refusing '$(basename "$dest")': not an allowed image (webp/jpg/jpeg/png)." >&2
+    return 1
+  fi
+  # Containment: never write outside the wallpapers base, whatever the caller
+  # built `dest` from. `realpath -m` normalises `..` without requiring the
+  # target to exist, so the check covers a path that is not on disk yet.
+  if ! is_safe_filename "$(basename -- "$dest")" \
+    || [[ "$(realpath -m -- "$dest" 2>/dev/null || true)" != "$DEST_BASE"/* ]]; then
+    echo "Refusing '$(basename -- "$dest")': unsafe destination." >&2
     return 1
   fi
   if [[ -f $dest && "$(sha256_of "$dest")" == "$sha" ]]; then
@@ -457,6 +490,7 @@ cmd_themes() {
 
 cmd_catalog() {
   local theme="$1"
+  require_safe_theme "$theme" || return 1
   ensure_catalog "$theme" || {
     echo "Failed to fetch catalog for '$theme'." >&2
     return 1
@@ -524,6 +558,7 @@ cmd_limits() {
 cmd_install() {
   local theme="$1"
   shift
+  require_safe_theme "$theme" || return 1
   # Let the cancel trap warm whatever landed if Esc interrupts the download.
   WARM_THEME="$theme"
   # `--collection <name>` installs a single collection as a bulk action, so the
@@ -593,6 +628,10 @@ cmd_install() {
         echo "Skipping '$filename': not an allowed image (webp/jpg/jpeg/png)." >&2
         continue
       fi
+      if ! is_safe_filename "$filename"; then
+        echo "Skipping '$filename': unsafe filename." >&2
+        continue
+      fi
       if (( cap_active )) && [[ ! -f "$DEST_BASE/$theme/$filename" ]]; then
         if (( remaining <= 0 || size > bytes_remaining )); then
           skipped=$((skipped + 1))
@@ -654,6 +693,7 @@ cmd_install() {
 cmd_remove() {
   local theme="$1"
   shift
+  require_safe_theme "$theme" || return 1
   # `--collection <name>` removes a single collection; any other argument is a
   # manual selector (id/name/code/filename), same matching as `cmd_install`.
   local collection=""
@@ -728,8 +768,13 @@ cmd_remove() {
 
 cmd_set_default() {
   local theme="$1" filename="$2" url="$3"
+  require_safe_theme "$theme" || return 1
   if ! is_allowed_image "$filename"; then
     echo "Refusing '$filename': not an allowed image (webp/jpg/jpeg/png)." >&2
+    return 1
+  fi
+  if ! is_safe_filename "$filename"; then
+    echo "Refusing '$filename': unsafe filename." >&2
     return 1
   fi
   # Defence in depth against a stale UI model: a filename that does not belong
@@ -759,6 +804,7 @@ cmd_set_default() {
 # fall back to the theme's own default background (like a dangling link would).
 cmd_unset_default() {
   local theme="$1" filename="$2"
+  require_safe_theme "$theme" || return 1
   local path="$DEST_BASE/$theme/$filename"
   [[ "$(readlink -f "$STATE_BG" 2>/dev/null)" == "$path" ]] || return 0
   local f fallback="" dir
@@ -779,6 +825,7 @@ cmd_unset_default() {
 # background, downloading it first if needed.
 cmd_random_default() {
   local theme="$1"
+  require_safe_theme "$theme" || return 1
   ensure_catalog "$theme" || {
     echo "Failed to fetch catalog for '$theme'." >&2
     return 1
@@ -801,6 +848,7 @@ cmd_random_default() {
 # "Random install (5)" button on the themes detail pane.
 cmd_random_install() {
   local theme="$1" count="${2:-5}"
+  require_safe_theme "$theme" || return 1
   # Let the cancel trap warm whatever landed if Esc interrupts the download.
   WARM_THEME="$theme"
   ensure_datasets || {
@@ -845,6 +893,8 @@ cmd_random_install() {
   local filename url sha size dest accepted=0
   while IFS=$'\t' read -r filename url sha size; do
     if (( accepted >= count )); then break; fi
+    is_safe_filename "$filename" || continue
+    is_allowed_image "$filename" || continue
     dest="$DEST_BASE/$theme/$filename"
     if [[ -f $dest ]]; then
       : # already installed: no budget cost
@@ -954,6 +1004,7 @@ cmd_rotate() {
     echo "No current Omarchy theme." >&2
     return 1
   fi
+  require_safe_theme "$theme" || return 1
 
   local f base
   local -a plugin_files=()

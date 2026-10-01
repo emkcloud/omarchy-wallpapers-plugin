@@ -175,15 +175,6 @@ switch off leaves the current wallpaper in place.
 - **Machines** — computing machines through the decades, from 1960s mainframes to today's AI.
 - **Shelters** — cozy improvised refuges tucked into the city.
 
-## Security
-
-Only image files are accepted at install time: a catalogue entry whose extension
-is not in the allowlist (`webp`, `jpg`, `jpeg`, `png`) is skipped, so a malformed
-or malicious entry cannot drop a non-image into the wallpaper folder. Every
-download is also pinned to the `sha256` recorded in the catalogue and discarded
-if it does not match. Installed wallpapers live in
-`~/.config/omarchy/backgrounds/<theme>/`.
-
 ## License
 
 This project is licensed under the [MIT License](LICENSE).

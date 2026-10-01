@@ -350,6 +350,14 @@ Backspace is filter-only.
     `pragma ComponentBehavior: Bound` at the top of the file — otherwise
     `settings: settings` injects `undefined`. Both the panel and `SetupView.qml`
     carry the pragma for this reason.
+11. A catalogue `filename` is untrusted and becomes a path segment: never append
+    it to the destination without validating it. `is_safe_filename()` rejects a
+    directory component, `.`/`..` and a leading dash, and `download_one()`
+    additionally checks the resolved path stays under `DEST_BASE`. The same rule
+    applies to the theme (`require_safe_theme()`), another directory name from
+    the untrusted datasets. The image extension allowlist alone does not stop
+    `../../../../Pictures/photo.png` from overwriting an unrelated file during a
+    bulk install.
 
 ## Testing
 
