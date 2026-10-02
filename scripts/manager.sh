@@ -160,9 +160,10 @@ fetch() {
 # Download $1 (URL) into $2, atomically (tmp + mv). Leaves no partial file.
 download_file() {
   local url="$1" dest="$2" tmp
+  is_remote_url "$url" || return 1
   mkdir -p "$(dirname -- "$dest")"
   tmp="$dest.tmp.$$"
-  if fetch "$url" -o "$tmp"; then
+  if fetch -o "$tmp" -- "$url"; then
     mv -- "$tmp" "$dest"
     return 0
   fi
@@ -178,6 +179,7 @@ download_file() {
 cmd_image() {
   local url="$1" key ext dest
   [[ -n $url ]] || return 1
+  is_remote_url "$url" || return 1
   key="$(printf '%s' "$url" | md5sum | cut -d' ' -f 1)"
   ext="${url%%\?*}"
   ext="${ext##*.}"
@@ -200,7 +202,7 @@ cmd_image() {
       exit 0
     fi
     tmp="$(mktemp "$CACHE_BASE/.tmp.XXXXXX")"
-    if fetch "$url" -o "$tmp"; then
+    if fetch -o "$tmp" -- "$url"; then
       mv -f -- "$tmp" "$dest"
       ok=0
     fi
@@ -274,7 +276,10 @@ invalidate_datasets() {
 prefetch_catalogs() {
   local theme remote path dest
   while IFS=$'\t' read -r theme remote path; do
+    # A theme key from datasets.json becomes a directory under the cache, so it
+    # follows the same bare-name rule as a catalogue filename.
     [[ -n $theme ]] || continue
+    is_safe_filename "$theme" || continue
     dest="$DATASETS_DIR/$theme/catalog.json"
     [[ -s $dest ]] && continue
     [[ -n $remote ]] || remote="$BASE/${path#/}"
@@ -405,6 +410,22 @@ is_safe_filename() {
   return 0
 }
 
+# A catalogue `size_bytes` is untrusted data that reaches Bash arithmetic as the
+# bulk-install budget. Bash recursively evaluates a variable's value in
+# arithmetic context, so a value such as `a[$(cmd)]` would run the command
+# substitution as the desktop user. Only a plain non-negative integer may cross
+# that boundary; anything else is coerced to 0, which is budget-neutral.
+is_nonneg_int() {
+  [[ $1 =~ ^[0-9]+$ ]]
+}
+
+# Catalogue and dataset URLs are untrusted too. Requiring an http(s) scheme
+# stops a crafted value from being read as a curl option (a leading `-`) or as
+# a local `file://` read; the downloaders still pass it as a positional URL.
+is_remote_url() {
+  [[ $1 == http://* || $1 == https://* ]]
+}
+
 # A theme is a directory name under DEST_BASE and comes from the same untrusted
 # datasets, so it follows the same bare-name rule as a catalogue filename.
 require_safe_theme() {
@@ -418,6 +439,10 @@ require_safe_theme() {
 # Download one wallpaper unless the destination already matches its sha256.
 download_one() {
   local url="$1" dest="$2" sha="$3"
+  if ! is_remote_url "$url"; then
+    echo "Refusing '$(basename -- "$dest")': unsafe URL." >&2
+    return 1
+  fi
   if ! is_allowed_image "$dest"; then
     echo "Refusing '$(basename "$dest")': not an allowed image (webp/jpg/jpeg/png)." >&2
     return 1
@@ -434,7 +459,7 @@ download_one() {
     return 0
   fi
   mkdir -p "$(dirname "$dest")"
-  if curl -fsSL --max-time 120 "$url" -o "$dest.tmp" 2>/dev/null \
+  if curl -fsSL --max-time 120 -o "$dest.tmp" -- "$url" 2>/dev/null \
     && [[ "$(sha256_of "$dest.tmp")" == "$sha" ]]; then
     mv -- "$dest.tmp" "$dest"
     return 0
@@ -468,7 +493,10 @@ cmd_themes() {
   # Read the jq row with a non-whitespace separator: `IFS=$'\t'` collapses
   # runs of tabs, so the empty palette field would shift the description in.
   while IFS=$'\x1f' read -r name title catalog collections count preview palette description image; do
+    # The theme key comes from the untrusted datasets; skip anything that is not
+    # a bare directory name before it reaches a path.
     [[ -n $name ]] || continue
+    is_safe_filename "$name" || continue
     installed=0
     if [[ -d "$DEST_BASE/$name" ]]; then
       installed="$(find "$DEST_BASE/$name" -maxdepth 1 -type f ! -name '*.tmp' 2>/dev/null | wc -l | tr -d ' ')"
@@ -624,6 +652,9 @@ cmd_install() {
     (( bytes_remaining < 0 )) && bytes_remaining=0
   fi
   while IFS=$'\t' read -r filename id name code url sha size row_collection; do
+    # Never let a remote `size_bytes` reach the arithmetic below as anything
+    # but a plain non-negative integer (see is_nonneg_int).
+    is_nonneg_int "$size" || size=0
     matched=0
     if [[ -n $collection ]]; then
       [[ "$row_collection" == "$collection" ]] && matched=1
@@ -797,7 +828,11 @@ cmd_set_default() {
   local path="$DEST_BASE/$theme/$filename"
   if [[ ! -f $path ]]; then
     mkdir -p "$DEST_BASE/$theme"
-    fetch "$url" -o "$path"
+    if ! is_remote_url "$url"; then
+      echo "Refusing '$filename': unsafe URL." >&2
+      return 1
+    fi
+    fetch -o "$path" -- "$url"
   fi
   omarchy-theme-bg-set "$path"
   # The cursor follows the manual choice: the next sequential rotate resumes
@@ -855,6 +890,7 @@ cmd_random_default() {
 # "Random install (5)" button on the themes detail pane.
 cmd_random_install() {
   local theme="$1" count="${2:-5}"
+  is_nonneg_int "$count" || count=5
   require_safe_theme "$theme" || return 1
   # Let the cancel trap warm whatever landed if Esc interrupts the download.
   WARM_THEME="$theme"
@@ -899,6 +935,9 @@ cmd_random_install() {
   local -a sel_url=() sel_dest=() sel_sha=()
   local filename url sha size dest accepted=0
   while IFS=$'\t' read -r filename url sha size; do
+    # Same rule as cmd_install: a remote `size_bytes` is only ever a plain
+    # non-negative integer before it touches arithmetic.
+    is_nonneg_int "$size" || size=0
     if (( accepted >= count )); then break; fi
     is_safe_filename "$filename" || continue
     is_allowed_image "$filename" || continue

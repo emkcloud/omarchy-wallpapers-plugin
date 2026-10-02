@@ -24,7 +24,9 @@ check downstream of the controls below.
   file name, never a path.
 - **Bare theme name** — a theme is a directory under `DEST_BASE` and comes from
   the same untrusted datasets, so `require_safe_theme()` applies the same rule
-  to it in every command that takes a theme.
+  to it in every command that takes a theme. The theme keys of `datasets.json`
+  are validated with `is_safe_filename()` too, both when the catalogs are
+  prefetched into the cache and when the theme list is built.
 - **Path containment** — `download_one()` resolves the destination with
   `realpath -m` and refuses it unless it stays under `DEST_BASE`
   (`~/.config/omarchy/backgrounds/<theme>/`). This is defence in depth,
@@ -32,6 +34,15 @@ check downstream of the controls below.
 - **Atomic writes** — downloads land on a `.tmp` file and are `mv`'d only after
   the `sha256` recorded in the catalogue matches; a mismatch is discarded, so a
   failed or interrupted write never replaces a good file.
+- **Numeric budget** — `is_nonneg_int()` forces a catalogue `size_bytes` to be a
+  plain non-negative integer before it is used in Bash arithmetic (the
+  bulk/random install budgets). Bash recursively evaluates a variable's value in
+  arithmetic context, so a value such as `a[$(cmd)]` would otherwise run the
+  command substitution as the desktop user. An invalid size is coerced to 0.
+- **http(s) URLs only** — `is_remote_url()` requires every catalogue/dataset URL
+  to start with `http://` or `https://` before it is fetched, so it cannot be
+  read as a curl option (a leading `-`) or as a local `file://` read. The
+  downloaders also pass the URL after `--`.
 - **`..` cannot become the background** — `cmd_set_default()` only accepts a file
   name that is also present in the theme's catalogue.
 

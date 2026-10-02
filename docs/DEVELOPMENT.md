@@ -376,7 +376,17 @@ Backspace is filter-only.
     applies to the theme (`require_safe_theme()`), another directory name from
     the untrusted datasets. The image extension allowlist alone does not stop
     `../../../../Pictures/photo.png` from overwriting an unrelated file during a
-    bulk install.
+    bulk install. The theme keys of `datasets.json` are the same: they become a
+    directory under the cache (`prefetch_catalogs`) and a folder under
+    `DEST_BASE` (`cmd_themes`), so both skip a key that fails
+    `is_safe_filename()`.
+12. Catalogue values are untrusted **data** at every sink, not only paths. A
+    `size_bytes` fed to `$(( ))` is a source-traced execution boundary: Bash
+    recursively evaluates a variable's value in arithmetic context, so
+    `a[$(cmd)]` runs the command substitution. `is_nonneg_int()` must gate every
+    remote number before arithmetic (invalid → 0). Likewise a URL must pass
+    `is_remote_url()` (http/https) and be passed after `--` so it cannot be read
+    as a curl option or a `file://` local read.
 
 ## Testing
 
