@@ -55,7 +55,7 @@ Item {
         text: roadmapPane.roadmapTitle.toUpperCase()
         color: roadmapPane.dim
         font.family: roadmapPane.fontFamily
-        font.pixelSize: Style.font.subtitle
+        font.pixelSize: Style.font.body
         font.bold: true
         font.letterSpacing: 1.2
       }

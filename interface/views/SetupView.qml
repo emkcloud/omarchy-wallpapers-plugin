@@ -60,6 +60,10 @@ Item {
   // Uniform bottom margin under every sidebar section title (SECTIONS / USAGE /
   // ACTIONS), so they all breathe the same.
   readonly property int sectionTitleGap: Style.space(10)
+  // Vertical padding inside every section row; the USAGE / ACTIONS captions add
+  // half of it so the gap to their content matches the SECTIONS caption, whose
+  // first row centres its label inside that same padding.
+  readonly property int sectionRowPadY: Style.space(9)
 
   // Thousands separator for the big counters ("1,000").
   function grouped(n) {
@@ -76,7 +80,7 @@ Item {
     textFormat: Text.PlainText
     color: setup.dim
     font.family: setup.fontFamily
-    font.pixelSize: Style.font.subtitle
+    font.pixelSize: Style.font.body
     font.bold: true
     font.letterSpacing: 1.2
     bottomPadding: setup.sectionTitleGap
@@ -360,13 +364,13 @@ Item {
       anchors.rightMargin: Style.space(2)
       anchors.bottom: usagePane.top
       anchors.bottomMargin: Style.space(18)
-      spacing: 0
+      spacing: Style.space(2)
 
       SectionTitle { text: "SECTIONS" }
 
       Column {
         width: parent.width
-        spacing: Style.space(4)
+        spacing: Style.space(2)
 
         Repeater {
           model: settings.setupSections
@@ -384,7 +388,7 @@ Item {
 
               anchors.left: parent.left
               anchors.right: parent.right
-              height: entryLabel.implicitHeight + Style.space(14)
+              height: entryLabel.implicitHeight + setup.sectionRowPadY
               foreground: setup.foreground
               accent: setup.accent
               hasCursor: settings.setupSection === sectionEntry.modelData.id
@@ -433,9 +437,12 @@ Item {
       anchors.rightMargin: Style.space(2)
       anchors.bottom: actionsPane.top
       anchors.bottomMargin: Style.space(18)
-      spacing: 0
+      spacing: Style.space(2)
 
-      SectionTitle { text: "USAGE" }
+      SectionTitle {
+        text: "USAGE"
+        bottomPadding: setup.sectionTitleGap + setup.sectionRowPadY / 2
+      }
 
       Column {
         width: parent.width
@@ -469,9 +476,12 @@ Item {
       anchors.rightMargin: Style.space(2)
       anchors.bottom: parent.bottom
       anchors.bottomMargin: setup.bodyPadY
-      spacing: 0
+      spacing: Style.space(2)
 
-      SectionTitle { text: "ACTIONS" }
+      SectionTitle {
+        text: "ACTIONS"
+        bottomPadding: setup.sectionTitleGap + setup.sectionRowPadY / 2
+      }
 
       // Restore defaults: same dashed treatment and height as the Help
       // sidebar's "Propose a feature".
@@ -959,7 +969,7 @@ Item {
             }
 
             FieldHint {
-              text: "Sequential by default: wallpapers advance in the order they appear and resume where they left off after a theme switch. When enabled, the next one is drawn from a shuffled pool that never repeats a wallpaper until all of them have been shown, then a new cycle starts."
+              text: "Sequential by default: wallpapers advance in order and resume where they left off after a theme switch. When enabled, the next one is drawn from a shuffled pool that never repeats a wallpaper until all of them have been shown, then a new cycle starts."
             }
           }
 

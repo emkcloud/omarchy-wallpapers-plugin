@@ -266,7 +266,7 @@ Item {
           text: navEntry.isSection ? navEntry.modelData.title : ""
           color: help.dim
           font.family: help.fontFamily
-          font.pixelSize: Style.font.caption
+          font.pixelSize: Style.font.body
           font.bold: true
           font.letterSpacing: 1.2
         }
@@ -278,7 +278,7 @@ Item {
           anchors.left: parent.left
           anchors.right: parent.right
           anchors.top: parent.top
-          height: itemLabel.implicitHeight + Style.space(14)
+          height: itemLabel.implicitHeight + Style.space(9)
           foreground: help.foreground
           accent: help.accent
           hasCursor: !navEntry.isSection && navEntry.modelData.flat === help.selectedFlat
@@ -337,11 +337,13 @@ Item {
           text: "RESOURCES"
           color: help.dim
           font.family: help.fontFamily
-          font.pixelSize: Style.font.caption
+          font.pixelSize: Style.font.body
           font.bold: true
           font.letterSpacing: 1.2
-          // Match the gap the nav section labels leave under themselves.
-          bottomPadding: Style.space(2)
+          // Match the gap the nav section labels leave under themselves:
+          // the nav adds its own trailing space plus the ListView gap plus
+          // half the topic row's vertical padding, so mirror the same here.
+          bottomPadding: Style.space(2) + Style.space(9) / 2
         }
 
         Repeater {
