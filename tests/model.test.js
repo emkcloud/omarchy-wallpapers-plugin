@@ -507,3 +507,12 @@ test("parsePaths merges over the fallback", () => {
   assert.equal(paths.scripts, "s");
   assert.deepEqual(Model.parsePaths("nope", base), base);
 });
+
+test("compareVersions orders dotted numeric versions", () => {
+  assert.equal(Model.compareVersions("1.5.3", "1.5.3"), 0);
+  assert.equal(Model.compareVersions("1.5.2", "1.5.3"), -1);
+  assert.equal(Model.compareVersions("1.6.0", "1.5.9"), 1);
+  assert.equal(Model.compareVersions("2.0.0", "1.99.99"), 1);
+  assert.equal(Model.compareVersions("1.5", "1.5.0"), 0);
+  assert.equal(Model.compareVersions("", "1.0.0"), -1);
+});

@@ -1,7 +1,6 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
-import QtQuick.Shapes
 import Quickshell
 import Quickshell.Io
 import qs.Commons
@@ -34,6 +33,14 @@ Item {
   signal featureClicked()
   // "Rotate now": the panel runs `manager.sh rotate` immediately.
   signal rotateRequested()
+  // "Check now": the panel runs the update check.
+  signal checkRequested()
+  // "Security validation": the panel opens the official marketplace page.
+  signal securityRequested()
+  // "Changelog": the panel opens the GitHub releases page.
+  signal changelogRequested()
+  // "Changelog CDN": the panel opens the wallpapers releases page.
+  signal cdnChangelogRequested()
 
   readonly property color dim: Qt.darker(foreground, 1.4)
   readonly property int gutter: Style.space(28)
@@ -46,6 +53,21 @@ Item {
 
   // Injected by the panel: a rotate is in flight, so "Rotate now" is disabled.
   property bool rotateBusy: false
+
+  // Injected by the panel: current plugin and CDN versions, shown in the
+  // "Check version" section.
+  property string pluginVersion: ""
+  property string cdnVersion: ""
+  // Injected by the panel: official marketplace page for the Security row.
+  property string securityUrl: ""
+  // Injected by the panel: GitHub releases page for the Changelog row.
+  property string changelogUrl: ""
+  // Injected by the panel: wallpapers releases page for the Changelog CDN row.
+  property string cdnChangelogUrl: ""
+  // Injected by the panel: result of the last update check ("idle", "checking",
+  // "uptodate", "available" or "error") and the version found on main.
+  property string updateState: "idle"
+  property string updateRemoteVersion: ""
 
   // ---- usage (right sidebar) ----------------------------------------------
   // Live local usage injected by the panel, shown against the caps.
@@ -109,75 +131,16 @@ Item {
 
     readonly property bool critical: percent >= 90
     readonly property color tint: usageCard.critical ? Color.urgent : setup.accent
-    readonly property color borderColor: usageCard.critical ? Color.urgent : setup.dim
     readonly property int pad: Style.space(12)
 
     implicitHeight: usageBody.implicitHeight + pad * 2
 
-    // Dotted rounded outline, same treatment as "Restore defaults".
-    Shape {
-      id: usageOutline
-
+    // Subtle theme-tied surface so the card reads as raised above the pane
+    // behind it instead of a fully transparent box.
+    Rectangle {
       anchors.fill: parent
-
-      readonly property real r: Math.max(0, Style.cornerRadius)
-      readonly property real w: width - usagePath.strokeWidth
-      readonly property real h: height - usagePath.strokeWidth
-      readonly property real inset: usagePath.strokeWidth / 2
-
-      ShapePath {
-        id: usagePath
-
-        strokeColor: usageCard.borderColor
-        strokeWidth: 1
-        fillColor: "transparent"
-        strokeStyle: ShapePath.DashLine
-        dashPattern: [3, 3]
-        capStyle: ShapePath.FlatCap
-
-        startX: usageOutline.inset + usageOutline.r
-        startY: usageOutline.inset
-        PathLine {
-          x: usageOutline.inset + usageOutline.w - usageOutline.r
-          y: usageOutline.inset
-        }
-        PathArc {
-          x: usageOutline.inset + usageOutline.w
-          y: usageOutline.inset + usageOutline.r
-          radiusX: usageOutline.r
-          radiusY: usageOutline.r
-        }
-        PathLine {
-          x: usageOutline.inset + usageOutline.w
-          y: usageOutline.inset + usageOutline.h - usageOutline.r
-        }
-        PathArc {
-          x: usageOutline.inset + usageOutline.w - usageOutline.r
-          y: usageOutline.inset + usageOutline.h
-          radiusX: usageOutline.r
-          radiusY: usageOutline.r
-        }
-        PathLine {
-          x: usageOutline.inset + usageOutline.r
-          y: usageOutline.inset + usageOutline.h
-        }
-        PathArc {
-          x: usageOutline.inset
-          y: usageOutline.inset + usageOutline.h - usageOutline.r
-          radiusX: usageOutline.r
-          radiusY: usageOutline.r
-        }
-        PathLine {
-          x: usageOutline.inset
-          y: usageOutline.inset + usageOutline.r
-        }
-        PathArc {
-          x: usageOutline.inset + usageOutline.r
-          y: usageOutline.inset
-          radiusX: usageOutline.r
-          radiusY: usageOutline.r
-        }
-      }
+      radius: Math.max(0, Style.cornerRadius)
+      color: Util.alpha(setup.foreground, 0.05)
     }
 
     Column {
@@ -1089,6 +1052,229 @@ Item {
             accent: setup.accent
             fontFamily: setup.fontFamily
             onClicked: setup.rotateRequested()
+          }
+        }
+      }
+
+      // ---- Updates ----------------------------------------------------------
+      Column {
+        visible: settings.setupSection === "version"
+        width: parent.width
+        spacing: Style.space(18)
+
+        Text {
+          textFormat: Text.PlainText
+          text: "Updates"
+          color: setup.foreground
+          font.family: setup.fontFamily
+          font.pixelSize: Style.font.heading
+          font.bold: true
+          font.capitalization: Font.AllUppercase
+        }
+
+        Text {
+          width: parent.width
+          textFormat: Text.PlainText
+          text: "You are using version " + setup.pluginVersion
+            + " of the plugin with version " + setup.cdnVersion
+            + " of the wallpapers CDN on Amazon S3. Check if a newer version exists."
+          color: setup.foreground
+          font.family: setup.fontFamily
+          font.pixelSize: Style.font.body
+          wrapMode: Text.WordWrap
+          lineHeight: 1.25
+          lineHeightMode: Text.ProportionalHeight
+        }
+
+        Item {
+          width: parent.width
+          height: Math.max(changelogText.height, changelogButton.height)
+
+          Column {
+            id: changelogText
+
+            anchors.left: parent.left
+            anchors.right: changelogButton.left
+            anchors.rightMargin: Style.space(16)
+            anchors.top: parent.top
+            spacing: Style.space(7)
+
+            Text {
+              width: parent.width
+              textFormat: Text.PlainText
+              text: "Changelog"
+              color: settings.isSetupRowFocused("version", 0) ? setup.accent : setup.foreground
+              Behavior on color { ColorAnimation { duration: 140; easing.type: Easing.OutCubic } }
+              font.family: setup.fontFamily
+              font.pixelSize: Style.font.subtitle
+              font.capitalization: Font.AllUppercase
+            }
+
+            FieldHint {
+              text: "See what changed in each release, from new features to fixes. The full history lives on our GitHub repository."
+            }
+          }
+
+          Button {
+            id: changelogButton
+
+            anchors.right: parent.right
+            anchors.top: parent.top
+            width: Style.space(120)
+            text: "Open page"
+            iconText: "\uf08e"
+            bordered: true
+            foreground: setup.foreground
+            accent: setup.accent
+            fontFamily: setup.fontFamily
+            onClicked: setup.changelogRequested()
+          }
+        }
+
+        Item {
+          width: parent.width
+          height: Math.max(cdnChangelogText.height, cdnChangelogButton.height)
+
+          Column {
+            id: cdnChangelogText
+
+            anchors.left: parent.left
+            anchors.right: cdnChangelogButton.left
+            anchors.rightMargin: Style.space(16)
+            anchors.top: parent.top
+            spacing: Style.space(7)
+
+            Text {
+              width: parent.width
+              textFormat: Text.PlainText
+              text: "Changelog CDN"
+              color: settings.isSetupRowFocused("version", 1) ? setup.accent : setup.foreground
+              Behavior on color { ColorAnimation { duration: 140; easing.type: Easing.OutCubic } }
+              font.family: setup.fontFamily
+              font.pixelSize: Style.font.subtitle
+              font.capitalization: Font.AllUppercase
+            }
+
+            FieldHint {
+              text: "See what changed in each wallpapers snapshot, from new collections to fixes. The full history lives on the wallpapers repository."
+            }
+          }
+
+          Button {
+            id: cdnChangelogButton
+
+            anchors.right: parent.right
+            anchors.top: parent.top
+            width: Style.space(120)
+            text: "Open page"
+            iconText: "\uf08e"
+            bordered: true
+            foreground: setup.foreground
+            accent: setup.accent
+            fontFamily: setup.fontFamily
+            onClicked: setup.cdnChangelogRequested()
+          }
+        }
+
+        Item {
+          width: parent.width
+          height: Math.max(securityText.height, securityButton.height)
+
+          Column {
+            id: securityText
+
+            anchors.left: parent.left
+            anchors.right: securityButton.left
+            anchors.rightMargin: Style.space(16)
+            anchors.top: parent.top
+            spacing: Style.space(7)
+
+            Text {
+              width: parent.width
+              textFormat: Text.PlainText
+              text: "Security validation"
+              color: settings.isSetupRowFocused("version", 2) ? setup.accent : setup.foreground
+              Behavior on color { ColorAnimation { duration: 140; easing.type: Easing.OutCubic } }
+              font.family: setup.fontFamily
+              font.pixelSize: Style.font.subtitle
+              font.capitalization: Font.AllUppercase
+            }
+
+            FieldHint {
+              text: "The plugin and its new releases are validated by the Omarchy community. See the official Omarchy plugin page for details."
+            }
+          }
+
+          Button {
+            id: securityButton
+
+            anchors.right: parent.right
+            anchors.top: parent.top
+            width: Style.space(120)
+            text: "Open page"
+            iconText: "\uf08e"
+            bordered: true
+            foreground: setup.foreground
+            accent: setup.accent
+            fontFamily: setup.fontFamily
+            onClicked: setup.securityRequested()
+          }
+        }
+
+        Item {
+          width: parent.width
+          height: Math.max(checkVersionText.height, checkNowButton.height)
+
+          Column {
+            id: checkVersionText
+
+            anchors.left: parent.left
+            anchors.right: checkNowButton.left
+            anchors.rightMargin: Style.space(16)
+            anchors.top: parent.top
+            spacing: Style.space(7)
+
+            Text {
+              width: parent.width
+              textFormat: Text.PlainText
+              text: "Check for updates"
+              color: settings.isSetupRowFocused("version", 3) ? setup.accent : setup.foreground
+              Behavior on color { ColorAnimation { duration: 140; easing.type: Easing.OutCubic } }
+              font.family: setup.fontFamily
+              font.pixelSize: Style.font.subtitle
+              font.capitalization: Font.AllUppercase
+            }
+
+            FieldHint {
+              text: {
+                if (setup.updateState === "checking")
+                  return "Checking for the latest version…"
+                if (setup.updateState === "uptodate")
+                  return "You are on the latest version."
+                if (setup.updateState === "available")
+                  return "A newer version is available: " + setup.updateRemoteVersion + "."
+                if (setup.updateState === "error")
+                  return "Could not reach the update server. Try again later."
+                return "See if a newer version of the plugin has been released. When one is available, you can update it from Omarchy."
+              }
+            }
+          }
+
+          Button {
+            id: checkNowButton
+
+            anchors.right: parent.right
+            anchors.top: parent.top
+            width: Style.space(120)
+            enabled: setup.updateState !== "checking"
+            opacity: enabled ? 1 : 0.4
+            text: setup.updateState === "checking" ? "Checking…" : "Check now"
+            iconText: "󰑓"
+            bordered: true
+            foreground: setup.foreground
+            accent: setup.accent
+            fontFamily: setup.fontFamily
+            onClicked: setup.checkRequested()
           }
         }
       }

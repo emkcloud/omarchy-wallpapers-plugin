@@ -79,7 +79,8 @@ Item {
   // adjust numeric values and the interval dropdown.
   readonly property var setupSections: [
     { id: "download", label: "Download" },
-    { id: "rotation", label: "Automatic rotation" }
+    { id: "rotation", label: "Automatic rotation" },
+    { id: "version", label: "Updates" }
   ]
   property string setupSection: "download"
   property string setupNavArea: "sections"
@@ -95,7 +96,9 @@ Item {
 
   readonly property var setupNavRows: setupSection === "download"
     ? ["resolution", "shuffle", "parallel", "maxFiles", "maxDisk"]
-    : ["enabled", "allTheme", "random", "interval", "rotateNow"]
+    : setupSection === "rotation"
+    ? ["enabled", "allTheme", "random", "interval", "rotateNow"]
+    : ["changelog", "cdnChangelog", "security", "checkVersion"]
 
   // Rows that open in edit mode instead of toggling on Enter.
   readonly property var setupAdjustableRows: ["shuffle", "parallel", "maxFiles", "maxDisk"]

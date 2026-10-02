@@ -505,6 +505,22 @@ function helpSidebarEntries(index) {
   return out
 }
 
+// Compare dotted numeric versions ("1.5.3"): -1 / 0 / 1. Missing segments count
+// as zero, so "1.5" equals "1.5.0".
+function compareVersions(a, b) {
+  var pa = String(a || "").split(".")
+  var pb = String(b || "").split(".")
+  var n = Math.max(pa.length, pb.length)
+  for (var i = 0; i < n; i++) {
+    var x = parseInt(pa[i], 10)
+    var y = parseInt(pb[i], 10)
+    if (!isFinite(x)) x = 0
+    if (!isFinite(y)) y = 0
+    if (x !== y) return x < y ? -1 : 1
+  }
+  return 0
+}
+
 function parseRoadmap(raw) {
   var empty = { title: "Roadmap", subtitle: "", items: [] }
   try {
@@ -787,6 +803,7 @@ if (typeof module !== "undefined" && module.exports) {
     parseHelpIndex,
     helpFlatItems,
     helpSidebarEntries,
+    compareVersions,
     parseRoadmap,
     inlineMarkdown,
     splitTableRow,

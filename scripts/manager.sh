@@ -149,6 +149,7 @@ Commands:
   image <url>                       Print the local cache path of an image, downloading it if missing
   prewarm <url>...                  Warm the image cache in the background (best-effort)
   download <url> <dest-dir>         Copy the original wallpaper into a folder, print the saved path
+  remote-version                    Print the plugin version published on main
 Source: $BASE
 EOF
 }
@@ -1176,6 +1177,16 @@ cmd_rotate() {
   }
 }
 
+# Print the plugin version published on the repo's main branch, so the Setup
+# screen can compare it with the installed one. Best effort: prints nothing and
+# fails when the manifest cannot be fetched. Overridable for forks/mirrors.
+REMOTE_MANIFEST_URL="${WALLPAPER_MANAGER_MANIFEST:-https://raw.githubusercontent.com/emkcloud/omarchy-wallpapers-plugin/main/manifest.json}"
+cmd_remote_version() {
+  local json
+  json="$(fetch -- "$REMOTE_MANIFEST_URL" 2>/dev/null)" || return 1
+  jq -r '.version // empty' <<<"$json" 2>/dev/null
+}
+
 if [[ $# -eq 0 ]]; then
   usage
   exit 1
@@ -1199,5 +1210,6 @@ case "$command" in
   image) cmd_image "$@" ;;
   prewarm) cmd_prewarm "$@" ;;
   download) cmd_download "$@" ;;
+  remote-version) cmd_remote_version ;;
   *) usage; exit 1 ;;
 esac

@@ -164,6 +164,15 @@ Item {
   readonly property string pluginRepoUrl: pluginLinks.repo
     ? String(pluginLinks.repo) : "https://github.com/emkcloud/omarchy-wallpapers-plugin"
 
+  // Plugin release history, opened from Setup's Changelog row.
+  readonly property string pluginReleasesUrl: pluginLinks.releases
+    ? String(pluginLinks.releases)
+    : "https://github.com/emkcloud/omarchy-wallpapers-plugin/releases"
+
+  // Wallpapers collection release history, opened from Setup's Changelog CDN row.
+  readonly property string wallpapersReleasesUrl:
+    "https://github.com/emkcloud/omarchy-wallpapers/releases"
+
   // Setup screen settings: persisted per plugin id under the user config, so
   // the official and developer installs never share them. `pluginId` is known
   // from the install directory itself, so the path is stable from creation and
@@ -355,6 +364,30 @@ Item {
   // the themes and Setup hero metas.
   readonly property string pluginVersion: manifest && manifest.version
     ? String(manifest.version) : ""
+  // Last path segment of the CDN base (e.g. "1.3.0"), shown in Setup.
+  readonly property string cdnBaseVersion: {
+    if (!pluginBase) return ""
+    var parts = String(pluginBase).replace(/\/+$/, "").split("/")
+    return parts.length > 0 ? parts[parts.length - 1] : ""
+  }
+  // Official Omarchy plugin marketplace page, opened from Setup's Security row.
+  // The official id is used even for the developer install, which shares the
+  // same listing.
+  readonly property string marketplaceUrl:
+    "https://plugins.omarchy.org/plugin.html?id=emkcloud.wallpaper-manager"
+
+  // Update check shown in Setup's "Check for updates" row: "idle" until run,
+  // then "checking", "uptodate", "available" or "error". Omarchy installs the
+  // update itself, so the plugin only reports the result.
+  property string updateCheckState: "idle"
+  property string updateRemoteVersion: ""
+
+  function checkForUpdates() {
+    if (updateCheckState === "checking") return
+    updateCheckState = "checking"
+    updateRemoteVersion = ""
+    remoteVersionProc.running = true
+  }
   readonly property string versionedName: pluginVersion !== ""
     ? "Wallpaper manager " + pluginVersion
     : "Wallpaper manager"
@@ -2961,6 +2994,27 @@ Item {
     }
   }
 
+  // `manager.sh remote-version` -> the version published on main, or nothing on
+  // failure. The Setup "Check for updates" row compares it with the installed
+  // `pluginVersion`; the plugin never installs the update itself.
+  Process {
+    id: remoteVersionProc
+    command: root.scriptCmd(["remote-version"])
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var remote = String(text || "").trim()
+        if (remote === "") { root.updateCheckState = "error"; return }
+        root.updateRemoteVersion = remote
+        root.updateCheckState = Model.compareVersions(remote, root.pluginVersion) > 0
+          ? "available" : "uptodate"
+      }
+    }
+    onExited: {
+      if (root.updateCheckState === "checking") root.updateCheckState = "error"
+    }
+  }
+
   // Automatic rotation: print the picked file as `ROTATE<TAB><path>`; keep the
   // open grid's DEFAULT pill in sync when the rotated wallpaper belongs to the
   // theme currently being browsed (rotation follows the Omarchy theme, which may
@@ -3683,6 +3737,13 @@ Item {
             localFileCount: root.localFileCount
             localBytes: root.localBytes
             rotateBusy: settings.rotateBusy
+            pluginVersion: root.pluginVersion
+            cdnVersion: root.cdnBaseVersion
+            securityUrl: root.marketplaceUrl
+            changelogUrl: root.pluginReleasesUrl
+            cdnChangelogUrl: root.wallpapersReleasesUrl
+            updateState: root.updateCheckState
+            updateRemoteVersion: root.updateRemoteVersion
             roadmap: root.roadmapData
             featureLabel: root.helpIndex && root.helpIndex.feature
               ? root.helpIndex.feature.title : ""
@@ -3698,6 +3759,25 @@ Item {
               }
             }
             onRotateRequested: root.rotateWallpaper()
+            onSecurityRequested: {
+              if (root.marketplaceUrl !== "") {
+                Qt.openUrlExternally(root.marketplaceUrl)
+                root.close()
+              }
+            }
+            onChangelogRequested: {
+              if (root.pluginReleasesUrl !== "") {
+                Qt.openUrlExternally(root.pluginReleasesUrl)
+                root.close()
+              }
+            }
+            onCdnChangelogRequested: {
+              if (root.wallpapersReleasesUrl !== "") {
+                Qt.openUrlExternally(root.wallpapersReleasesUrl)
+                root.close()
+              }
+            }
+            onCheckRequested: root.checkForUpdates()
             // The interval popup lives in the view; wire it into the shared
             // keyboard state while the screen is mounted.
             Component.onCompleted: settings.activateSetupCursor = openIntervalDropdown
