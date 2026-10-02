@@ -337,6 +337,10 @@ Backspace is filter-only.
 ## Conventions
 
 - **UI language**: all user-facing strings are **English**. No i18n framework.
+- **Links are config, never hardcoded.** Every external URL lives in
+  `config/config.json` `links` and is read through `pluginLinks` (the shipped
+  defaults in `WallpaperManager.qml` are only the fallback). Never put a static
+  URL in a screen or in the action logic.
 - **Logical, not visual.** A component receives values and renders them; it must
   not render a value, then recompute and self-correct. Compute first, then mount
   the screen (e.g. a "browse a collection" target is carried in
@@ -387,6 +391,12 @@ Backspace is filter-only.
     remote number before arithmetic (invalid → 0). Likewise a URL must pass
     `is_remote_url()` (http/https) and be passed after `--` so it cannot be read
     as a curl option or a `file://` local read.
+13. Help and Setup are leaf screens whose return view is captured on open. Two
+    single "return view" properties could point at each other (Help opened from
+    Setup and Setup opened from Help), so Esc bounced between them forever (the
+    user had to force-close the overlay). Keep a `leafReturnStack`: each leaf
+    pushes its origin and Esc pops one step, retracing the whole sequence
+    (`themes → setup → help → Esc → setup → Esc → themes`).
 
 ## Testing
 

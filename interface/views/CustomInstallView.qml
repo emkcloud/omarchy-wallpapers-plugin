@@ -19,6 +19,10 @@ Item {
   // The panel root (state, models, processes and actions).
   required property var manager
 
+  // How far the loader is pulled left of the content inset, so the previews
+  // reach the card border while the pane split (and footer divider) stay put.
+  property real leftBleed: 0
+
   // Width of the previews pane, so the footer divider lines up with it.
   readonly property real paneWidth: leftPane.width
 
@@ -33,7 +37,7 @@ Item {
       id: leftPane
 
       width: Math.max(Style.space(260),
-        Math.floor((customRow.width - customRow.spacing) * 0.62))
+        Math.floor((customRow.width - customRow.spacing - leftBleed) * 0.62)) + leftBleed
       height: parent.height
       clip: true
 

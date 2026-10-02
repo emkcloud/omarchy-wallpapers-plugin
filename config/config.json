@@ -11,6 +11,8 @@
     "repo": "https://github.com/emkcloud/omarchy-wallpapers-plugin",
     "donation": "https://github.com/sponsors/emkcloud",
     "issues": "https://github.com/emkcloud/omarchy-wallpapers-plugin/issues",
-    "releases": "https://github.com/emkcloud/omarchy-wallpapers-plugin/releases"
+    "releases": "https://github.com/emkcloud/omarchy-wallpapers-plugin/releases",
+    "marketplace": "https://plugins.omarchy.org/plugin.html?id=emkcloud.wallpaper-manager",
+    "wallpapersReleases": "https://github.com/emkcloud/omarchy-wallpapers/releases"
   }
 }

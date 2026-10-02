@@ -98,7 +98,7 @@ Item {
     ? ["resolution", "shuffle", "parallel", "maxFiles", "maxDisk"]
     : setupSection === "rotation"
     ? ["enabled", "allTheme", "random", "interval", "rotateNow"]
-    : ["changelog", "cdnChangelog", "security", "checkVersion"]
+    : ["changelog", "cdnChangelog", "security", "proposeFeature", "checkVersion"]
 
   // Rows that open in edit mode instead of toggling on Enter.
   readonly property var setupAdjustableRows: ["shuffle", "parallel", "maxFiles", "maxDisk"]

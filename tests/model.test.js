@@ -487,10 +487,13 @@ test("parseRoadmap reads items and degrades on malformed input", () => {
 // --- config parsers --------------------------------------------------------
 
 test("parseLinks merges over the fallback", () => {
-  const base = { repo: "fb", donation: "d", issues: "i", releases: "r", database: "db" };
+  const base = { repo: "fb", donation: "d", issues: "i", releases: "r",
+    marketplace: "m", wallpapersReleases: "w", database: "db" };
   const links = Model.parseLinks(JSON.stringify({ links: { repo: "x" } }), base);
   assert.equal(links.repo, "x");
   assert.equal(links.donation, "d");
+  assert.equal(links.marketplace, "m");
+  assert.equal(links.wallpapersReleases, "w");
   assert.deepEqual(Model.parseLinks("nope", base), base);
 });
 

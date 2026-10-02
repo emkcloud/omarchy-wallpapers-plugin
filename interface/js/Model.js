@@ -743,6 +743,8 @@ function parseLinks(raw, fallback) {
       donation: cfg.links.donation || base.donation,
       issues: cfg.links.issues || base.issues,
       releases: cfg.links.releases || base.releases,
+      marketplace: cfg.links.marketplace || base.marketplace,
+      wallpapersReleases: cfg.links.wallpapersReleases || base.wallpapersReleases,
       database: cfg.links.database || base.database || ""
     }
   } catch (e) {

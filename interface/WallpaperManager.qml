@@ -58,6 +58,8 @@ Item {
     donation: "https://github.com/sponsors/emkcloud",
     issues: "https://github.com/emkcloud/omarchy-wallpapers-plugin/issues",
     releases: "https://github.com/emkcloud/omarchy-wallpapers-plugin/releases",
+    marketplace: "https://plugins.omarchy.org/plugin.html?id=emkcloud.wallpaper-manager",
+    wallpapersReleases: "https://github.com/emkcloud/omarchy-wallpapers/releases",
     database: ""
   })
 
@@ -161,17 +163,13 @@ Item {
   }
 
   // Plugin repository, opened by the GitHub button in the hero actions.
-  readonly property string pluginRepoUrl: pluginLinks.repo
-    ? String(pluginLinks.repo) : "https://github.com/emkcloud/omarchy-wallpapers-plugin"
+  readonly property string pluginRepoUrl: String(pluginLinks.repo || "")
 
-  // Plugin release history, opened from Setup's Changelog row.
-  readonly property string pluginReleasesUrl: pluginLinks.releases
-    ? String(pluginLinks.releases)
-    : "https://github.com/emkcloud/omarchy-wallpapers-plugin/releases"
-
-  // Wallpapers collection release history, opened from Setup's Changelog CDN row.
-  readonly property string wallpapersReleasesUrl:
-    "https://github.com/emkcloud/omarchy-wallpapers/releases"
+  // Links resolved from config.json `links`, like the hero actions.
+  readonly property string pluginReleasesUrl: String(pluginLinks.releases || "")
+  readonly property string pluginIssuesUrl: String(pluginLinks.issues || "")
+  readonly property string wallpapersReleasesUrl: String(pluginLinks.wallpapersReleases || "")
+  readonly property string marketplaceUrl: String(pluginLinks.marketplace || "")
 
   // Setup screen settings: persisted per plugin id under the user config, so
   // the official and developer installs never share them. `pluginId` is known
@@ -370,12 +368,6 @@ Item {
     var parts = String(pluginBase).replace(/\/+$/, "").split("/")
     return parts.length > 0 ? parts[parts.length - 1] : ""
   }
-  // Official Omarchy plugin marketplace page, opened from Setup's Security row.
-  // The official id is used even for the developer install, which shares the
-  // same listing.
-  readonly property string marketplaceUrl:
-    "https://plugins.omarchy.org/plugin.html?id=emkcloud.wallpaper-manager"
-
   // Update check shown in Setup's "Check for updates" row: "idle" until run,
   // then "checking", "uptodate", "available" or "error". Omarchy installs the
   // update itself, so the plugin only reports the result.
@@ -387,6 +379,13 @@ Item {
     updateCheckState = "checking"
     updateRemoteVersion = ""
     remoteVersionProc.running = true
+  }
+
+  // Open a URL in the browser and hide the overlay, like the hero actions.
+  function openExternalUrl(url) {
+    if (!url) return
+    Qt.openUrlExternally(String(url))
+    close()
   }
   readonly property string versionedName: pluginVersion !== ""
     ? "Wallpaper manager " + pluginVersion
@@ -516,6 +515,9 @@ Item {
     id: settings
     settingsPath: root.settingsPath
     settingsDir: root.settingsDir
+    // The keyboard path (Setup → Rotate now) goes through the Settings signal;
+    // the on-screen button emits the view's own signal.
+    onRotateRequested: root.rotateWallpaper()
   }
 
   // Content width used to derive the side panes. The card width and its
@@ -1652,19 +1654,47 @@ Item {
       Qt.callLater(function() { scrollToList(root.selectedIndex, ListView.Contain) })
   }
 
-  // Help screen: opened from the hero Help button on any screen (or `?` on the
-  // themes list). Esc / Back returns to where it was opened from; the topic
-  // cursor lives in HelpView.
-  property string helpReturnView: "themes"
-  // Setup screen: opened with `s` on any screen (or the hero Setup / footer
-  // buttons). It is a leaf like Help, so Esc / Back retraces the origin.
-  property string setupReturnView: "themes"
+  // Leaf screens (Help / Setup) open from any screen and Esc / Back retraces
+  // every step. A stack, not a single "return view": two single properties could
+  // point at each other (Help opened from Setup and Setup opened from Help) and
+  // loop Esc forever. Each leaf records where it came from.
+  property var leafReturnStack: []
+
+  function pushLeafReturn() {
+    // A leaf opened from a base screen starts a fresh path; opened from the
+    // sibling leaf it extends the current one.
+    leafReturnStack = (view === "help" || view === "setup")
+      ? leafReturnStack.concat([view])
+      : [view]
+  }
+
+  function popLeafReturn() {
+    var stack = leafReturnStack
+    var target = stack.length > 0 ? stack[stack.length - 1] : "themes"
+    leafReturnStack = stack.slice(0, Math.max(0, stack.length - 1))
+    return target
+  }
+
+  // Go to a retraced view, with the cursor handling the leaves used to inline
+  // (themes keeps the cursor, wallpapers re-scrolls to it).
+  function applyLeafReturn(target) {
+    cursorActive = true
+    setStatus("")
+    if (target === "themes") {
+      view = "themes"
+      selectedIndex = Math.max(0, Math.min(activeThemesModel.count - 1, selectedIndex))
+      if (activeThemesModel.count > 0)
+        Qt.callLater(function() { scrollToList(root.selectedIndex, ListView.Contain) })
+      return
+    }
+    view = target
+    if (target === "wallpapers")
+      Qt.callLater(function() { scrollToGrid(root.selectedIndex, GridView.Contain) })
+  }
 
   function openHelp() {
     if (view === "help") return
-    // Back always retraces the origin screen (themes, wallpapers, preview,
-    // custom install or setup).
-    helpReturnView = view
+    pushLeafReturn()
     view = "help"
     cursorActive = true
     setStatus("")
@@ -1685,31 +1715,14 @@ Item {
   }
 
   function closeHelp() {
-    var target = helpReturnView
-    if (target === "themes") {
-      // Coming back from the themes list: keep the cursor exactly where it was
-      // (not `lastThemeIndex`, which is the last theme that was *opened*).
-      view = "themes"
-      cursorActive = true
-      selectedIndex = Math.max(0, Math.min(activeThemesModel.count - 1, selectedIndex))
-      setStatus("")
-      if (activeThemesModel.count > 0)
-        Qt.callLater(function() { scrollToList(root.selectedIndex, ListView.Contain) })
-      return
-    }
-    view = target
-    cursorActive = true
-    setStatus("")
-    if (target === "wallpapers")
-      Qt.callLater(function() { scrollToGrid(root.selectedIndex, GridView.Contain) })
+    applyLeafReturn(popLeafReturn())
   }
 
   // Setup screen: a placeholder screen like Help but empty. Reached with `s`
   // on any screen or from the setup buttons; Esc / Back returns to the origin.
   function openSetup() {
     if (view === "setup") return
-    // Back retraces whatever screen opened it (custom install included).
-    setupReturnView = view
+    pushLeafReturn()
     view = "setup"
     cursorActive = true
     setStatus("")
@@ -1717,11 +1730,7 @@ Item {
 
   function closeSetup() {
     settings.commitSetupEdit()
-    view = setupReturnView
-    cursorActive = true
-    setStatus("")
-    if (setupReturnView === "wallpapers")
-      Qt.callLater(function() { scrollToGrid(root.selectedIndex, GridView.Contain) })
+    applyLeafReturn(popLeafReturn())
   }
 
   // Open Setup on the Download section: the storage-limit banner links here.
@@ -1733,11 +1742,13 @@ Item {
   // Hero "Wallpaper manager" button on Help: jump straight to the theme list
   // from anywhere in the guide (unlike closeHelp, which retraces the origin).
   function showThemes() {
+    var origin = leafReturnStack.length > 0 ? leafReturnStack[0] : "themes"
+    leafReturnStack = []
     view = "themes"
     cursorActive = true
     themeFocus = -1
     selectedIndex = Math.max(0, Math.min(activeThemesModel.count - 1,
-      helpReturnView === "themes" ? selectedIndex : lastThemeIndex))
+      origin === "themes" ? selectedIndex : lastThemeIndex))
     setStatus("")
     if (activeThemesModel.count > 0)
       Qt.callLater(function() { scrollToList(root.selectedIndex, ListView.Contain) })
@@ -1874,13 +1885,22 @@ Item {
   function setupActivateCursor() {
     // Interval time is a dropdown: open its real list, exactly like a click.
     if (settings.setupNavArea !== "content") return
-    if (settings.setupNavRows[settings.setupContentRow] === "interval") {
+    var row = settings.setupNavRows[settings.setupContentRow]
+    if (row === "interval") {
       if (settings.activateSetupCursor) settings.activateSetupCursor()
       return
     }
     if (settings.setupEditing) { settings.commitSetupEdit(); return }
-    if (settings.setupAdjustableRows.indexOf(settings.setupNavRows[settings.setupContentRow]) >= 0) {
+    if (settings.setupAdjustableRows.indexOf(row) >= 0) {
       settings.startSetupEdit(); return
+    }
+    // The Updates rows are plain panel-owned actions.
+    if (settings.setupSection === "version") {
+      if (row === "changelog") { openExternalUrl(root.pluginReleasesUrl); return }
+      if (row === "cdnChangelog") { openExternalUrl(root.wallpapersReleasesUrl); return }
+      if (row === "security") { openExternalUrl(root.marketplaceUrl); return }
+      if (row === "proposeFeature") { openExternalUrl(root.pluginIssuesUrl); return }
+      if (row === "checkVersion") { checkForUpdates(); return }
     }
     settings.activateSetupRow()
   }
@@ -3645,6 +3665,10 @@ Item {
           anchors.left: parent.left
           anchors.right: parent.right
           anchors.bottom: actionFooter.top
+          // Custom Install's previews are full-bleed: pull the loader itself
+          // (not the loaded item) so the grid reaches the card's left border.
+          // The view compensates its pane split for this inset (see leftBleed).
+          anchors.leftMargin: root.view === "custom" ? -card.leftPadding : 0
           sourceComponent: root.view === "themes" ? themesComponent
             : root.view === "custom" ? customComponent
             : root.view === "help" ? helpComponent
@@ -3692,9 +3716,9 @@ Item {
 
           CustomInstallView {
             manager: root
-            // Full-bleed on the left: cancel the card padding so the previews
-            // grid starts right after the border.
-            anchors.leftMargin: -card.leftPadding
+            // The loader is pulled left by the card padding, so the view
+            // compensates its pane split to keep the right side in place.
+            leftBleed: card.leftPadding
           }
         }
 
@@ -3742,6 +3766,7 @@ Item {
             securityUrl: root.marketplaceUrl
             changelogUrl: root.pluginReleasesUrl
             cdnChangelogUrl: root.wallpapersReleasesUrl
+            issuesUrl: root.pluginIssuesUrl
             updateState: root.updateCheckState
             updateRemoteVersion: root.updateRemoteVersion
             roadmap: root.roadmapData
@@ -3759,24 +3784,10 @@ Item {
               }
             }
             onRotateRequested: root.rotateWallpaper()
-            onSecurityRequested: {
-              if (root.marketplaceUrl !== "") {
-                Qt.openUrlExternally(root.marketplaceUrl)
-                root.close()
-              }
-            }
-            onChangelogRequested: {
-              if (root.pluginReleasesUrl !== "") {
-                Qt.openUrlExternally(root.pluginReleasesUrl)
-                root.close()
-              }
-            }
-            onCdnChangelogRequested: {
-              if (root.wallpapersReleasesUrl !== "") {
-                Qt.openUrlExternally(root.wallpapersReleasesUrl)
-                root.close()
-              }
-            }
+            onSecurityRequested: root.openExternalUrl(root.marketplaceUrl)
+            onChangelogRequested: root.openExternalUrl(root.pluginReleasesUrl)
+            onCdnChangelogRequested: root.openExternalUrl(root.wallpapersReleasesUrl)
+            onProposeFeatureRequested: root.openExternalUrl(root.pluginIssuesUrl)
             onCheckRequested: root.checkForUpdates()
             // The interval popup lives in the view; wire it into the shared
             // keyboard state while the screen is mounted.

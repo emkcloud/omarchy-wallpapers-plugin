@@ -41,6 +41,8 @@ Item {
   signal changelogRequested()
   // "Changelog CDN": the panel opens the wallpapers releases page.
   signal cdnChangelogRequested()
+  // "Propose feature": the panel opens the issue tracker.
+  signal proposeFeatureRequested()
 
   readonly property color dim: Qt.darker(foreground, 1.4)
   readonly property int gutter: Style.space(28)
@@ -64,6 +66,8 @@ Item {
   property string changelogUrl: ""
   // Injected by the panel: wallpapers releases page for the Changelog CDN row.
   property string cdnChangelogUrl: ""
+  // Injected by the panel: issue tracker for the Propose feature row.
+  property string issuesUrl: ""
   // Injected by the panel: result of the last update check ("idle", "checking",
   // "uptodate", "available" or "error") and the version found on main.
   property string updateState: "idle"
@@ -1223,6 +1227,51 @@ Item {
 
         Item {
           width: parent.width
+          height: Math.max(proposeText.height, proposeButton.height)
+
+          Column {
+            id: proposeText
+
+            anchors.left: parent.left
+            anchors.right: proposeButton.left
+            anchors.rightMargin: Style.space(16)
+            anchors.top: parent.top
+            spacing: Style.space(7)
+
+            Text {
+              width: parent.width
+              textFormat: Text.PlainText
+              text: "Propose feature"
+              color: settings.isSetupRowFocused("version", 3) ? setup.accent : setup.foreground
+              Behavior on color { ColorAnimation { duration: 140; easing.type: Easing.OutCubic } }
+              font.family: setup.fontFamily
+              font.pixelSize: Style.font.subtitle
+              font.capitalization: Font.AllUppercase
+            }
+
+            FieldHint {
+              text: "Help us improve the plugin: report a bug or suggest a feature. Open an issue on our GitHub tracker; all feedback is welcome."
+            }
+          }
+
+          Button {
+            id: proposeButton
+
+            anchors.right: parent.right
+            anchors.top: parent.top
+            width: Style.space(120)
+            text: "Open page"
+            iconText: "\uf08e"
+            bordered: true
+            foreground: setup.foreground
+            accent: setup.accent
+            fontFamily: setup.fontFamily
+            onClicked: setup.proposeFeatureRequested()
+          }
+        }
+
+        Item {
+          width: parent.width
           height: Math.max(checkVersionText.height, checkNowButton.height)
 
           Column {
@@ -1238,7 +1287,7 @@ Item {
               width: parent.width
               textFormat: Text.PlainText
               text: "Check for updates"
-              color: settings.isSetupRowFocused("version", 3) ? setup.accent : setup.foreground
+              color: settings.isSetupRowFocused("version", 4) ? setup.accent : setup.foreground
               Behavior on color { ColorAnimation { duration: 140; easing.type: Easing.OutCubic } }
               font.family: setup.fontFamily
               font.pixelSize: Style.font.subtitle
