@@ -78,3 +78,5 @@ gh release view <version> --json body -q .body
 - [ ] Tag created and pushed.
 - [ ] Release notes in the house style, one line per bullet.
 - [ ] `gh release list` shows it as **Latest**.
+- [ ] Marketplace: the release is not accepted until a verification issue
+      passes — run the pre-submission checklist in `docs/PUBLISHING.md` first.

@@ -431,3 +431,6 @@ https://github.com/emkcloud/omarchy-wallpapers-plugin.git --enable --yes`. Keep
 - **Plugin release**: bump `version` in `manifest.json`, commit, `git tag -a
   <version>`, push the tag. The manifest `version` and the tag carry the same
   number. Do not confuse this with `base`.
+- **Marketplace acceptance**: a release is not published until a verification
+  issue passes; see `docs/PUBLISHING.md` for the flow and the pre-submission
+  security checklist.
