@@ -142,7 +142,7 @@ Commands:
   random-install <theme> [count]    Install <count> (default 5) random wallpapers
   remove <theme> [selector...]      Remove all wallpapers, or every one matching a selector
   remove <theme> --collection <name>   Remove one collection
-  set-default <theme> <filename> <url>  Download if needed + set as current background
+  set-default <theme> <filename> <url> [--installed-only]  Download if needed + set as current background (--installed-only: skip when the file is not already on disk)
   unset-default <theme> <filename>  Clear it as background, back to the theme default
   random-default <theme>            Set a random wallpaper of the theme as current background
   rotate [--all] [--random]         Set the next wallpaper of the current theme (--all: include theme backgrounds; --random: shuffled, no repeats until every one is shown)
@@ -807,6 +807,15 @@ cmd_remove() {
 
 cmd_set_default() {
   local theme="$1" filename="$2" url="$3"
+  shift 3
+  # `--installed-only` is used when the plugin re-applies a remembered per-theme
+  # default after an Omarchy theme switch. Such a default was chosen on another
+  # theme, so the file must already be on disk: never download one the user did
+  # not install for this theme (a theme with nothing installed must stay empty).
+  local installed_only=0 arg
+  for arg in "$@"; do
+    [[ $arg == --installed-only ]] && installed_only=1
+  done
   require_safe_theme "$theme" || return 1
   if ! is_allowed_image "$filename"; then
     echo "Refusing '$filename': not an allowed image (webp/jpg/jpeg/png)." >&2
@@ -828,6 +837,12 @@ cmd_set_default() {
   fi
   local path="$DEST_BASE/$theme/$filename"
   if [[ ! -f $path ]]; then
+    if (( installed_only )); then
+      # Exit 3 is distinct from a hard failure: the caller drops the remembered
+      # default for this theme instead of downloading it.
+      echo "Default for '$theme' is not installed; dropping it." >&2
+      return 3
+    fi
     mkdir -p "$DEST_BASE/$theme"
     if ! is_remote_url "$url"; then
       echo "Refusing '$filename': unsafe URL." >&2

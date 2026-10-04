@@ -27,8 +27,8 @@ for **Favorites**. Caps from Setup apply.
 
 ## Default wallpaper switch
 
-**Set a random wallpaper as default when done** picks a random theme wallpaper
-once the install finishes and makes it the default. It is on by default and
+**Set a random wallpaper as default when done** picks one of the wallpapers the
+install just put on disk and makes it the default. It is on by default and
 saved with the other settings. `Tab` moves between the cards and the switch.
 
 ## Browse

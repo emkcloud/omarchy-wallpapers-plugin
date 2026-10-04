@@ -49,10 +49,14 @@ Item {
   // when an install launched from there finishes.
   property bool randomDefaultOnInstall: true
 
-  // Per-theme remembered default wallpaper: `<theme> -> { filename, url }`.
-  // Not a row in the UI, but persisted with the other settings so a default
-  // chosen while browsing another theme survives restarts. `themeDefaultsRevision`
-  // makes the plain object a tracked dependency for the DEFAULT markers.
+  // Per-theme remembered default wallpaper: `<theme> -> { filename, path }`.
+  // `path` is the image path relative to the CDN base, WITHOUT the version
+  // segment (e.g. `images/catppuccin/countries/omarchy-....webp`): the current
+  // base is prepended when the default is applied, so a snapshot bump never
+  // invalidates a remembered default. Not a row in the UI, but persisted with
+  // the other settings so a default chosen while browsing another theme
+  // survives restarts. `themeDefaultsRevision` makes the plain object a tracked
+  // dependency for the DEFAULT markers.
   property var themeDefaults: ({})
   property int themeDefaultsRevision: 0
 
@@ -295,17 +299,29 @@ Item {
       if (v && typeof v === "object" && typeof v.filename === "string" && v.filename !== "")
         out[String(k)] = {
           filename: String(v.filename),
-          url: typeof v.url === "string" ? v.url : ""
+          path: themeDefaultPath(v)
         }
     }
     return out
   }
 
-  function setThemeDefault(theme, filename, url) {
+  // Normalise a stored default to a base-relative image path. Accepts the new
+  // `path` field, or migrates an older absolute `url` by dropping the
+  // `/wallpapers/<version>/` segment, so a version bump never loses a default.
+  function themeDefaultPath(v) {
+    var raw = ""
+    if (v && typeof v.path === "string" && v.path !== "") raw = v.path
+    else if (v && typeof v.url === "string") raw = v.url
+    var m = String(raw).match(/\/wallpapers\/[^/]+\/(.*)$/)
+    if (m) return m[1]
+    return String(raw).replace(/^\/+/, "")
+  }
+
+  function setThemeDefault(theme, filename, path) {
     if (!settingsLoaded || !theme || !filename) return
     var next = {}
     for (var k in themeDefaults) next[k] = themeDefaults[k]
-    next[String(theme)] = { filename: String(filename), url: String(url || "") }
+    next[String(theme)] = { filename: String(filename), path: String(path || "") }
     themeDefaults = next
     themeDefaultsRevision++
     scheduleSave()

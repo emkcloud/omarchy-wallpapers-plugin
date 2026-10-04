@@ -18,6 +18,10 @@ Item {
   required property var manager
   // Mirrors the Setup screen's shuffle count, used by the bulk Shuffle action.
   property int shuffleCount: 5
+  // Content padding the loader is pulled past on the right so the detail image
+  // reaches the card border. Subtracted from the master width so the list and
+  // its divider keep the same position as the Help/Setup sidebars.
+  property real rightBleed: 0
 
   // Width of the master pane: the Help/Setup sidebars and the footer dividers
   // reuse it so every vertical rule lines up.
@@ -37,7 +41,7 @@ Item {
       id: themeListPane
 
       width: Math.max(Style.space(210),
-        Math.floor((themesRow.width - themesRow.spacing) * 0.26))
+        Math.floor((themesRow.width - themesRow.spacing - themesView.rightBleed) * 0.26))
       height: parent.height
 
       SearchField {
@@ -162,8 +166,11 @@ Item {
                 if (manager.busy && manager.actionTheme === themeRow.model.name)
                   return manager.statusInstalling
                 var state = Model.themeState(themeRow.model)
-                if (state === "installed") return manager.statusInstalled
-                if (state === "partial") return manager.statusInstalling
+                // A theme in use (fully or partially installed) gets a solid
+                // accent dot; only an unused theme is dimmed, so the two never
+                // read the same on a low-contrast accent.
+                if (state === "installed" || state === "partial")
+                  return manager.statusInstalled
                 return Util.alpha(manager.foreground, 0.25)
               }
             }

@@ -1479,7 +1479,17 @@ Item {
   // default on another theme never replaces the current desktop background.
   function applyCustomRandomDefault(theme) {
     if (theme === "" || customCatalogItems.length === 0) return
-    var item = customCatalogItems[Math.floor(Math.random() * customCatalogItems.length)]
+    // Pick among the wallpapers already installed for this theme, not the whole
+    // catalogue: the closing default must be a file the install just put on
+    // disk. Picking from the full catalogue could download an extra wallpaper
+    // the user never asked for, which then showed up as the installed count
+    // climbing by one only after a reopen.
+    var installed = []
+    for (var i = 0; i < customCatalogItems.length; i++) {
+      if (String(customCatalogItems[i].installed) === "1") installed.push(customCatalogItems[i])
+    }
+    if (installed.length === 0) return
+    var item = installed[Math.floor(Math.random() * installed.length)]
     if (!item) return
     // Closing step: the overlay reads "Finalizing…", never "Downloading 1…".
     customFinalStep = true
@@ -1489,7 +1499,7 @@ Item {
       runAction(["set-default", theme, item.filename, item.url])
       return
     }
-    settings.setThemeDefault(theme, item.filename, item.url)
+    settings.setThemeDefault(theme, item.filename, imageRelativePath(item.url))
     if (String(item.installed) !== "1") {
       busy = true
       setStatus("Installing " + item.name + "…")
@@ -2151,11 +2161,13 @@ Item {
         openHelp()
         return
       }
-      // Same rule as the buttons: no bulk task while one is running.
+      // Same rule as the buttons: no bulk task while one is running, and the
+      // letter keys honour the same enabled gate as the button they mirror, so
+      // `u` on a theme with nothing installed is a no-op like the greyed button.
       if (actionRunning) return
-      if (themeAction === "install") actionInstallTheme()
-      else if (themeAction === "uninstall") actionRemoveThemeAll()
-      else if (themeAction === "shuffle") actionRandomInstall()
+      if (themeAction === "install" && themeActionEnabled("install")) actionInstallTheme()
+      else if (themeAction === "uninstall" && themeActionEnabled("uninstall")) actionRemoveThemeAll()
+      else if (themeAction === "shuffle" && themeActionEnabled("shuffle")) actionRandomInstall()
       else if (themeAction === "refresh") refresh()
       return
     }
@@ -2468,7 +2480,7 @@ Item {
         setStatus("Clearing default: " + item.name + "…")
         runAction(["unset-default", themeName, item.filename])
       } else {
-        settings.setThemeDefault(themeName, item.filename, item.url)
+        settings.setThemeDefault(themeName, item.filename, imageRelativePath(item.url))
         setStatus("Setting default: " + item.name + "…")
         runAction(["set-default", themeName, item.filename, item.url])
       }
@@ -2482,7 +2494,7 @@ Item {
       setStatus("Default cleared for " + Model.ucfirst(themeName))
       return
     }
-    settings.setThemeDefault(themeName, item.filename, item.url)
+    settings.setThemeDefault(themeName, item.filename, imageRelativePath(item.url))
     if (String(item.installed) !== "1") {
       busy = true
       setStatus("Installing " + item.name + "…")
@@ -2566,7 +2578,9 @@ Item {
   // ---- per-theme default apply on switch ------------------------------------
   // `omarchy-theme-set` writes `theme.name` *before* it picks the new theme's
   // background, so wait for the switch to settle, then apply the default the
-  // user remembered for the newly active theme (downloading it if needed).
+  // user remembered for the newly active theme. Only when that file is already
+  // installed: a theme with nothing installed must stay empty instead of
+  // downloading a wallpaper on its own.
   property string pendingThemeDefaultTheme: ""
 
   function scheduleThemeDefaultApply(theme) {
@@ -2574,9 +2588,37 @@ Item {
     themeDefaultApplyTimer.restart()
   }
 
+  // Strip the current CDN base (or a `/wallpapers/<version>/` segment from an
+  // older snapshot) off an image URL, leaving the base-relative path. That path
+  // is what `themeDefaults` stores, so a version bump keeps the entry valid.
+  function imageRelativePath(url) {
+    var s = String(url || "")
+    if (s === "") return ""
+    var base = String(pluginBase || "").replace(/\/+$/, "")
+    if (base !== "" && s.indexOf(base + "/") === 0)
+      return s.slice(base.length + 1)
+    var m = s.match(/\/wallpapers\/[^/]+\/(.*)$/)
+    if (m) return m[1]
+    return ""
+  }
+
+  // Rebuild an absolute image URL from a stored base-relative path.
+  function themeDefaultUrl(path) {
+    var p = String(path || "").replace(/^\/+/, "")
+    var base = String(pluginBase || "").replace(/\/+$/, "")
+    if (p === "" || base === "") return ""
+    return base + "/" + p
+  }
+
   function applyThemeDefault(theme) {
     var d = settings.themeDefault(theme)
     if (!d || !d.filename) return
+    // A default with no usable path can never be resolved: drop the entry.
+    var url = themeDefaultUrl(d.path)
+    if (url === "") {
+      settings.clearThemeDefault(theme)
+      return
+    }
     if (themeDefaultProc.running) {
       pendingThemeDefaultTheme = theme
       themeDefaultApplyTimer.restart()
@@ -2584,7 +2626,12 @@ Item {
     }
     themeDefaultProc.applyTheme = theme
     themeDefaultProc.applyFilename = d.filename
-    themeDefaultProc.command = scriptCmd(["set-default", theme, d.filename, d.url])
+    // `--installed-only`: a remembered default applies only when its file is
+    // already installed for the theme. Switching to a theme with nothing
+    // installed must never download a wallpaper on its own; the script exits 3
+    // and `onExited` drops the now-dead entry.
+    themeDefaultProc.command = scriptCmd(["set-default", theme, d.filename, url,
+      "--installed-only"])
     themeDefaultProc.running = true
   }
 
@@ -2599,7 +2646,13 @@ Item {
     id: themeDefaultProc
     property string applyTheme: ""
     property string applyFilename: ""
-    onExited: {
+    onExited: function(exitCode) {
+      // The remembered default points to a wallpaper no longer installed: it is
+      // dead weight, so remove it for that theme instead of downloading it.
+      if (exitCode === 3) {
+        settings.clearThemeDefault(themeDefaultProc.applyTheme)
+        return
+      }
       root.loadLimits()
       // A per-theme default may have just downloaded a file: drop that theme's
       // cached parse so the next Custom Install open reads fresh flags.
@@ -3665,10 +3718,13 @@ Item {
           anchors.left: parent.left
           anchors.right: parent.right
           anchors.bottom: actionFooter.top
-          // Custom Install's previews are full-bleed: pull the loader itself
-          // (not the loaded item) so the grid reaches the card's left border.
-          // The view compensates its pane split for this inset (see leftBleed).
+          // Custom Install's previews are full-bleed on the left and the themes
+          // detail image on the right: pull the loader itself (not the loaded
+          // item, which the Loader resizes, so its own anchors are ignored) so
+          // each reaches the card border. The views compensate their pane split
+          // for the bleed (see leftBleed / rightBleed).
           anchors.leftMargin: root.view === "custom" ? -card.leftPadding : 0
+          anchors.rightMargin: root.view === "themes" ? -card.rightPadding : 0
           sourceComponent: root.view === "themes" ? themesComponent
             : root.view === "custom" ? customComponent
             : root.view === "help" ? helpComponent
@@ -3705,9 +3761,10 @@ Item {
           ThemeSelectionView {
             manager: root
             shuffleCount: settings.shuffleCount
-            // Full-bleed on the right: cancel the content padding so the detail
-            // image touches the border (the master list keeps its own margins).
-            anchors.rightMargin: -card.rightPadding
+            // Full-bleed on the right: the loader is pulled past the content
+            // padding (above); the view compensates its pane split so the
+            // master list and its divider keep their margins.
+            rightBleed: card.rightPadding
           }
         }
 
