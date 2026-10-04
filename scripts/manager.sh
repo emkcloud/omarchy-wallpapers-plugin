@@ -146,6 +146,7 @@ Commands:
   unset-default <theme> <filename>  Clear it as background, back to the theme default
   random-default <theme>            Set a random wallpaper of the theme as current background
   rotate [--all] [--random]         Set the next wallpaper of the current theme (--all: include theme backgrounds; --random: shuffled, no repeats until every one is shown)
+  resume <theme> [filename]         Re-apply the theme's last wallpaper without advancing (fallback: the stored default, if installed)
   image <url>                       Print the local cache path of an image, downloading it if missing
   prewarm <url>...                  Warm the image cache in the background (best-effort)
   download <url> <dest-dir>         Copy the original wallpaper into a folder, print the saved path
@@ -378,7 +379,7 @@ reset_dangling_background() {
   omarchy-theme-bg-set "$fallback" >/dev/null 2>&1 || true
   # Keep the rotation cursor on what the fallback put up.
   rtheme="$(cat "$HOME/.local/state/omarchy/current/theme.name" 2>/dev/null || true)"
-  [[ -n $rtheme ]] && rotation_set --arg t "$rtheme" --arg f "$fallback" '.sequential[$t] = $f'
+  [[ -n $rtheme ]] && rotation_set --arg t "$rtheme" --arg f "$fallback" '.sequential[$t] = $f | .last[$t] = $f'
 }
 
 # Extensions a wallpaper file may carry. The collection is JSON-driven, so a
@@ -853,7 +854,7 @@ cmd_set_default() {
   omarchy-theme-bg-set "$path"
   # The cursor follows the manual choice: the next sequential rotate resumes
   # from here instead of the file rotation had set before.
-  rotation_set --arg t "$theme" --arg f "$path" '.sequential[$t] = $f'
+  rotation_set --arg t "$theme" --arg f "$path" '.sequential[$t] = $f | .last[$t] = $f'
   # A downloaded default is a new file the native picker has to thumbnail.
   warm_thumbnails "$DEST_BASE/$theme"
 }
@@ -876,7 +877,7 @@ cmd_unset_default() {
   done
   [[ -n $fallback ]] || return 1
   omarchy-theme-bg-set "$fallback" >/dev/null 2>&1 || true
-  rotation_set --arg t "$theme" --arg f "$fallback" '.sequential[$t] = $f'
+  rotation_set --arg t "$theme" --arg f "$fallback" '.sequential[$t] = $f | .last[$t] = $f'
 }
 
 # Pick a random wallpaper of a theme (no selector) and set it as the current
@@ -1164,7 +1165,8 @@ cmd_rotate() {
     used+=("$choice")
     local used_json
     used_json="$(printf '%s\n' "${used[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')"
-    rotation_write --arg t "$theme" --argjson used "$used_json" '.randomUsed[$t] = $used'
+    rotation_write --arg t "$theme" --arg f "$choice" --argjson used "$used_json" \
+      '.randomUsed[$t] = $used | .last[$t] = $f'
   else
     # Resume from the file rotation last set for this theme; fall back to the
     # live background (first run, or state cleared), else the first file.
@@ -1181,7 +1183,7 @@ cmd_rotate() {
     else
       choice="${sorted[$(( (index + 1) % total ))]}"
     fi
-    rotation_write --arg t "$theme" --arg f "$choice" '.sequential[$t] = $f'
+    rotation_write --arg t "$theme" --arg f "$choice" '.sequential[$t] = $f | .last[$t] = $f'
   fi
   exec 8>&-
 
@@ -1190,6 +1192,38 @@ cmd_rotate() {
     echo "Failed to set background: $choice" >&2
     return 1
   }
+}
+
+# Re-apply, without advancing the rotation cursor, the wallpaper a theme had the
+# last time it was shown (rotation state `.last`, falling back to `.sequential`
+# then the last random pick). Used on an Omarchy theme switch so the new theme
+# resumes where it left off instead of Omarchy's own "first background" choice.
+# When the theme has no remembered wallpaper, fall back to the stored per-theme
+# default, but only if its file is already installed; exit 3 then tells the
+# caller to drop that dead default. Prints `ROTATE<TAB><path>` on success.
+cmd_resume() {
+  local theme="$1" fallback_filename="${2:-}"
+  require_safe_theme "$theme" || return 1
+  local state path cand
+  state="$(rotation_read)"
+  path="$(jq -r --arg t "$theme" '
+    ((.last // {})[$t])
+    // ((.sequential // {})[$t])
+    // (((.randomUsed // {})[$t] // []) | last)
+    // empty
+  ' <<<"$state" 2>/dev/null || true)"
+  if [[ -n $path && -f $path ]]; then
+    printf 'ROTATE\t%s\n' "$path"
+    omarchy-theme-bg-set "$path" >/dev/null 2>&1 || return 1
+    return 0
+  fi
+  [[ -n $fallback_filename ]] || return 1
+  is_safe_filename "$fallback_filename" || return 1
+  is_allowed_image "$fallback_filename" || return 1
+  cand="$DEST_BASE/$theme/$fallback_filename"
+  [[ -f $cand ]] || return 3
+  printf 'ROTATE\t%s\n' "$cand"
+  omarchy-theme-bg-set "$cand" >/dev/null 2>&1 || return 1
 }
 
 # Print the plugin version published on the repo's main branch, so the Setup
@@ -1222,6 +1256,7 @@ case "$command" in
   unset-default) cmd_unset_default "$@" ;;
   random-default) cmd_random_default "$@" ;;
   rotate) cmd_rotate "$@" ;;
+  resume) cmd_resume "$@" ;;
   image) cmd_image "$@" ;;
   prewarm) cmd_prewarm "$@" ;;
   download) cmd_download "$@" ;;

@@ -2575,11 +2575,21 @@ Item {
     rotationProc.running = true
   }
 
-  // ---- per-theme default apply on switch ------------------------------------
+  // Restart the automatic-rotation countdown after a wallpaper is set (a
+  // rotation, or the restore on a theme switch), so the next automatic change
+  // waits a full interval instead of firing right after the manual one.
+  function resetRotationTimer() {
+    if (settings.rotationEnabled) rotationTimer.restart()
+  }
+
+  // ---- restore the wallpaper on an Omarchy theme switch ----------------------
   // `omarchy-theme-set` writes `theme.name` *before* it picks the new theme's
-  // background, so wait for the switch to settle, then apply the default the
-  // user remembered for the newly active theme. Only when that file is already
-  // installed: a theme with nothing installed must stay empty instead of
+  // background, and its own picker falls back to the first file when the current
+  // background does not belong to the new theme. Wait for the switch to settle,
+  // then restore the wallpaper the theme had the last time it was shown (the
+  // script's rotation state), so switching never restarts from the first. The
+  // stored per-theme default is only a fallback, and only when its file is
+  // already installed: a theme with nothing installed must stay empty instead of
   // downloading a wallpaper on its own.
   property string pendingThemeDefaultTheme: ""
 
@@ -2602,36 +2612,20 @@ Item {
     return ""
   }
 
-  // Rebuild an absolute image URL from a stored base-relative path.
-  function themeDefaultUrl(path) {
-    var p = String(path || "").replace(/^\/+/, "")
-    var base = String(pluginBase || "").replace(/\/+$/, "")
-    if (p === "" || base === "") return ""
-    return base + "/" + p
-  }
-
   function applyThemeDefault(theme) {
-    var d = settings.themeDefault(theme)
-    if (!d || !d.filename) return
-    // A default with no usable path can never be resolved: drop the entry.
-    var url = themeDefaultUrl(d.path)
-    if (url === "") {
-      settings.clearThemeDefault(theme)
-      return
-    }
+    if (theme === "") return
     if (themeDefaultProc.running) {
       pendingThemeDefaultTheme = theme
       themeDefaultApplyTimer.restart()
       return
     }
+    // `resume` re-applies the theme's last wallpaper; the stored default is only
+    // a fallback (and is dropped when its file is no longer installed, exit 3).
+    var d = settings.themeDefault(theme)
+    var args = ["resume", theme]
+    if (d && d.filename) args.push(d.filename)
     themeDefaultProc.applyTheme = theme
-    themeDefaultProc.applyFilename = d.filename
-    // `--installed-only`: a remembered default applies only when its file is
-    // already installed for the theme. Switching to a theme with nothing
-    // installed must never download a wallpaper on its own; the script exits 3
-    // and `onExited` drops the now-dead entry.
-    themeDefaultProc.command = scriptCmd(["set-default", theme, d.filename, url,
-      "--installed-only"])
+    themeDefaultProc.command = scriptCmd(args)
     themeDefaultProc.running = true
   }
 
@@ -2645,26 +2639,38 @@ Item {
   Process {
     id: themeDefaultProc
     property string applyTheme: ""
-    property string applyFilename: ""
+    property string resumedFile: ""
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var line = String(text || "").trim()
+        themeDefaultProc.resumedFile = line.indexOf("ROTATE\t") === 0
+          ? line.substring(7).split("/").pop() : ""
+      }
+    }
     onExited: function(exitCode) {
-      // The remembered default points to a wallpaper no longer installed: it is
-      // dead weight, so remove it for that theme instead of downloading it.
-      if (exitCode === 3) {
+      // A theme switch just set (or left Omarchy's) background: give the next
+      // automatic rotation a full interval from here.
+      root.resetRotationTimer()
+      // Exit 3: the fallback default points to a wallpaper no longer installed,
+      // so drop that dead entry for the theme.
+      if (exitCode === 3 && themeDefaultProc.applyTheme !== "") {
         settings.clearThemeDefault(themeDefaultProc.applyTheme)
         return
       }
       root.loadLimits()
-      // A per-theme default may have just downloaded a file: drop that theme's
-      // cached parse so the next Custom Install open reads fresh flags.
+      // A restored wallpaper may have touched the theme's files: drop its cached
+      // parse so the next Custom Install open reads fresh flags.
       if (themeDefaultProc.applyTheme !== "")
         delete root.customCatalogCache[themeDefaultProc.applyTheme]
-      // The plugin may be open on the theme that just became active: reflect
-      // the applied default (and its installed file) without a full reload.
-      if (root.themeName !== "" && Model.normalizeSlug(root.themeName)
-            === Model.normalizeSlug(themeDefaultProc.applyTheme)) {
-        root.setWallpaperInstalled(themeDefaultProc.applyFilename, "1")
-        root.setWallpaperDefault(themeDefaultProc.applyFilename)
+      // The plugin may be open on the theme that just became active: reflect the
+      // restored wallpaper (and its installed file) without a full reload.
+      if (themeDefaultProc.resumedFile !== "" && root.themeName !== ""
+            && Model.normalizeSlug(root.themeName) === Model.normalizeSlug(themeDefaultProc.applyTheme)) {
+        root.setWallpaperInstalled(themeDefaultProc.resumedFile, "1")
+        root.setWallpaperDefault(themeDefaultProc.resumedFile)
       }
+      themeDefaultProc.resumedFile = ""
     }
   }
 
@@ -3095,6 +3101,9 @@ Item {
   Process {
     id: rotationProc
     onRunningChanged: root.setupSetRotateBusy(running)
+    // The tick is done: start the next interval from here, not from when this
+    // one fired, so a slow rotation never causes a burst of changes.
+    onExited: root.resetRotationTimer()
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
