@@ -5,7 +5,7 @@
 # install/remove/set-default dei wallpaper nel tema Omarchy locale.
 #
 # La base CloudFront (un path versionato, es.
-# https://content.emkcloud.com/wallpapers/1.3.0) viene letta da config.json:
+# https://content.emkcloud.com/wallpapers/1.3.1) viene letta da config.json:
 # da lì si scarica `datasets/datasets.json`, che contiene già tutti gli URL
 # assoluti versionati (cataloghi, preview, immagini). Nessun rebase: cambiare
 # la base in config è sufficiente a passare a una nuova snapshot.
@@ -62,7 +62,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && p
 PLUGIN_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
 CONFIG_FILE="$PLUGIN_ROOT/config/config.json"
-DEFAULT_BASE="https://content.emkcloud.com/wallpapers/1.3.0"
+DEFAULT_BASE="https://content.emkcloud.com/wallpapers/1.3.1"
 DEFAULT_DATASETS="datasets"
 
 BASE="$DEFAULT_BASE"

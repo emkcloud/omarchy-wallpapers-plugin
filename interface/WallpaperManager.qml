@@ -2568,6 +2568,11 @@ Item {
   // it directly too, so it works even with rotation switched off.
   function rotateWallpaper() {
     if (rotationProc.running) return
+    // Restart the countdown up front, so a manual "Rotate now" resets the timer
+    // even if the process is slow or fails. `onExited` resets again once the
+    // wallpaper is actually on screen, so the next change is a full interval
+    // after the image flips.
+    resetRotationTimer()
     var args = ["rotate"]
     if (settings.rotationAllTheme) args.push("--all")
     if (settings.rotationRandom) args.push("--random")
@@ -2576,8 +2581,9 @@ Item {
   }
 
   // Restart the automatic-rotation countdown after a wallpaper is set (a
-  // rotation, or the restore on a theme switch), so the next automatic change
-  // waits a full interval instead of firing right after the manual one.
+  // rotation, the restore on a theme switch, or a manual/random default), so
+  // the next automatic change waits a full interval instead of firing right
+  // after the manual one.
   function resetRotationTimer() {
     if (settings.rotationEnabled) rotationTimer.restart()
   }
@@ -3334,6 +3340,16 @@ Item {
       if (root.actionClearsChecks) {
         root.actionClearsChecks = false
         root.clearWallpaperSelection()
+      }
+      // A default action just set (or cleared) the live background: restart the
+      // rotation countdown so the next automatic change waits a full interval
+      // instead of firing seconds later. Without this the random default that
+      // closes a bulk install was replaced ~10s later, not after a minute.
+      if (!cancelled) {
+        var acted = (root.lastAction && root.lastAction.length > 0)
+          ? String(root.lastAction[0]) : ""
+        if (acted === "set-default" || acted === "unset-default")
+          root.resetRotationTimer()
       }
       root.actionTheme = ""
       root.lastAction = []
