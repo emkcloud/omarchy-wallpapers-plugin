@@ -28,7 +28,7 @@ and installs wallpapers natively into the active theme.
   operation runs.
 - **Search** — a small search engine to filter themes and wallpapers.
 - **Favorites** — star a wallpaper once and install it in any theme, with a
-  dedicated filter and a one-click install card.
+  one-click install card.
 - **Automatic rotation** — cycle the current theme's wallpapers on a schedule.
 - **Theme-aware UI** — colors, borders and rounding follow the active Omarchy
   theme.
@@ -111,8 +111,7 @@ tab-separated records on stdout that the QML parses into list models.
   `sha256`.
 - **Set default** — downloads the file first if needed, then calls
   `omarchy-theme-bg-set`.
-- **Versioned CDN snapshot** — wallpapers come from a versioned CloudFront base,
-  so a snapshot never changes under the user's feet.
+- **Versioned CDN snapshot** — wallpapers come from a versioned CloudFront base.
 - **Caches** — the dataset and the big images are stored in
   `~/.cache/omarchy/<plugin-id>/`.
 
