@@ -702,6 +702,14 @@ Item {
     return theme ? String(theme.themePresent) !== "0" : false
   }
 
+  // Whether the highlighted theme on the themes screen is the currently active
+  // Omarchy theme.
+  readonly property bool selectedThemeIsActive: {
+    var theme = selectedTheme
+    return !!theme && root.activeThemeSlug !== ""
+      && Model.normalizeSlug(theme.name) === Model.normalizeSlug(root.activeThemeSlug)
+  }
+
   // Bulk-action guards: "install all"/"random install" are pointless when every
   // wallpaper is already present, just like "remove all" with nothing on disk.
   readonly property bool selectedThemeFull: {
@@ -780,10 +788,11 @@ Item {
     if (customFinalStep) return "Finalizing…"
     var item = currentItem()
     var cmd = lastAction.length > 0 ? String(lastAction[0]) : ""
+    if (cmd === "apply-theme") return "Applying theme…"
     if (cmd === "remove") return "Removing…"
     if (cmd === "uninstall-default") return "Clearing default…"
     if (cmd === "set-default" && (!item || String(item.installed) === "1"))
-      return "Setting default…"
+      return browsingActiveTheme ? "Setting default…" : "Applying theme…"
     if (item) {
       var size = Model.formatSize(item.sizeBytes)
       return size !== "" ? "Downloading " + size + "…" : "Downloading…"
@@ -1085,7 +1094,7 @@ Item {
   // nothing installed) are skipped so Tab/arrows never land on a dead control.
   readonly property var themeActionKeys: {
     var all = selectedThemePresent
-      ? ["browse", "install", "shuffle", "uninstall", "custom"]
+      ? ["browse", "apply", "install", "shuffle", "uninstall", "custom"]
       : ["browse", "custom"]
     var out = []
     for (var i = 0; i < all.length; i++)
@@ -1096,6 +1105,7 @@ Item {
   function themeActionEnabled(key) {
     if (key === "browse" || key === "custom") return true
     if (!selectedThemePresent || actionRunning) return false
+    if (key === "apply") return !selectedThemeIsActive
     if (key === "install" || key === "shuffle")
       return !selectedThemeFull && !storageLimitReached
     if (key === "uninstall") return !selectedThemeEmpty
@@ -1130,6 +1140,9 @@ Item {
     if (view !== "themes" || themeFocus < 0) return
     switch (themeActionKeyAt(themeFocus)) {
     case "browse": selectTheme(selectedIndex); return
+    case "apply":
+      if (themeActionEnabled("apply")) actionApplyTheme()
+      return
     case "install":
       if (selectedThemePresent && !selectedThemeFull && !storageLimitReached)
         actionInstallTheme()
@@ -1493,22 +1506,12 @@ Item {
     if (!item) return
     // Closing step: the overlay reads "Finalizing…", never "Downloading 1…".
     customFinalStep = true
-    if (customThemeIsActive) {
-      busy = true
-      setStatus("Setting a random default for " + Model.ucfirst(theme) + "…")
-      runAction(["set-default", theme, item.filename, item.url])
-      return
-    }
     settings.setThemeDefault(theme, item.filename, imageRelativePath(item.url))
-    if (String(item.installed) !== "1") {
-      busy = true
-      setStatus("Installing " + item.name + "…")
-      runAction(["install", theme, item.filename])
-    } else {
-      setStatus("Default for " + Model.ucfirst(theme)
-        + " set — applies when you switch to it")
-      customFinalStep = false
-    }
+    busy = true
+    setStatus(customThemeIsActive
+      ? "Setting a random default for " + Model.ucfirst(theme) + "…"
+      : "Applying " + Model.ucfirst(theme) + "…")
+    runAction(["set-default", theme, item.filename, item.url])
   }
 
   // "Select only": leave for the wallpapers grid of the configured theme.
@@ -2165,7 +2168,8 @@ Item {
       // letter keys honour the same enabled gate as the button they mirror, so
       // `u` on a theme with nothing installed is a no-op like the greyed button.
       if (actionRunning) return
-      if (themeAction === "install" && themeActionEnabled("install")) actionInstallTheme()
+      if (themeAction === "apply" && themeActionEnabled("apply")) actionApplyTheme()
+      else if (themeAction === "install" && themeActionEnabled("install")) actionInstallTheme()
       else if (themeAction === "uninstall" && themeActionEnabled("uninstall")) actionRemoveThemeAll()
       else if (themeAction === "shuffle" && themeActionEnabled("shuffle")) actionRandomInstall()
       else if (themeAction === "refresh") refresh()
@@ -2462,47 +2466,39 @@ Item {
   }
 
   // `d` / double click: a switch. Not the default → set it (manager.sh installs
-  // the file first if missing); already the default → clear it back to the
+  // the file first if missing and switches Omarchy to the theme if another theme
+  // is currently running); already the live default → clear it back to the
   // theme's own background.
-  //
-  // On the running Omarchy theme the change is live. On any other theme it is
-  // remembered for that theme and applied when the user switches to it, so
-  // choosing a matte-black default while on tokyo-night never replaces the
-  // current desktop background.
   function actionToggleDefault() {
     if (actionRunning) return
     var item = currentItem()
     if (!item) return
-    if (browsingActiveTheme) {
+    if (browsingActiveTheme && String(item.isDefault) === "1") {
       busy = true
-      if (String(item.isDefault) === "1") {
-        settings.clearThemeDefault(themeName)
-        setStatus("Clearing default: " + item.name + "…")
-        runAction(["unset-default", themeName, item.filename])
-      } else {
-        settings.setThemeDefault(themeName, item.filename, imageRelativePath(item.url))
-        setStatus("Setting default: " + item.name + "…")
-        runAction(["set-default", themeName, item.filename, item.url])
-      }
-      return
-    }
-    // Another theme: remember the choice (making sure the file lands on disk)
-    // and leave the current background untouched.
-    var remembered = settings.themeDefault(themeName)
-    if (remembered && String(remembered.filename) === String(item.filename)) {
       settings.clearThemeDefault(themeName)
-      setStatus("Default cleared for " + Model.ucfirst(themeName))
+      setStatus("Clearing default: " + item.name + "…")
+      runAction(["unset-default", themeName, item.filename])
       return
     }
+    busy = true
     settings.setThemeDefault(themeName, item.filename, imageRelativePath(item.url))
-    if (String(item.installed) !== "1") {
-      busy = true
-      setStatus("Installing " + item.name + "…")
-      runAction(["install", themeName, item.filename])
-    } else {
-      setStatus("Default for " + Model.ucfirst(themeName)
-        + " set — applies when you switch to it")
-    }
+    setStatus(browsingActiveTheme
+      ? "Setting default: " + item.name + "…"
+      : "Applying " + Model.ucfirst(themeName) + "…")
+    runAction(["set-default", themeName, item.filename, item.url])
+  }
+
+  // Switch the active Omarchy theme to the highlighted theme on the themes
+  // screen, using its remembered default or last rotated wallpaper when present.
+  function actionApplyTheme() {
+    var theme = selectedTheme
+    if (!theme || !selectedThemePresent || selectedThemeIsActive) return
+    var d = settings.themeDefault(theme.name)
+    var args = ["apply-theme", theme.name]
+    if (d && d.filename) args.push(d.filename)
+    busy = true
+    setStatus("Applying theme " + Model.ucfirst(theme.name) + "…")
+    runAction(args)
   }
 
   function actionInstallAll() {
@@ -3348,7 +3344,7 @@ Item {
       if (!cancelled) {
         var acted = (root.lastAction && root.lastAction.length > 0)
           ? String(root.lastAction[0]) : ""
-        if (acted === "set-default" || acted === "unset-default")
+        if (acted === "set-default" || acted === "unset-default" || acted === "apply-theme")
           root.resetRotationTimer()
       }
       root.actionTheme = ""
@@ -3485,6 +3481,13 @@ Item {
     id: hoverGate
     interval: 250
     onTriggered: root.hoverArmed = true
+  }
+
+  // Reverts the "Add remote source" COMING SOON badge after 3s.
+  Timer {
+    id: addSourceReset
+    interval: 3000
+    onTriggered: root.addSourceSoon = false
   }
 
   // Automatic rotation tick. `keepLoaded` keeps this overlay mounted from shell

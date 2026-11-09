@@ -310,12 +310,6 @@ Item {
         TapHandler {
           onTapped: manager.triggerAddSource()
         }
-
-        Timer {
-          id: addSourceReset
-          interval: 3000
-          onTriggered: manager.addSourceSoon = false
-        }
       }
 
       // Right rule of the master column, with the content padded off it.
@@ -520,6 +514,28 @@ Item {
                 radius: Style.cornerRadius
                 borderSpec: Border.flat(manager.accent, Math.max(1, Style.normalBorderWidth))
                 visible: manager.themeActionFocused("browse")
+              }
+            }
+
+            Button {
+              visible: manager.selectedThemePresent
+              enabled: !manager.actionRunning && !manager.selectedThemeIsActive
+              opacity: enabled ? 1 : 0.4
+              text: manager.selectedThemeIsActive ? "Active theme" : "Apply theme"
+              iconText: manager.selectedThemeIsActive ? "✓" : "󰸌"
+              height: manager.actionButtonHeight
+              bordered: true
+              foreground: manager.foreground
+              accent: manager.accent
+              fontFamily: manager.fontFamily
+              onClicked: manager.actionApplyTheme()
+
+              BorderSurface {
+                anchors.fill: parent
+                color: "transparent"
+                radius: Style.cornerRadius
+                borderSpec: Border.flat(manager.accent, Math.max(1, Style.normalBorderWidth))
+                visible: manager.themeActionFocused("apply")
               }
             }
 

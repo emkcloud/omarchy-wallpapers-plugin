@@ -13,9 +13,10 @@ current theme, including the plugin ones, so the two collections stay in sync.
 ## 2. The `d` key in the plugin
 
 Open a theme's wallpaper grid, or a single wallpaper in the preview, and press
-**d** on the one you want. The file is installed first when needed and set as the
-theme default; pressing **d** again on the same wallpaper clears it, falling back
-to the theme's own background.
+**d** on the one you want. The file is installed first when needed, the theme is
+activated in Omarchy if another theme is currently running, and the image is set
+as the theme default; pressing **d** again on the active default clears it,
+falling back to the theme's own background.
 
 ## 3. Automatic rotation
 
