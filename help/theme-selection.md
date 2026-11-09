@@ -43,6 +43,7 @@ before committing to the complete collection.
 | arrows | move the selection |
 | pageup / pagedown | jump a page |
 | enter / space | open the selected theme |
+| t | apply the selected theme in Omarchy |
 | i | install all wallpapers of the selected theme |
 | u | uninstall all wallpapers of the selected theme |
 | f | shuffle in a random sample |

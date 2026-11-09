@@ -348,6 +348,8 @@ test("textAction maps the wallpaper-screen keys", () => {
 test("themeTextAction maps the themes-screen keys", () => {
   assert.equal(Model.themeTextAction("a"), "add");
   assert.equal(Model.themeTextAction("F"), "shuffle");
+  assert.equal(Model.themeTextAction("t"), "apply");
+  assert.equal(Model.themeTextAction("T"), "apply");
   assert.equal(Model.themeTextAction("?"), "help");
   assert.equal(Model.themeTextAction("z"), "");
 });

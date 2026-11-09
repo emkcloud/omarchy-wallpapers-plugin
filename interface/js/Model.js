@@ -381,9 +381,9 @@ function textAction(text) {
 }
 
 // Themes-list shortcuts: A add remote source (placeholder), B browse,
-// C custom install (placeholder), F shuffle in 5 random wallpapers, I install
-// all, R refresh, U uninstall all, ? help. (Setup is a global shortcut handled
-// by the panel, so it is not mapped here.)
+// C custom install, F shuffle in 5 random wallpapers, I install all,
+// R refresh, T apply theme, U uninstall all, ? help. (Setup is a global
+// shortcut handled by the panel, so it is not mapped here.)
 function themeTextAction(text) {
   switch (String(text).toLowerCase()) {
     case "a": return "add"
@@ -392,6 +392,7 @@ function themeTextAction(text) {
     case "f": return "shuffle"
     case "i": return "install"
     case "r": return "refresh"
+    case "t": return "apply"
     case "u": return "uninstall"
     case "?": return "help"
   }

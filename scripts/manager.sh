@@ -121,6 +121,7 @@ MAX_DISK_BYTES=$(( MAX_DISK_GB * 1024 * 1024 * 1024 ))
 DEST_BASE="$HOME/.config/omarchy/backgrounds"
 STATE_BG="$HOME/.local/state/omarchy/current/background"
 CONFIG_BG="$HOME/.config/omarchy/current/background"
+THEME_BG_STATE_DIR="$HOME/.local/state/omarchy/theme-backgrounds"
 
 # Rotation cursor, persisted per theme so automatic rotation resumes where it
 # left off instead of restarting from the first wallpaper after switching
@@ -145,6 +146,7 @@ Commands:
   set-default <theme> <filename> <url> [--installed-only]  Download if needed + set as current background (--installed-only: skip when the file is not already on disk)
   unset-default <theme> <filename>  Clear it as background, back to the theme default
   random-default <theme>            Set a random wallpaper of the theme as current background
+  apply-theme <theme> [filename]    Switch Omarchy to <theme> and set its wallpaper
   rotate [--all] [--random]         Set the next wallpaper of the current theme (--all: include theme backgrounds; --random: shuffled, no repeats until every one is shown)
   resume <theme> [filename]         Re-apply the theme's last wallpaper without advancing (fallback: the stored default, if installed)
   image <url>                       Print the local cache path of an image, downloading it if missing
@@ -379,7 +381,10 @@ reset_dangling_background() {
   omarchy-theme-bg-set "$fallback" >/dev/null 2>&1 || true
   # Keep the rotation cursor on what the fallback put up.
   rtheme="$(cat "$HOME/.local/state/omarchy/current/theme.name" 2>/dev/null || true)"
-  [[ -n $rtheme ]] && rotation_set --arg t "$rtheme" --arg f "$fallback" '.sequential[$t] = $f | .last[$t] = $f'
+  if [[ -n $rtheme ]]; then
+    rotation_set --arg t "$rtheme" --arg f "$fallback" '.sequential[$t] = $f | .last[$t] = $f'
+    write_theme_bg_state "$rtheme" "$fallback" || true
+  fi
 }
 
 # Extensions a wallpaper file may carry. The collection is JSON-driven, so a
@@ -436,6 +441,15 @@ require_safe_theme() {
     echo "Refusing theme '$theme': unsafe name." >&2
     return 1
   fi
+}
+
+# Sync Omarchy 4.5's per-theme remembered background state file so
+# `omarchy-theme-set` selects the plugin's wallpaper natively.
+write_theme_bg_state() {
+  local theme="$1" path="$2"
+  require_safe_theme "$theme" || return 1
+  mkdir -p "$THEME_BG_STATE_DIR"
+  printf '%s\n' "$path" >"$THEME_BG_STATE_DIR/$theme"
 }
 
 # Download one wallpaper unless the destination already matches its sha256.
@@ -851,10 +865,17 @@ cmd_set_default() {
     fi
     fetch -o "$path" -- "$url"
   fi
-  omarchy-theme-bg-set "$path"
   # The cursor follows the manual choice: the next sequential rotate resumes
   # from here instead of the file rotation had set before.
   rotation_set --arg t "$theme" --arg f "$path" '.sequential[$t] = $f | .last[$t] = $f'
+  write_theme_bg_state "$theme" "$path"
+  local current_theme
+  current_theme="$(cat "$HOME/.local/state/omarchy/current/theme.name" 2>/dev/null || true)"
+  if (( ! installed_only )) && [[ $current_theme != "$theme" ]] && theme_installed_in_omarchy "$theme"; then
+    omarchy-theme-set "$theme" </dev/null >/dev/null 2>&1
+  else
+    omarchy-theme-bg-set "$path"
+  fi
   # A downloaded default is a new file the native picker has to thumbnail.
   warm_thumbnails "$DEST_BASE/$theme"
 }
@@ -878,6 +899,52 @@ cmd_unset_default() {
   [[ -n $fallback ]] || return 1
   omarchy-theme-bg-set "$fallback" >/dev/null 2>&1 || true
   rotation_set --arg t "$theme" --arg f "$fallback" '.sequential[$t] = $f | .last[$t] = $f'
+  write_theme_bg_state "$theme" "$fallback"
+}
+
+# Switch the active Omarchy theme to <theme>, priming its remembered background
+# state with the stored default (or last rotated / first installed plugin
+# wallpaper) so `omarchy-theme-set` transitions directly to it.
+cmd_apply_theme() {
+  local theme="$1" fallback_filename="${2:-}"
+  require_safe_theme "$theme" || return 1
+  if ! theme_installed_in_omarchy "$theme"; then
+    echo "Theme '$theme' is not installed in Omarchy." >&2
+    return 1
+  fi
+  local chosen="" state path f base
+  if [[ -n $fallback_filename ]] \
+    && is_safe_filename "$fallback_filename" \
+    && is_allowed_image "$fallback_filename" \
+    && [[ -f "$DEST_BASE/$theme/$fallback_filename" ]]; then
+    chosen="$DEST_BASE/$theme/$fallback_filename"
+  fi
+  if [[ -z $chosen ]]; then
+    state="$(rotation_read)"
+    path="$(jq -r --arg t "$theme" '
+      ((.last // {})[$t])
+      // ((.sequential // {})[$t])
+      // (((.randomUsed // {})[$t] // []) | last)
+      // empty
+    ' <<<"$state" 2>/dev/null || true)"
+    [[ -n $path && -f $path ]] && chosen="$path"
+  fi
+  if [[ -z $chosen && -d "$DEST_BASE/$theme" ]]; then
+    local -a files=()
+    while IFS= read -r -d '' f; do
+      base="$(basename -- "$f")"
+      [[ $base == *.tmp ]] && continue
+      is_allowed_image "$f" && files+=("$f")
+    done < <(find -L "$DEST_BASE/$theme" -maxdepth 1 -type f -print0 2>/dev/null)
+    if (( ${#files[@]} > 0 )); then
+      chosen="$(printf '%s\n' "${files[@]}" | LC_ALL=C sort | head -n 1)"
+    fi
+  fi
+  if [[ -n $chosen ]]; then
+    rotation_set --arg t "$theme" --arg f "$chosen" '.sequential[$t] = $f | .last[$t] = $f'
+    write_theme_bg_state "$theme" "$chosen"
+  fi
+  omarchy-theme-set "$theme" </dev/null >/dev/null 2>&1
 }
 
 # Pick a random wallpaper of a theme (no selector) and set it as the current
@@ -1187,6 +1254,7 @@ cmd_rotate() {
   fi
   exec 8>&-
 
+  write_theme_bg_state "$theme" "$choice"
   printf 'ROTATE\t%s\n' "$choice"
   omarchy-theme-bg-set "$choice" >/dev/null 2>&1 || {
     echo "Failed to set background: $choice" >&2
@@ -1204,7 +1272,8 @@ cmd_rotate() {
 cmd_resume() {
   local theme="$1" fallback_filename="${2:-}"
   require_safe_theme "$theme" || return 1
-  local state path cand
+  local state path cand current_bg
+  current_bg="$(readlink -f "$STATE_BG" 2>/dev/null || true)"
   state="$(rotation_read)"
   path="$(jq -r --arg t "$theme" '
     ((.last // {})[$t])
@@ -1213,8 +1282,11 @@ cmd_resume() {
     // empty
   ' <<<"$state" 2>/dev/null || true)"
   if [[ -n $path && -f $path ]]; then
+    write_theme_bg_state "$theme" "$path"
     printf 'ROTATE\t%s\n' "$path"
-    omarchy-theme-bg-set "$path" >/dev/null 2>&1 || return 1
+    if [[ "$(readlink -f "$path" 2>/dev/null || true)" != "$current_bg" ]]; then
+      omarchy-theme-bg-set "$path" >/dev/null 2>&1 || return 1
+    fi
     return 0
   fi
   [[ -n $fallback_filename ]] || return 1
@@ -1222,8 +1294,11 @@ cmd_resume() {
   is_allowed_image "$fallback_filename" || return 1
   cand="$DEST_BASE/$theme/$fallback_filename"
   [[ -f $cand ]] || return 3
+  write_theme_bg_state "$theme" "$cand"
   printf 'ROTATE\t%s\n' "$cand"
-  omarchy-theme-bg-set "$cand" >/dev/null 2>&1 || return 1
+  if [[ "$(readlink -f "$cand" 2>/dev/null || true)" != "$current_bg" ]]; then
+    omarchy-theme-bg-set "$cand" >/dev/null 2>&1 || return 1
+  fi
 }
 
 # Print the plugin version published on the repo's main branch, so the Setup
@@ -1255,6 +1330,7 @@ case "$command" in
   set-default) cmd_set_default "$@" ;;
   unset-default) cmd_unset_default "$@" ;;
   random-default) cmd_random_default "$@" ;;
+  apply-theme) cmd_apply_theme "$@" ;;
   rotate) cmd_rotate "$@" ;;
   resume) cmd_resume "$@" ;;
   image) cmd_image "$@" ;;

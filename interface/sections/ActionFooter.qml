@@ -170,6 +170,7 @@ Column {
       text: footer.actionRunning
         ? footer.keyHint("esc", "stop")
         : footer.keyHint("enter", "browse")
+          + "&nbsp;&nbsp;" + footer.keyHint("t", "apply")
           + "&nbsp;&nbsp;" + footer.keyHint("i", "install")
           + "&nbsp;&nbsp;" + footer.keyHint("/", "search")
           + "&nbsp;&nbsp;" + footer.keyHint("esc", "close")
